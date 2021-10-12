@@ -125,11 +125,11 @@ fn main() {
                                 }
                                 data.texture = None;
                             },
-                            // TODO: This never gets called, when does it happen?
-                            //       Why do we not release the buffer here?
                             Some(BufferAssignment::Removed) => {
+                                if let Some(buffer) = data.buffer.take() {
+                                    buffer.release();
+                                }
                                 data.texture = None;
-                                data.buffer = None;
                             },
                             None => (),
                         }
@@ -357,14 +357,14 @@ fn main() {
         }
         display.borrow_mut().flush_clients(&mut state);
 
-        // TODO: Timeout of 0ms here means entire vblank is spent snoozin?
-        if event_loop.dispatch(Some(Duration::from_millis(0)), &mut state).is_err() {
+        // NOTE: The timeout picked here is 5ms to allow for up to 200 FPS. Increasing it would
+        // reduce the framerate, while decreasing it would mean that most of the vblank interval is
+        // spent not doing anything, rather than handling events.
+        if event_loop.dispatch(Some(Duration::from_millis(5)), &mut state).is_err() {
             eprintln!("event loop error");
             break;
         }
 
-        // TODO: Flushing twice before/after dispatch is likely so clients have as much time as
-        // possible to react to the events?
         display.borrow_mut().flush_clients(&mut state);
     }
 }
