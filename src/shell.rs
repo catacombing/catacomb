@@ -3,17 +3,20 @@
 use std::cell::RefCell;
 use std::ops::Deref;
 use std::rc::Rc;
+use std::sync::Mutex;
 
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer, Gles2Texture};
 use smithay::backend::renderer::{self, BufferType, Frame, ImportAll, Transform};
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Display;
-use smithay::utils::{Logical, Point};
+use smithay::utils::{Logical, Point, Size};
 use smithay::wayland::compositor::{
     self, BufferAssignment, Damage, SubsurfaceCachedState, SurfaceAttributes, TraversalAction,
 };
-use smithay::wayland::shell::xdg::{self as xdg_shell, ToplevelSurface, XdgRequest};
+use smithay::wayland::shell::xdg::{
+    self as xdg_shell, ToplevelSurface, XdgRequest, XdgToplevelSurfaceRoleAttributes,
+};
 use smithay::wayland::SERIAL_COUNTER;
 use wayland_commons::filter::DispatchData;
 
@@ -38,13 +41,13 @@ impl Shells {
             move |event, mut data| match event {
                 XdgRequest::NewToplevel { surface } => {
                     if let Some(wl_surface) = surface.get_surface() {
-                        let state = data.get::<Catacomb>().unwrap();
-                        state.keyboard.set_focus(Some(wl_surface), SERIAL_COUNTER.next_serial());
+                        let catacomb = data.get::<Catacomb>().unwrap();
+                        catacomb.keyboard.set_focus(Some(wl_surface), SERIAL_COUNTER.next_serial());
                     }
 
-                    xdg_windows.borrow_mut().push(Window::new(surface, Point::from((0, 30))));
+                    xdg_windows.borrow_mut().push(Window::new(surface));
                 },
-                _ => println!("UNHANDLED EVENT: {:?}", event),
+                _ => eprintln!("UNHANDLED EVENT: {:?}", event),
             },
             None,
         );
@@ -54,37 +57,54 @@ impl Shells {
 }
 
 /// Handle a new surface commit.
-fn surface_commit(surface: WlSurface, _data: DispatchData) {
+fn surface_commit(surface: WlSurface, mut data: DispatchData) {
     if compositor::is_sync_subsurface(&surface) {
         return;
     }
 
+    // Handle surface buffer changes.
     compositor::with_surface_tree_upward(
         &surface,
         (),
         |_, _, _| TraversalAction::DoChildren(()),
-        |_, surface_state, _| {
-            surface_state.data_map.insert_if_missing(|| RefCell::new(SurfaceData::new()));
-            let mut attributes = surface_state.cached_state.current::<SurfaceAttributes>();
+        |_, surface_data, _| {
+            surface_data.data_map.insert_if_missing(|| RefCell::new(SurfaceBuffer::new()));
+            let mut attributes = surface_data.cached_state.current::<SurfaceAttributes>();
 
             if let Some(assignment) = attributes.buffer.take() {
-                let data = surface_state.data_map.get::<RefCell<SurfaceData>>().unwrap();
+                let data = surface_data.data_map.get::<RefCell<SurfaceBuffer>>().unwrap();
                 data.borrow_mut().update_buffer(assignment);
             }
         },
         |_, _, _| true,
     );
+
+    let catacomb = data.get::<Catacomb>().unwrap();
+    if let Some(window) = catacomb.windows.borrow_mut().iter_mut().find(|window| {
+        window.surface.get_surface().map_or(false, |window_surface| window_surface == &surface)
+    }) {
+        let initial_configure_sent = compositor::with_states(&surface, |state| {
+            let attributes = state.data_map.get::<Mutex<XdgToplevelSurfaceRoleAttributes>>();
+            attributes.unwrap().lock().unwrap().initial_configure_sent
+        })
+        .unwrap_or(true);
+
+        // Set the initial window dimensions.
+        if !initial_configure_sent {
+            let output_size = catacomb.output.size();
+            window.resize(output_size);
+        }
+    }
 }
 
 /// Wayland client window state.
 pub struct Window {
     pub surface: ToplevelSurface,
-    pub location: Point<i32, Logical>,
 }
 
 impl Window {
-    fn new(surface: ToplevelSurface, location: Point<i32, Logical>) -> Self {
-        Window { surface, location }
+    fn new(surface: ToplevelSurface) -> Self {
+        Window { surface }
     }
 
     /// Send a frame request to the window.
@@ -98,8 +118,8 @@ impl Window {
             wl_surface,
             (),
             |_, _, _| TraversalAction::DoChildren(()),
-            |_, surface_state, _| {
-                let mut attributes = surface_state.cached_state.current::<SurfaceAttributes>();
+            |_, surface_data, _| {
+                let mut attributes = surface_data.cached_state.current::<SurfaceAttributes>();
                 for callback in attributes.frame_callbacks.drain(..) {
                     callback.done(runtime);
                 }
@@ -109,7 +129,7 @@ impl Window {
     }
 
     /// Render this window's buffers.
-    pub fn draw(&self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame) {
+    pub fn draw(&self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame, output_scale: f64) {
         let wl_surface = match self.surface.get_surface() {
             Some(surface) => surface,
             None => return,
@@ -117,9 +137,9 @@ impl Window {
 
         compositor::with_surface_tree_upward(
             wl_surface,
-            self.location,
-            |_, surface_state, location| {
-                let data = match surface_state.data_map.get::<RefCell<SurfaceData>>() {
+            Point::from((0, 0)),
+            |_, surface_data, location| {
+                let data = match surface_data.data_map.get::<RefCell<SurfaceBuffer>>() {
                     Some(data) => data,
                     None => return TraversalAction::SkipChildren,
                 };
@@ -127,9 +147,10 @@ impl Window {
 
                 // Use the subsurface's location as the origin for its children.
                 let mut location = *location;
-                if surface_state.role == Some("subsurface") {
+                if surface_data.role == Some("subsurface") {
+                    // TODO: Shorten this?
                     let subsurface_state =
-                        surface_state.cached_state.current::<SubsurfaceCachedState>();
+                        surface_data.cached_state.current::<SubsurfaceCachedState>();
                     location += subsurface_state.location;
                 }
 
@@ -144,7 +165,7 @@ impl Window {
                     None => return TraversalAction::SkipChildren,
                 };
 
-                let attributes = surface_state.cached_state.current::<SurfaceAttributes>();
+                let attributes = surface_data.cached_state.current::<SurfaceAttributes>();
                 let damage: Vec<_> = attributes
                     .damage
                     .iter()
@@ -154,7 +175,7 @@ impl Window {
                     })
                     .collect();
 
-                match renderer.import_buffer(buffer, Some(surface_state), &damage) {
+                match renderer.import_buffer(buffer, Some(surface_data), &damage) {
                     Some(Ok(texture)) => {
                         if let Some(BufferType::Shm) = renderer::buffer_type(buffer) {
                             data.buffer = None;
@@ -171,8 +192,8 @@ impl Window {
                     },
                 }
             },
-            |_, surface_state, location| {
-                let data = match surface_state.data_map.get::<RefCell<SurfaceData>>() {
+            |_, surface_data, location| {
+                let data = match surface_data.data_map.get::<RefCell<SurfaceBuffer>>() {
                     Some(data) => data,
                     None => return,
                 };
@@ -185,19 +206,20 @@ impl Window {
 
                 // Apply subsurface offset to parent's origin.
                 let mut location = *location;
-                if surface_state.role == Some("subsurface") {
+                if surface_data.role == Some("subsurface") {
+                    // TODO: Shorten this?
                     let subsurface_state =
-                        surface_state.cached_state.current::<SubsurfaceCachedState>();
+                        surface_data.cached_state.current::<SubsurfaceCachedState>();
                     location += subsurface_state.location;
                 }
 
-                let attributes = surface_state.cached_state.current::<SurfaceAttributes>();
+                let attributes = surface_data.cached_state.current::<SurfaceAttributes>();
 
                 let _ = frame.render_texture_at(
-                    &texture,
-                    location.to_f64().to_physical(1.).to_i32_round(),
+                    texture,
+                    location.to_f64().to_physical(output_scale).to_i32_round(),
                     attributes.buffer_scale,
-                    1.,
+                    output_scale,
                     Transform::Normal,
                     1.,
                 );
@@ -205,16 +227,27 @@ impl Window {
             |_, _, _| true,
         );
     }
+
+    /// Change the window dimensions.
+    pub fn resize(&mut self, size: Size<i32, Logical>) {
+        let result = self.surface.with_pending_state(|state| {
+            state.size = Some(size);
+        });
+
+        if result.is_ok() {
+            self.surface.send_configure();
+        }
+    }
 }
 
 /// Surface buffer cache.
 #[derive(Default)]
-struct SurfaceData {
+struct SurfaceBuffer {
     texture: Option<Gles2Texture>,
     buffer: Option<Buffer>,
 }
 
-impl SurfaceData {
+impl SurfaceBuffer {
     fn new() -> Self {
         Self::default()
     }
@@ -232,16 +265,16 @@ impl SurfaceData {
 /// Container for automatically releasing a buffer on drop.
 struct Buffer(WlBuffer);
 
+impl Drop for Buffer {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
 impl Deref for Buffer {
     type Target = WlBuffer;
 
     fn deref(&self) -> &Self::Target {
         &self.0
-    }
-}
-
-impl Drop for Buffer {
-    fn drop(&mut self) {
-        self.0.release();
     }
 }

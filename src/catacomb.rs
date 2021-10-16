@@ -7,11 +7,12 @@ use std::{env, io};
 
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
 use smithay::reexports::calloop::generic::Generic;
-use smithay::reexports::calloop::{EventLoop, Interest, Mode, PostAction};
+use smithay::reexports::calloop::{EventLoop, Interest, Mode as TriggerMode, PostAction};
 use smithay::reexports::wayland_server::Display;
 use smithay::wayland::seat::{KeyboardHandle, Seat, XkbConfig};
 use smithay::wayland::{data_device, shm};
 
+use crate::output::Output;
 use crate::shell::{Shells, Window};
 
 /// Shared compositor state.
@@ -21,11 +22,12 @@ pub struct Catacomb {
     pub keyboard: KeyboardHandle,
     pub start_time: Instant,
     pub terminated: bool,
+    pub output: Output,
 }
 
 impl Catacomb {
     /// Initialize the compositor.
-    pub fn new(mut display: Display, event_loop: &mut EventLoop<Self>) -> Self {
+    pub fn new(mut display: Display, output: Output, event_loop: &mut EventLoop<Self>) -> Self {
         // Create our Wayland socket.
         let socket_name = &mut display
             .add_socket_auto()
@@ -39,7 +41,7 @@ impl Catacomb {
         event_loop
             .handle()
             .insert_source(
-                Generic::from_fd(display.get_poll_fd(), Interest::READ, Mode::Level),
+                Generic::from_fd(display.get_poll_fd(), Interest::READ, TriggerMode::Level),
                 |_, _, catacomb| catacomb.handle_socket_readiness(),
             )
             .expect("register wayland socket source");
@@ -67,6 +69,7 @@ impl Catacomb {
             windows: shells.windows,
             terminated: false,
             keyboard,
+            output,
         }
     }
 
@@ -98,7 +101,7 @@ impl Catacomb {
     /// Render all windows.
     pub fn draw_windows(&self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame) {
         for window in self.windows.borrow().iter() {
-            window.draw(renderer, frame);
+            window.draw(renderer, frame, self.output.scale);
         }
     }
 }
