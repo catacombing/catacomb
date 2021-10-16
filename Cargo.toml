@@ -4,5 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-smithay = { version = "0.3.0", features = ["use_system_lib"] }
+smithay = { git = "https://github.com/PolyMeilex/smithay", branch = "xdg-decor", features = ["use_system_lib"] }
 wayland-commons = "0.29.0"

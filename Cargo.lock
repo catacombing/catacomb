@@ -1090,8 +1090,7 @@ checksum = "1ecab6c735a6bb4139c0caafd0cc3635748bbb3acf4550e8138122099251f309"
 [[package]]
 name = "smithay"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "524a70d391cdbcca9a3b56bd357620c95f89a365c326c99c0bf03974f923d5df"
+source = "git+https://github.com/PolyMeilex/smithay?branch=xdg-decor#7c78c93f9afdcdb0e3fb862c626543b145888e89"
 dependencies = [
  "appendlist",
  "bitflags",
@@ -1110,6 +1109,7 @@ dependencies = [
  "libloading 0.7.1",
  "nix 0.22.2",
  "pkg-config",
+ "rand",
  "scan_fmt",
  "slog",
  "slog-stdlog",

@@ -1,6 +1,7 @@
 //! Input event handling.
 
 use smithay::backend::input::{Event, InputBackend, InputEvent, KeyboardKeyEvent};
+use smithay::wayland::seat::FilterResult;
 use smithay::wayland::SERIAL_COUNTER;
 
 use crate::catacomb::Catacomb;
@@ -16,8 +17,8 @@ impl Catacomb {
         let serial = SERIAL_COUNTER.next_serial();
         let time = Event::time(&event);
         let keycode = event.key_code();
-        let key_state = event.state();
+        let state = event.state();
 
-        self.keyboard.input(keycode, key_state, serial, time, |_, _| true);
+        self.keyboard.input::<(), _>(keycode, state, serial, time, |_, _| FilterResult::Forward);
     }
 }

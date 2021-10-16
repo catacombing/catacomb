@@ -10,7 +10,9 @@ use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{EventLoop, Interest, Mode as TriggerMode, PostAction};
 use smithay::reexports::wayland_server::Display;
 use smithay::wayland::seat::{KeyboardHandle, Seat, XkbConfig};
+use smithay::wayland::shell::xdg::decoration::{self, XdgDecorationRequest};
 use smithay::wayland::{data_device, shm};
+use smithay::reexports::wayland_protocols::unstable::xdg_decoration::v1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 
 use crate::output::Output;
 use crate::shell::{Shells, Window};
@@ -48,6 +50,25 @@ impl Catacomb {
 
         // Advertise support for rendering from CPU-based shared memory buffers.
         shm::init_shm_global(&mut display, Vec::new(), None);
+
+        // Force server-side decorations.
+        decoration::init_xdg_decoration_manager(
+            &mut display,
+            |request, _| match request {
+                XdgDecorationRequest::NewToplevelDecoration { toplevel } => {
+                    let result = toplevel.with_pending_state(|state| {
+                        state.decoration_mode = Some(DecorationMode::ServerSide);
+                    });
+
+                    if result.is_ok() {
+                        toplevel.send_configure();
+                    }
+                },
+                XdgDecorationRequest::SetMode { .. } => (),
+                XdgDecorationRequest::UnsetMode { .. } => (),
+            },
+            None,
+        );
 
         // Initialize input.
         let (mut seat, _) = Seat::new(&mut display, String::from("seat-0"), None);
