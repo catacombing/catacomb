@@ -122,7 +122,7 @@ impl Catacomb {
     /// Render all windows.
     pub fn draw_windows(&self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame) {
         for window in self.windows.borrow().iter() {
-            window.draw(renderer, frame, self.output.scale);
+            window.draw(renderer, frame, &self.output);
         }
     }
 }

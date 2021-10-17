@@ -21,6 +21,7 @@ use smithay::wayland::SERIAL_COUNTER;
 use wayland_commons::filter::DispatchData;
 
 use crate::catacomb::Catacomb;
+use crate::output::Output;
 
 /// Wayland shells.
 pub struct Shells {
@@ -40,12 +41,20 @@ impl Shells {
             display,
             move |event, mut data| match event {
                 XdgRequest::NewToplevel { surface } => {
+                    // Automatically focus new windows.
                     if let Some(wl_surface) = surface.get_surface() {
                         let catacomb = data.get::<Catacomb>().unwrap();
                         catacomb.keyboard.set_focus(Some(wl_surface), SERIAL_COUNTER.next_serial());
                     }
 
-                    xdg_windows.borrow_mut().push(Window::new(surface));
+                    // Set window tiling location.
+                    let location = xdg_windows
+                        .borrow()
+                        .iter()
+                        .find(|window: &&Window| window.location == WindowLocation::Primary)
+                        .map_or(WindowLocation::Primary, |_| WindowLocation::Secondary);
+
+                    xdg_windows.borrow_mut().push(Window::new(surface, location));
                 },
                 _ => eprintln!("UNHANDLED EVENT: {:?}", event),
             },
@@ -79,20 +88,41 @@ fn surface_commit(surface: WlSurface, mut data: DispatchData) {
         |_, _, _| true,
     );
 
+    // Find the window for this surface.
     let catacomb = data.get::<Catacomb>().unwrap();
-    if let Some(window) = catacomb.windows.borrow_mut().iter_mut().find(|window| {
+    let mut windows = catacomb.windows.borrow_mut();
+    let window = match windows.iter_mut().find(|window| {
         window.surface.get_surface().map_or(false, |window_surface| window_surface == &surface)
     }) {
-        let initial_configure_sent = compositor::with_states(&surface, |state| {
-            let attributes = state.data_map.get::<Mutex<XdgToplevelSurfaceRoleAttributes>>();
-            attributes.unwrap().lock().unwrap().initial_configure_sent
-        })
-        .unwrap_or(true);
+        Some(window) => window,
+        None => return,
+    };
 
-        // Set the initial window dimensions.
-        if !initial_configure_sent {
-            let output_size = catacomb.output.size();
-            window.resize(output_size);
+    let initial_configure_sent = compositor::with_states(&surface, |state| {
+        let attributes = state.data_map.get::<Mutex<XdgToplevelSurfaceRoleAttributes>>();
+        attributes.unwrap().lock().unwrap().initial_configure_sent
+    })
+    .unwrap_or(true);
+
+    // Set the initial window dimensions.
+    if !initial_configure_sent {
+        let mut size = catacomb.output.size();
+        if window.location == WindowLocation::Primary {
+            // Sole primary windows take up all the space.
+            window.resize(size);
+        } else {
+            // Take half the space plus fractionals for the secondary window.
+            let height = size.h as f32 / 2.;
+            size.h = height.ceil() as i32;
+            window.resize(size);
+
+            // Resize primary window to take the first half.
+            size.h = height.floor() as i32;
+            if let Some(window) =
+                windows.iter_mut().find(|window| window.location == WindowLocation::Primary)
+            {
+                window.resize(size);
+            }
         }
     }
 }
@@ -100,11 +130,12 @@ fn surface_commit(surface: WlSurface, mut data: DispatchData) {
 /// Wayland client window state.
 pub struct Window {
     pub surface: ToplevelSurface,
+    location: WindowLocation,
 }
 
 impl Window {
-    fn new(surface: ToplevelSurface) -> Self {
-        Window { surface }
+    fn new(surface: ToplevelSurface, location: WindowLocation) -> Self {
+        Window { surface, location }
     }
 
     /// Send a frame request to the window.
@@ -129,15 +160,22 @@ impl Window {
     }
 
     /// Render this window's buffers.
-    pub fn draw(&self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame, output_scale: f64) {
-        let wl_surface = match self.surface.get_surface() {
-            Some(surface) => surface,
-            None => return,
+    pub fn draw(&self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame, output: &Output) {
+        // Ensure there is a drawable surface present.
+        let wl_surface = match (self.location, self.surface.get_surface()) {
+            (WindowLocation::Hidden, _) | (_, None) => return,
+            (_, Some(surface)) => surface,
         };
+
+        // Determine window origin point.
+        let mut location = Point::from((0, 0));
+        if self.location == WindowLocation::Secondary {
+            location.y = output.size().h / 2;
+        }
 
         compositor::with_surface_tree_upward(
             wl_surface,
-            Point::from((0, 0)),
+            location,
             |_, surface_data, location| {
                 let data = match surface_data.data_map.get::<RefCell<SurfaceBuffer>>() {
                     Some(data) => data,
@@ -148,10 +186,8 @@ impl Window {
                 // Use the subsurface's location as the origin for its children.
                 let mut location = *location;
                 if surface_data.role == Some("subsurface") {
-                    // TODO: Shorten this?
-                    let subsurface_state =
-                        surface_data.cached_state.current::<SubsurfaceCachedState>();
-                    location += subsurface_state.location;
+                    let subsurface = surface_data.cached_state.current::<SubsurfaceCachedState>();
+                    location += subsurface.location;
                 }
 
                 // Start rendering if the buffer is already imported.
@@ -207,19 +243,17 @@ impl Window {
                 // Apply subsurface offset to parent's origin.
                 let mut location = *location;
                 if surface_data.role == Some("subsurface") {
-                    // TODO: Shorten this?
-                    let subsurface_state =
-                        surface_data.cached_state.current::<SubsurfaceCachedState>();
-                    location += subsurface_state.location;
+                    let subsurface = surface_data.cached_state.current::<SubsurfaceCachedState>();
+                    location += subsurface.location;
                 }
 
                 let attributes = surface_data.cached_state.current::<SurfaceAttributes>();
 
                 let _ = frame.render_texture_at(
                     texture,
-                    location.to_f64().to_physical(output_scale).to_i32_round(),
+                    location.to_f64().to_physical(output.scale).to_i32_round(),
                     attributes.buffer_scale,
-                    output_scale,
+                    output.scale,
                     Transform::Normal,
                     1.,
                 );
@@ -238,6 +272,26 @@ impl Window {
             self.surface.send_configure();
         }
     }
+}
+
+/// Window positioning.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum WindowLocation {
+    /// Primary window.
+    ///
+    /// This window will be maximized if no [`WindowLocation::Secondary`] window is visible.
+    /// Otherwise it will be to the top of the [`WindowLocation::Secondary`] window in portrait
+    /// mode and to the left of it in landscape mode.
+    Primary,
+
+    /// Secondary window
+    ///
+    /// This window is tiled below the [`WindowLocation::Primary`] window in portrait mode and to
+    /// the right of it in landscape mode.
+    Secondary,
+
+    /// Window which is currently invisible.
+    Hidden,
 }
 
 /// Surface buffer cache.
