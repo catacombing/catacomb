@@ -8,18 +8,20 @@ use std::{env, io};
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{EventLoop, Interest, Mode as TriggerMode, PostAction};
+use smithay::reexports::wayland_protocols::unstable::xdg_decoration;
 use smithay::reexports::wayland_server::Display;
 use smithay::wayland::seat::{KeyboardHandle, Seat, XkbConfig};
 use smithay::wayland::shell::xdg::decoration::{self, XdgDecorationRequest};
 use smithay::wayland::{data_device, shm};
-use smithay::reexports::wayland_protocols::unstable::xdg_decoration::v1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
+use xdg_decoration::v1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 
 use crate::output::Output;
-use crate::shell::{Shells, Window};
+use crate::shell::Shells;
+use crate::window::Windows;
 
 /// Shared compositor state.
 pub struct Catacomb {
-    pub windows: Rc<RefCell<Vec<Window>>>,
+    pub windows: Rc<RefCell<Windows>>,
     pub display: Rc<RefCell<Display>>,
     pub keyboard: KeyboardHandle,
     pub start_time: Instant,

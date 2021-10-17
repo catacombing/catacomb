@@ -18,6 +18,7 @@ mod catacomb;
 mod input;
 mod output;
 mod shell;
+mod window;
 
 fn main() {
     let mut display = Display::new();
@@ -48,6 +49,7 @@ fn main() {
     let mut event_loop: EventLoop<'_, Catacomb> = EventLoop::try_new().expect("event loop");
     let mut catacomb = Catacomb::new(display, output, &mut event_loop);
 
+    let display = catacomb.display.clone();
     loop {
         if input.dispatch_new_events(|event| catacomb.handle_input(event)).is_err() {
             eprintln!("input error");
@@ -73,7 +75,9 @@ fn main() {
             break;
         }
 
-        let display = catacomb.display.clone();
         display.borrow_mut().flush_clients(&mut catacomb);
+
+        // Handle window liveliness changes.
+        catacomb.windows.borrow_mut().refresh(catacomb.output.size());
     }
 }
