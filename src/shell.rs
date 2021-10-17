@@ -52,6 +52,7 @@ impl Shells {
 
                     xdg_windows.borrow_mut().push(Window::new(surface, location));
                 },
+                XdgRequest::NewClient { .. } | XdgRequest::AckConfigure { .. } => (),
                 _ => eprintln!("UNHANDLED EVENT: {:?}", event),
             },
             None,
@@ -73,10 +74,9 @@ fn surface_commit(surface: WlSurface, mut data: DispatchData) {
         (),
         |_, _, _| TraversalAction::DoChildren(()),
         |_, surface_data, _| {
-            surface_data.data_map.insert_if_missing(|| RefCell::new(SurfaceBuffer::new()));
             let mut attributes = surface_data.cached_state.current::<SurfaceAttributes>();
-
             if let Some(assignment) = attributes.buffer.take() {
+                surface_data.data_map.insert_if_missing(|| RefCell::new(SurfaceBuffer::new()));
                 let data = surface_data.data_map.get::<RefCell<SurfaceBuffer>>().unwrap();
                 data.borrow_mut().update_buffer(assignment);
             }

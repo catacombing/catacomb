@@ -110,9 +110,10 @@ impl Window {
 
     /// Send a frame request to the window.
     pub fn request_frame(&self, runtime: u32) {
-        let wl_surface = match self.surface.get_surface() {
-            Some(surface) => surface,
-            None => return,
+        // Ensure there is a drawable surface present.
+        let wl_surface = match (self.location, self.surface.get_surface()) {
+            (WindowLocation::Hidden, _) | (_, None) => return,
+            (_, Some(surface)) => surface,
         };
 
         compositor::with_surface_tree_downward(
