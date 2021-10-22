@@ -1,11 +1,12 @@
 //! Wayland client.
 
 use std::cell::RefCell;
-use std::slice::{Iter, IterMut};
+use std::mem;
+use std::rc::{Rc, Weak};
 
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
 use smithay::backend::renderer::{self, BufferType, Frame, ImportAll, Transform};
-use smithay::utils::{Logical, Point, Size};
+use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::compositor::{
     self, Damage, SubsurfaceCachedState, SurfaceAttributes, TraversalAction,
 };
@@ -17,9 +18,9 @@ use crate::shell::SurfaceBuffer;
 /// Container tracking all known clients.
 #[derive(Default)]
 pub struct Windows {
-    windows: Vec<Window>,
-    primary: Option<usize>,
-    secondary: Option<usize>,
+    primary: Weak<RefCell<Window>>,
+    secondary: Weak<RefCell<Window>>,
+    windows: Vec<Rc<RefCell<Window>>>,
 }
 
 impl Windows {
@@ -28,92 +29,106 @@ impl Windows {
     }
 
     /// Add a new window.
-    pub fn push(&mut self, window: Window) {
-        match window.location {
-            WindowLocation::Primary => {
-                if let Some(index) = self.primary {
-                    self.windows[index].location = WindowLocation::Hidden;
-                }
-                self.primary = Some(self.windows.len());
-            },
-            WindowLocation::Secondary => {
-                if let Some(index) = self.secondary {
-                    self.windows[index].location = WindowLocation::Hidden;
-                }
-                self.secondary = Some(self.windows.len());
-            },
-            WindowLocation::Hidden => (),
+    pub fn add(&mut self, surface: ToplevelSurface) {
+        let window = Rc::new(RefCell::new(Window::new(surface)));
+        if self.primary.strong_count() > 0 && self.secondary.strong_count() == 0 {
+            // Spawn as secondary if there's only one primary window.
+            self.secondary = Rc::downgrade(&window);
+        } else {
+            // Spawn as maximized primary if empty or secondary already present.
+            self.primary = Rc::downgrade(&window);
+            self.secondary = Weak::new();
         }
         self.windows.push(window);
     }
 
-    /// Returns an immutable iterator over all windows.
-    pub fn iter(&self) -> Iter<'_, Window> {
-        self.windows.iter()
-    }
-
-    /// Returns a mutable iterator over all windows.
-    pub fn iter_mut(&mut self) -> IterMut<'_, Window> {
-        self.windows.iter_mut()
+    /// Execute a function for all visible windows.
+    pub fn with_visible<F: FnMut(&Window)>(&self, mut fun: F) {
+        for window in self.primary.upgrade().iter().chain(&self.secondary.upgrade()) {
+            fun(&window.borrow());
+        }
     }
 
     /// Refresh the client list.
     ///
     /// This function will remove all dead windows and update the remaining ones appropriately.
     pub fn refresh(&mut self, output_size: Size<i32, Logical>) {
-        // Handle removal of primary windows.
-        if self.primary.map_or(false, |index| !self.windows[index].surface.alive()) {
-            self.primary = self.secondary;
-            if let Some(window) = self.secondary.take().map(|index| &mut self.windows[index]) {
-                window.location = WindowLocation::Primary;
-                window.resize(output_size);
+        // Remove dead windows.
+        self.windows.retain(|window| window.borrow().surface.alive());
+
+        // Replace dead primary windows with the secondary.
+        if self.primary.strong_count() == 0 && self.secondary.strong_count() > 0 {
+            mem::swap(&mut self.primary, &mut self.secondary);
+        }
+
+        self.update_dimensions(output_size);
+    }
+
+    /// Update size and location of visible windows.
+    pub fn update_dimensions(&mut self, mut output_size: Size<i32, Logical>) {
+        if let Some(secondary) = self.secondary.upgrade() {
+            let mut secondary = secondary.borrow_mut();
+            let height = output_size.h as f32 / 2.;
+            secondary.rectangle.loc = Point::from((0, height.ceil() as i32));
+            secondary.resize(Size::from((output_size.w, height.floor() as i32)));
+
+            if secondary.has_buffer() {
+                output_size = Size::from((output_size.w, height.ceil() as i32));
             }
         }
 
-        // Handle removal of secondary windows.
-        if self.secondary.map_or(false, |index| !self.windows[index].surface.alive()) {
-            if let Some(primary_index) = self.primary {
-                self.windows[primary_index].resize(output_size);
-            }
-            self.secondary = None;
+        if let Some(primary) = self.primary.upgrade() {
+            let mut primary = primary.borrow_mut();
+            primary.rectangle.loc = Point::from((0, 0));
+            primary.resize(output_size);
         }
-
-        // Remove all dead windows.
-        let mut i = 0;
-        self.windows.retain(|window| {
-            let alive = window.surface.alive();
-
-            // Update indices if an element was removed.
-            if !alive {
-                let iter = self.primary.iter_mut().chain(&mut self.secondary);
-                for index in iter.filter(|index| i < **index) {
-                    *index -= 1;
-                }
-            }
-            i += 1;
-
-            alive
-        });
     }
 }
 
 /// Wayland client window state.
 pub struct Window {
-    pub surface: ToplevelSurface,
-    pub location: WindowLocation,
+    surface: ToplevelSurface,
+    rectangle: Rectangle<i32, Logical>,
 }
 
 impl Window {
-    pub fn new(surface: ToplevelSurface, location: WindowLocation) -> Self {
-        Window { surface, location }
+    pub fn new(surface: ToplevelSurface) -> Self {
+        Window { rectangle: Rectangle::default(), surface }
+    }
+
+    /// Check if this window has a drawable buffer attached.
+    pub fn has_buffer(&self) -> bool {
+        let wl_surface = match self.surface.get_surface() {
+            Some(wl_surface) => wl_surface,
+            None => return false,
+        };
+
+        let mut has_buffer = false;
+        compositor::with_surface_tree_upward(
+            &wl_surface,
+            (),
+            |_, surface_data, _| {
+                let buffer = surface_data.data_map.get::<RefCell<SurfaceBuffer>>();
+                has_buffer |= buffer.map_or(false, |data| data.borrow().buffer.is_some());
+
+                if has_buffer {
+                    return TraversalAction::SkipChildren;
+                } else {
+                    return TraversalAction::DoChildren(());
+                }
+            },
+            |_, _, _| (),
+            |_, _, _| true,
+        );
+        has_buffer
     }
 
     /// Send a frame request to the window.
     pub fn request_frame(&self, runtime: u32) {
         // Ensure there is a drawable surface present.
-        let wl_surface = match (self.location, self.surface.get_surface()) {
-            (WindowLocation::Hidden, _) | (_, None) => return,
-            (_, Some(surface)) => surface,
+        let wl_surface = match self.surface.get_surface() {
+            Some(surface) => surface,
+            None => return,
         };
 
         compositor::with_surface_tree_downward(
@@ -133,20 +148,14 @@ impl Window {
     /// Render this window's buffers.
     pub fn draw(&self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame, output: &Output) {
         // Ensure there is a drawable surface present.
-        let wl_surface = match (self.location, self.surface.get_surface()) {
-            (WindowLocation::Hidden, _) | (_, None) => return,
-            (_, Some(surface)) => surface,
+        let wl_surface = match self.surface.get_surface() {
+            Some(surface) => surface,
+            None => return,
         };
-
-        // Determine window origin point.
-        let mut location = Point::from((0, 0));
-        if self.location == WindowLocation::Secondary {
-            location.y = output.size().h / 2;
-        }
 
         compositor::with_surface_tree_upward(
             wl_surface,
-            location,
+            self.rectangle.loc,
             |_, surface_data, location| {
                 let data = match surface_data.data_map.get::<RefCell<SurfaceBuffer>>() {
                     Some(data) => data,
@@ -235,32 +244,18 @@ impl Window {
 
     /// Change the window dimensions.
     pub fn resize(&mut self, size: Size<i32, Logical>) {
+        // Prevent redundant configure events.
+        if self.rectangle.size == size {
+            return;
+        }
+
         let result = self.surface.with_pending_state(|state| {
             state.size = Some(size);
         });
 
         if result.is_ok() {
             self.surface.send_configure();
+            self.rectangle.size = size;
         }
     }
-}
-
-/// Window positioning.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub enum WindowLocation {
-    /// Primary window.
-    ///
-    /// This window will be maximized if no [`WindowLocation::Secondary`] window is visible.
-    /// Otherwise it will be to the top of the [`WindowLocation::Secondary`] window in portrait
-    /// mode and to the left of it in landscape mode.
-    Primary,
-
-    /// Secondary window
-    ///
-    /// This window is tiled below the [`WindowLocation::Primary`] window in portrait mode and to
-    /// the right of it in landscape mode.
-    Secondary,
-
-    /// Window which is currently invisible.
-    Hidden,
 }

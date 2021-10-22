@@ -3,21 +3,18 @@
 use std::cell::RefCell;
 use std::ops::Deref;
 use std::rc::Rc;
-use std::sync::Mutex;
 
 use smithay::backend::renderer::gles2::Gles2Texture;
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Display;
 use smithay::wayland::compositor::{self, BufferAssignment, SurfaceAttributes, TraversalAction};
-use smithay::wayland::shell::xdg::{
-    self as xdg_shell, XdgRequest, XdgToplevelSurfaceRoleAttributes,
-};
+use smithay::wayland::shell::xdg::{self as xdg_shell, XdgRequest};
 use smithay::wayland::SERIAL_COUNTER;
 use wayland_commons::filter::DispatchData;
 
 use crate::catacomb::Catacomb;
-use crate::window::{Window, WindowLocation, Windows};
+use crate::window::Windows;
 
 /// Wayland shells.
 pub struct Shells {
@@ -43,14 +40,7 @@ impl Shells {
                         catacomb.keyboard.set_focus(Some(wl_surface), SERIAL_COUNTER.next_serial());
                     }
 
-                    // Set window tiling location.
-                    let location = xdg_windows
-                        .borrow()
-                        .iter()
-                        .find(|window: &&Window| window.location == WindowLocation::Primary)
-                        .map_or(WindowLocation::Primary, |_| WindowLocation::Secondary);
-
-                    xdg_windows.borrow_mut().push(Window::new(surface, location));
+                    xdg_windows.borrow_mut().add(surface);
                 },
                 XdgRequest::NewClient { .. } | XdgRequest::AckConfigure { .. } => (),
                 _ => eprintln!("UNHANDLED EVENT: {:?}", event),
@@ -77,50 +67,15 @@ fn surface_commit(surface: WlSurface, mut data: DispatchData) {
             let mut attributes = surface_data.cached_state.current::<SurfaceAttributes>();
             if let Some(assignment) = attributes.buffer.take() {
                 surface_data.data_map.insert_if_missing(|| RefCell::new(SurfaceBuffer::new()));
-                let data = surface_data.data_map.get::<RefCell<SurfaceBuffer>>().unwrap();
-                data.borrow_mut().update_buffer(assignment);
+                let buffer = surface_data.data_map.get::<RefCell<SurfaceBuffer>>().unwrap();
+                buffer.borrow_mut().update_buffer(assignment);
             }
         },
         |_, _, _| true,
     );
 
-    // Find the window for this surface.
     let catacomb = data.get::<Catacomb>().unwrap();
-    let mut windows = catacomb.windows.borrow_mut();
-    let window = match windows.iter_mut().find(|window| {
-        window.surface.get_surface().map_or(false, |window_surface| window_surface == &surface)
-    }) {
-        Some(window) => window,
-        None => return,
-    };
-
-    let initial_configure_sent = compositor::with_states(&surface, |state| {
-        let attributes = state.data_map.get::<Mutex<XdgToplevelSurfaceRoleAttributes>>();
-        attributes.unwrap().lock().unwrap().initial_configure_sent
-    })
-    .unwrap_or(true);
-
-    // Set the initial window dimensions.
-    if !initial_configure_sent {
-        let mut size = catacomb.output.size();
-        if window.location == WindowLocation::Primary {
-            // Sole primary windows take up all the space.
-            window.resize(size);
-        } else {
-            // Take half the space plus fractionals for the secondary window.
-            let height = size.h as f32 / 2.;
-            size.h = height.ceil() as i32;
-            window.resize(size);
-
-            // Resize primary window to take the first half.
-            size.h = height.floor() as i32;
-            if let Some(window) =
-                windows.iter_mut().find(|window| window.location == WindowLocation::Primary)
-            {
-                window.resize(size);
-            }
-        }
-    }
+    catacomb.windows.borrow_mut().update_dimensions(catacomb.output.size());
 }
 
 /// Surface buffer cache.

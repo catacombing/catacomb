@@ -113,18 +113,17 @@ impl Catacomb {
     /// Request redraws for all windows.
     pub fn request_frames(&mut self) {
         let runtime = self.start_time.elapsed().as_millis() as u32;
-        for window in self.windows.borrow().iter() {
+        self.windows.borrow().with_visible(|window| {
             window.request_frame(runtime);
-        }
+        });
 
-        let display = self.display.clone();
-        display.borrow_mut().flush_clients(self);
+        self.display.clone().borrow_mut().flush_clients(self);
     }
 
     /// Render all windows.
     pub fn draw_windows(&self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame) {
-        for window in self.windows.borrow().iter() {
+        self.windows.borrow().with_visible(|window| {
             window.draw(renderer, frame, &self.output);
-        }
+        });
     }
 }
