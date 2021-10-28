@@ -81,7 +81,7 @@ fn surface_commit(surface: WlSurface, mut data: DispatchData) {
 /// Surface buffer cache.
 #[derive(Default)]
 pub struct SurfaceBuffer {
-    pub texture: Option<Gles2Texture>,
+    pub texture: Option<Rc<Gles2Texture>>,
     pub buffer: Option<Buffer>,
 }
 

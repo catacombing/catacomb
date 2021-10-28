@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::mem;
 use std::rc::{Rc, Weak};
 
-use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
+use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer, Gles2Texture};
 use smithay::backend::renderer::{self, BufferType, Frame, ImportAll, Transform};
 use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::compositor::{
@@ -43,9 +43,9 @@ impl Windows {
     }
 
     /// Execute a function for all visible windows.
-    pub fn with_visible<F: FnMut(&Window)>(&self, mut fun: F) {
-        for window in self.primary.upgrade().iter().chain(&self.secondary.upgrade()) {
-            fun(&window.borrow());
+    pub fn with_visible<F: FnMut(&mut Window)>(&self, mut fun: F) {
+        for window in self.primary.upgrade().iter_mut().chain(&mut self.secondary.upgrade()) {
+            fun(&mut window.borrow_mut());
         }
     }
 
@@ -85,15 +85,34 @@ impl Windows {
     }
 }
 
+/// Cached texture.
+///
+/// Includes all information necessary to render a surface's texture even after
+/// the surface itself has already died.
+struct Texture {
+    location: Point<i32, Logical>,
+    texture: Rc<Gles2Texture>,
+    scale: i32,
+}
+
+impl Texture {
+    fn new(texture: Rc<Gles2Texture>, location: Point<i32, Logical>, scale: i32) -> Self {
+        Self { texture, location, scale }
+    }
+}
+
 /// Wayland client window state.
 pub struct Window {
-    surface: ToplevelSurface,
     rectangle: Rectangle<i32, Logical>,
+    surface: ToplevelSurface,
+
+    /// Texture cache, for rendering dead windows.
+    textures: Vec<Texture>,
 }
 
 impl Window {
     pub fn new(surface: ToplevelSurface) -> Self {
-        Window { rectangle: Rectangle::default(), surface }
+        Window { rectangle: Rectangle::default(), textures: Vec::new(), surface }
     }
 
     /// Check if this window has a drawable buffer attached.
@@ -145,13 +164,49 @@ impl Window {
         );
     }
 
+    /// Change the window dimensions.
+    pub fn resize(&mut self, size: Size<i32, Logical>) {
+        // Prevent redundant configure events.
+        if self.rectangle.size == size {
+            return;
+        }
+
+        let result = self.surface.with_pending_state(|state| {
+            state.size = Some(size);
+        });
+
+        if result.is_ok() {
+            self.surface.send_configure();
+            self.rectangle.size = size;
+        }
+    }
+
     /// Render this window's buffers.
-    pub fn draw(&self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame, output: &Output) {
+    pub fn draw(&mut self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame, output: &Output) {
+        self.import_buffers(renderer);
+
+        // TODO: Assure rendering from cached doesn't impede perf.
+        for Texture { texture, location, scale } in &self.textures {
+            let _ = frame.render_texture_at(
+                texture,
+                location.to_f64().to_physical(output.scale).to_i32_round(),
+                *scale,
+                output.scale,
+                Transform::Normal,
+                1.,
+            );
+        }
+    }
+
+    /// Import the buffers of all surfaces into the renderer.
+    fn import_buffers(&mut self, renderer: &mut Gles2Renderer) {
         // Ensure there is a drawable surface present.
         let wl_surface = match self.surface.get_surface() {
             Some(surface) => surface,
             None => return,
         };
+
+        self.textures.clear();
 
         compositor::with_surface_tree_upward(
             wl_surface,
@@ -170,33 +225,42 @@ impl Window {
                     location += subsurface.location;
                 }
 
-                // Start rendering if the buffer is already imported.
-                if data.texture.is_some() {
+                let attributes = surface_data.cached_state.current::<SurfaceAttributes>();
+                let scale = attributes.buffer_scale;
+
+                // Skip surface if buffer was already imported.
+                if let Some(texture) = &data.texture {
+                    self.textures.push(Texture::new(texture.clone(), location, scale));
                     return TraversalAction::DoChildren(location);
                 }
 
                 // Import and cache the buffer.
+
                 let buffer = match &data.buffer {
                     Some(buffer) => buffer,
                     None => return TraversalAction::SkipChildren,
                 };
 
-                let attributes = surface_data.cached_state.current::<SurfaceAttributes>();
                 let damage: Vec<_> = attributes
                     .damage
                     .iter()
                     .map(|damage| match damage {
                         Damage::Buffer(rect) => *rect,
-                        Damage::Surface(rect) => rect.to_buffer(attributes.buffer_scale),
+                        Damage::Surface(rect) => rect.to_buffer(scale),
                     })
                     .collect();
 
                 match renderer.import_buffer(buffer, Some(surface_data), &damage) {
                     Some(Ok(texture)) => {
+                        // Release SHM buffers after import.
                         if let Some(BufferType::Shm) = renderer::buffer_type(buffer) {
                             data.buffer = None;
                         }
-                        data.texture = Some(texture);
+
+                        // Update and cache the texture.
+                        let texture = Rc::new(texture);
+                        data.texture = Some(texture.clone());
+                        self.textures.push(Texture::new(texture, location, scale));
 
                         TraversalAction::DoChildren(location)
                     },
@@ -208,54 +272,8 @@ impl Window {
                     },
                 }
             },
-            |_, surface_data, location| {
-                let data = match surface_data.data_map.get::<RefCell<SurfaceBuffer>>() {
-                    Some(data) => data,
-                    None => return,
-                };
-                let data = data.borrow_mut();
-
-                let texture = match &data.texture {
-                    Some(texture) => texture,
-                    None => return,
-                };
-
-                // Apply subsurface offset to parent's origin.
-                let mut location = *location;
-                if surface_data.role == Some("subsurface") {
-                    let subsurface = surface_data.cached_state.current::<SubsurfaceCachedState>();
-                    location += subsurface.location;
-                }
-
-                let attributes = surface_data.cached_state.current::<SurfaceAttributes>();
-
-                let _ = frame.render_texture_at(
-                    texture,
-                    location.to_f64().to_physical(output.scale).to_i32_round(),
-                    attributes.buffer_scale,
-                    output.scale,
-                    Transform::Normal,
-                    1.,
-                );
-            },
+            |_, _, _| (),
             |_, _, _| true,
         );
-    }
-
-    /// Change the window dimensions.
-    pub fn resize(&mut self, size: Size<i32, Logical>) {
-        // Prevent redundant configure events.
-        if self.rectangle.size == size {
-            return;
-        }
-
-        let result = self.surface.with_pending_state(|state| {
-            state.size = Some(size);
-        });
-
-        if result.is_ok() {
-            self.surface.send_configure();
-            self.rectangle.size = size;
-        }
     }
 }
