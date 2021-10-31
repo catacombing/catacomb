@@ -1,11 +1,13 @@
 //! Wayland client.
 
-use std::cell::RefCell;
+use std::cell::{RefCell, RefMut};
 use std::mem;
 use std::rc::{Rc, Weak};
+use std::time::{Duration, Instant};
 
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer, Gles2Texture};
 use smithay::backend::renderer::{self, BufferType, Frame, ImportAll, Transform};
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::compositor::{
     self, Damage, SubsurfaceCachedState, SurfaceAttributes, TraversalAction,
@@ -15,12 +17,16 @@ use smithay::wayland::shell::xdg::ToplevelSurface;
 use crate::output::Output;
 use crate::shell::SurfaceBuffer;
 
+/// Maximum time before a transaction is cancelled.
+const MAX_TRANSACTION_DURATION: Duration = Duration::from_millis(200);
+
 /// Container tracking all known clients.
 #[derive(Default)]
 pub struct Windows {
     primary: Weak<RefCell<Window>>,
     secondary: Weak<RefCell<Window>>,
     windows: Vec<Rc<RefCell<Window>>>,
+    transaction_start: Option<Instant>,
 }
 
 impl Windows {
@@ -32,9 +38,17 @@ impl Windows {
     pub fn add(&mut self, surface: ToplevelSurface) {
         let window = Rc::new(RefCell::new(Window::new(surface)));
         if self.primary.strong_count() > 0 && self.secondary.strong_count() == 0 {
+            // Start a transaction for resizing the primary window.
+            self.transaction_start.get_or_insert_with(Instant::now);
+            self.primary.upgrade().unwrap().borrow_mut().frozen = true;
+            window.borrow_mut().frozen = true;
+
             // Spawn as secondary if there's only one primary window.
             self.secondary = Rc::downgrade(&window);
         } else {
+            // TODO: Flickers if there's already primary + secondary.
+            //   -> Transition into primary/secondary must be transactional too.
+            //
             // Spawn as maximized primary if empty or secondary already present.
             self.primary = Rc::downgrade(&window);
             self.secondary = Weak::new();
@@ -42,8 +56,15 @@ impl Windows {
         self.windows.push(window);
     }
 
+    /// Find the window responsible for a specific surface.
+    pub fn find(&mut self, wl_surface: &WlSurface) -> Option<RefMut<Window>> {
+        self.windows.iter_mut().map(|window| window.borrow_mut()).find(|window| {
+            window.surface.get_surface().map_or(false, |surface| surface == wl_surface)
+        })
+    }
+
     /// Execute a function for all visible windows.
-    pub fn with_visible<F: FnMut(&mut Window)>(&self, mut fun: F) {
+    pub fn with_visible<F: FnMut(&mut Window)>(&mut self, mut fun: F) {
         for window in self.primary.upgrade().iter_mut().chain(&mut self.secondary.upgrade()) {
             fun(&mut window.borrow_mut());
         }
@@ -53,34 +74,91 @@ impl Windows {
     ///
     /// This function will remove all dead windows and update the remaining ones appropriately.
     pub fn refresh(&mut self, output_size: Size<i32, Logical>) {
-        // Remove dead windows.
-        self.windows.retain(|window| window.borrow().surface.alive());
+        // Start a transaction if exactly one of two visible windows died.
+        let mut transaction_start = self.transaction_start.take();
+        let primary = self.primary.upgrade().filter(|primary| !primary.borrow().zombie);
+        let secondary = self.secondary.upgrade().filter(|secondary| !secondary.borrow().zombie);
+        if let (Some(primary), Some(secondary)) = (primary, secondary) {
+            let mut primary = primary.borrow_mut();
+            let mut secondary = secondary.borrow_mut();
 
-        // Replace dead primary windows with the secondary.
-        if self.primary.strong_count() == 0 && self.secondary.strong_count() > 0 {
-            mem::swap(&mut self.primary, &mut self.secondary);
+            primary.zombie = !primary.surface.alive();
+            secondary.zombie = !secondary.surface.alive();
+
+            // Skip transaction if both windows died.
+            if primary.zombie ^ secondary.zombie {
+                transaction_start.get_or_insert_with(Instant::now);
+                primary.frozen = true;
+                secondary.frozen = true;
+            }
         }
+        self.transaction_start = transaction_start;
+
+        // Remove dead windows.
+        self.windows.retain(|window| {
+            let window = window.borrow();
+            window.frozen || window.surface.alive()
+        });
 
         self.update_dimensions(output_size);
     }
 
     /// Update size and location of visible windows.
-    pub fn update_dimensions(&mut self, mut output_size: Size<i32, Logical>) {
-        if let Some(secondary) = self.secondary.upgrade() {
-            let mut secondary = secondary.borrow_mut();
-            let height = output_size.h as f32 / 2.;
-            secondary.rectangle.loc = Point::from((0, height.ceil() as i32));
-            secondary.resize(Size::from((output_size.w, height.floor() as i32)));
+    pub fn update_dimensions(&mut self, output_size: Size<i32, Logical>) {
+        let primary = self.primary.upgrade().filter(|primary| !primary.borrow().zombie);
+        let secondary = self.secondary.upgrade().filter(|secondary| !secondary.borrow().zombie);
+        match (primary, secondary) {
+            (Some(primary), Some(secondary)) => {
+                let mut primary = primary.borrow_mut();
+                let mut secondary = secondary.borrow_mut();
 
-            if secondary.has_buffer() {
-                output_size = Size::from((output_size.w, height.ceil() as i32));
+                let height = output_size.h as f32 / 2.;
+                primary.rectangle.loc = Point::from((0, 0));
+                primary.resize((output_size.w, height.ceil() as i32));
+
+                secondary.rectangle.loc = Point::from((0, height.ceil() as i32));
+                secondary.resize((output_size.w, height.floor() as i32));
+            },
+            (Some(window), None) | (None, Some(window)) => {
+                let mut window = window.borrow_mut();
+                window.rectangle.loc = Point::from((0, 0));
+                window.resize(output_size);
+            },
+            _ => (),
+        }
+    }
+
+    /// Attempt to execute pending transactions.
+    pub fn update_transaction(&mut self) {
+        let transaction_start = match self.transaction_start {
+            Some(start) => start,
+            None => return,
+        };
+
+        // Check if the transaction requires updating.
+        if Instant::now().duration_since(transaction_start) <= MAX_TRANSACTION_DURATION {
+            // Check if all participants are ready.
+            let finished = self.windows.iter().map(|window| window.borrow()).all(|window| {
+                !window.frozen || window.zombie || window.buffer_size == window.rectangle.size
+            });
+
+            // Abort if the transaction is still pending.
+            if !finished {
+                return;
             }
         }
 
-        if let Some(primary) = self.primary.upgrade() {
-            let mut primary = primary.borrow_mut();
-            primary.rectangle.loc = Point::from((0, 0));
-            primary.resize(output_size);
+        // Execute the transaction.
+        self.windows.retain(|window| {
+            let mut window = window.borrow_mut();
+            window.frozen = false;
+            window.surface.alive()
+        });
+        self.transaction_start = None;
+
+        // Reorder windows if primary died.
+        if self.primary.strong_count() == 0 && self.secondary.strong_count() > 0 {
+            mem::swap(&mut self.primary, &mut self.secondary);
         }
     }
 }
@@ -103,43 +181,35 @@ impl Texture {
 
 /// Wayland client window state.
 pub struct Window {
+    /// Current buffer dimensions.
+    pub buffer_size: Size<i32, Logical>,
+
+    /// Desired window dimensions.
     rectangle: Rectangle<i32, Logical>,
+
+    /// Attached surface.
     surface: ToplevelSurface,
 
     /// Texture cache, for rendering dead windows.
     textures: Vec<Texture>,
+
+    /// Freeze window updates to allow atomic upgrades.
+    frozen: bool,
+
+    /// Dead window kept around for the cached buffer.
+    zombie: bool,
 }
 
 impl Window {
     pub fn new(surface: ToplevelSurface) -> Self {
-        Window { rectangle: Rectangle::default(), textures: Vec::new(), surface }
-    }
-
-    /// Check if this window has a drawable buffer attached.
-    pub fn has_buffer(&self) -> bool {
-        let wl_surface = match self.surface.get_surface() {
-            Some(wl_surface) => wl_surface,
-            None => return false,
-        };
-
-        let mut has_buffer = false;
-        compositor::with_surface_tree_upward(
-            &wl_surface,
-            (),
-            |_, surface_data, _| {
-                let buffer = surface_data.data_map.get::<RefCell<SurfaceBuffer>>();
-                has_buffer |= buffer.map_or(false, |data| data.borrow().buffer.is_some());
-
-                if has_buffer {
-                    return TraversalAction::SkipChildren;
-                } else {
-                    return TraversalAction::DoChildren(());
-                }
-            },
-            |_, _, _| (),
-            |_, _, _| true,
-        );
-        has_buffer
+        Window {
+            rectangle: Rectangle::default(),
+            buffer_size: Size::default(),
+            textures: Vec::new(),
+            frozen: false,
+            zombie: false,
+            surface,
+        }
     }
 
     /// Send a frame request to the window.
@@ -165,8 +235,9 @@ impl Window {
     }
 
     /// Change the window dimensions.
-    pub fn resize(&mut self, size: Size<i32, Logical>) {
+    pub fn resize<S: Into<Size<i32, Logical>>>(&mut self, size: S) {
         // Prevent redundant configure events.
+        let size = size.into();
         if self.rectangle.size == size {
             return;
         }
@@ -183,9 +254,11 @@ impl Window {
 
     /// Render this window's buffers.
     pub fn draw(&mut self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame, output: &Output) {
-        self.import_buffers(renderer);
+        // Skip updating windows during transactions.
+        if !self.frozen {
+            self.import_buffers(renderer);
+        }
 
-        // TODO: Assure rendering from cached doesn't impede perf.
         for Texture { texture, location, scale } in &self.textures {
             let _ = frame.render_texture_at(
                 texture,

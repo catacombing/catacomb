@@ -4,11 +4,15 @@ use std::cell::RefCell;
 use std::ops::Deref;
 use std::rc::Rc;
 
+use smithay::backend::renderer;
 use smithay::backend::renderer::gles2::Gles2Texture;
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Display;
-use smithay::wayland::compositor::{self, BufferAssignment, SurfaceAttributes, TraversalAction};
+use smithay::utils::{Logical, Physical, Point, Rectangle, Size};
+use smithay::wayland::compositor::{
+    self, BufferAssignment, SubsurfaceCachedState, SurfaceAttributes, TraversalAction,
+};
 use smithay::wayland::shell::xdg::{self as xdg_shell, XdgRequest};
 use smithay::wayland::SERIAL_COUNTER;
 use wayland_commons::filter::DispatchData;
@@ -58,45 +62,82 @@ fn surface_commit(surface: WlSurface, mut data: DispatchData) {
         return;
     }
 
+    // Find the window responsible for the surface.
+    let catacomb = data.get::<Catacomb>().unwrap();
+    let mut windows = catacomb.windows.borrow_mut();
+    let mut window = match windows.find(&surface) {
+        Some(window) => window,
+        None => return,
+    };
+
     // Handle surface buffer changes.
+    let mut buffer_size = Rectangle::default();
     compositor::with_surface_tree_upward(
         &surface,
-        (),
-        |_, _, _| TraversalAction::DoChildren(()),
-        |_, surface_data, _| {
-            let mut attributes = surface_data.cached_state.current::<SurfaceAttributes>();
-            if let Some(assignment) = attributes.buffer.take() {
-                surface_data.data_map.insert_if_missing(|| RefCell::new(SurfaceBuffer::new()));
-                let buffer = surface_data.data_map.get::<RefCell<SurfaceBuffer>>().unwrap();
-                buffer.borrow_mut().update_buffer(assignment);
+        Point::from((0, 0)),
+        |_, data, location| {
+            let mut location = *location;
+
+            // Update buffer attached to the surface.
+            data.data_map.insert_if_missing(|| RefCell::new(SurfaceBuffer::new()));
+            let mut buffer = data.data_map.get::<RefCell<SurfaceBuffer>>().unwrap().borrow_mut();
+            let mut attributes = data.cached_state.current::<SurfaceAttributes>();
+            buffer.update_buffer(&mut attributes);
+
+            // Update the window's bounding box based on each buffer's size and location.
+            if data.role == Some("subsurface") {
+                let subsurface = data.cached_state.current::<SubsurfaceCachedState>();
+                location += subsurface.location;
             }
+            buffer_size = buffer_size.merge(Rectangle::from_loc_and_size(location, buffer.size()));
+
+            TraversalAction::DoChildren(location)
         },
+        |_, _, _| (),
         |_, _, _| true,
     );
+    window.buffer_size = buffer_size.size;
 
-    let catacomb = data.get::<Catacomb>().unwrap();
-    catacomb.windows.borrow_mut().update_dimensions(catacomb.output.size());
+    // Update window dimensions to send initial configure.
+    drop(window);
+    windows.update_dimensions(catacomb.output.size());
 }
 
 /// Surface buffer cache.
-#[derive(Default)]
 pub struct SurfaceBuffer {
     pub texture: Option<Rc<Gles2Texture>>,
     pub buffer: Option<Buffer>,
+    size: Size<i32, Physical>,
+    scale: i32,
 }
 
 impl SurfaceBuffer {
     fn new() -> Self {
-        Self::default()
+        Self {
+            scale: 1,
+            texture: Default::default(),
+            buffer: Default::default(),
+            size: Default::default(),
+        }
     }
 
     /// Handle buffer creation/removal.
-    fn update_buffer(&mut self, assignment: BufferAssignment) {
-        self.buffer = match assignment {
-            BufferAssignment::NewBuffer { buffer, .. } => Some(Buffer(buffer)),
-            BufferAssignment::Removed => None,
-        };
-        self.texture = None;
+    fn update_buffer(&mut self, attributes: &mut SurfaceAttributes) {
+        match attributes.buffer.take() {
+            Some(BufferAssignment::NewBuffer { buffer, .. }) => {
+                self.size = renderer::buffer_dimensions(&buffer).unwrap_or_default();
+                self.scale = attributes.buffer_scale;
+                self.buffer = Some(Buffer(buffer));
+                self.texture = None;
+            },
+            Some(BufferAssignment::Removed) => *self = Self::new(),
+            None => (),
+        }
+    }
+
+    /// Returns the size of the buffer.
+    pub fn size(&self) -> Size<i32, Logical> {
+        self.size.to_logical(self.scale)
     }
 }
 

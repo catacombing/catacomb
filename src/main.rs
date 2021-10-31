@@ -56,6 +56,9 @@ fn main() {
             break;
         }
 
+        // Attempt to process staged atomic updates.
+        catacomb.windows.borrow_mut().update_transaction();
+
         graphics
             .borrow_mut()
             .render(|renderer, frame| {
@@ -64,6 +67,9 @@ fn main() {
                 catacomb.draw_windows(renderer, frame);
             })
             .expect("buffer swap");
+
+        // Handle window liveliness changes.
+        catacomb.windows.borrow_mut().refresh(catacomb.output.size());
 
         catacomb.request_frames();
 
@@ -76,8 +82,5 @@ fn main() {
         }
 
         display.borrow_mut().flush_clients(&mut catacomb);
-
-        // Handle window liveliness changes.
-        catacomb.windows.borrow_mut().refresh(catacomb.output.size());
     }
 }
