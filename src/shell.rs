@@ -39,12 +39,12 @@ impl Shells {
             move |event, mut data| match event {
                 XdgRequest::NewToplevel { surface } => {
                     // Automatically focus new windows.
+                    let catacomb = data.get::<Catacomb>().unwrap();
                     if let Some(wl_surface) = surface.get_surface() {
-                        let catacomb = data.get::<Catacomb>().unwrap();
                         catacomb.keyboard.set_focus(Some(wl_surface), SERIAL_COUNTER.next_serial());
                     }
 
-                    xdg_windows.borrow_mut().add(surface);
+                    xdg_windows.borrow_mut().add(surface, catacomb.output.size());
                 },
                 XdgRequest::NewClient { .. } | XdgRequest::AckConfigure { .. } => (),
                 _ => eprintln!("UNHANDLED EVENT: {:?}", event),
@@ -98,9 +98,10 @@ fn surface_commit(surface: WlSurface, mut data: DispatchData) {
     );
     window.buffer_size = buffer_size.size;
 
-    // Update window dimensions to send initial configure.
-    drop(window);
-    windows.update_dimensions(catacomb.output.size());
+    if !window.initial_configure_sent {
+        window.initial_configure_sent = true;
+        window.reconfigure();
+    }
 }
 
 /// Surface buffer cache.
