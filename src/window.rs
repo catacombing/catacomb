@@ -35,13 +35,13 @@ impl Windows {
     }
 
     /// Add a new window.
-    pub fn add(&mut self, surface: ToplevelSurface, output_size: Size<i32, Logical>) {
+    pub fn add(&mut self, surface: ToplevelSurface, output: &Output) {
         let window = Rc::new(RefCell::new(Window::new(surface)));
         if self.primary.strong_count() > 0 && self.secondary.strong_count() == 0 {
-            self.set_secondary(output_size, &window);
+            self.set_secondary(output, &window);
         } else {
-            self.set_primary(output_size, &window);
-            self.set_secondary(output_size, None);
+            self.set_primary(output, &window);
+            self.set_secondary(output, None);
         }
         self.windows.push(window);
     }
@@ -63,13 +63,13 @@ impl Windows {
     /// Refresh the client list.
     ///
     /// This function will remove all dead windows and update the remaining ones appropriately.
-    pub fn refresh(&mut self, output_size: Size<i32, Logical>) {
+    pub fn refresh(&mut self, output: &Output) {
         // Remove dead visible windows.
         if self.primary.upgrade().map_or(false, |primary| !primary.borrow().surface.alive()) {
-            self.set_primary(output_size, None);
+            self.set_primary(output, None);
         }
         if self.secondary.upgrade().map_or(false, |secondary| !secondary.borrow().surface.alive()) {
-            self.set_secondary(output_size, None);
+            self.set_secondary(output, None);
         }
 
         // Remove dead windows.
@@ -105,72 +105,58 @@ impl Windows {
         self.transaction_start = None;
     }
 
+    /// Update window dimensions.
+    pub fn update_dimensions(&mut self, output: &Output) {
+        self.transaction_start.get_or_insert_with(Instant::now);
+
+        if let Some(mut primary) = self.primary.upgrade().as_ref().map(|p| p.borrow_mut()) {
+            let rectangle = output.primary_rectangle(self.secondary.strong_count() > 0);
+            primary.rectangle.loc = rectangle.loc;
+            primary.resize(rectangle.size);
+            primary.frozen = true;
+        }
+
+        if let Some(mut secondary) = self.secondary.upgrade().as_ref().map(|s| s.borrow_mut()) {
+            let rectangle = output.secondary_rectangle();
+            secondary.rectangle.loc = rectangle.loc;
+            secondary.resize(rectangle.size);
+            secondary.frozen = true;
+        }
+    }
+
     /// Change the primary window.
     fn set_primary<'a>(
         &mut self,
-        mut output_size: Size<i32, Logical>,
+        output: &Output,
         window: impl Into<Option<&'a Rc<RefCell<Window>>>>,
     ) {
-        // Fallback to secondary if primary is removed.
+        // Copy last buffer state to new windows.
         let window = window.into().cloned().or_else(|| mem::take(&mut self.secondary).upgrade());
-        let window = match window {
-            Some(window) => window,
-            None => {
-                self.primary = Weak::new();
-                return;
-            },
-        };
-
-        let mut window_mut = window.borrow_mut();
-
-        // Persist the old buffer until redraw.
-        if let Some(primary) = self.primary.upgrade() {
-            self.transaction_start.get_or_insert_with(Instant::now);
-            window_mut.textures.append(&mut primary.borrow_mut().textures);
-            window_mut.frozen = true;
+        if let Some((window, primary)) = window.as_ref().zip(self.primary.upgrade()) {
+            window.borrow_mut().textures.append(&mut primary.borrow_mut().textures);
         }
 
-        // Set target window dimensions.
-        if self.secondary.strong_count() > 0 {
-            output_size.h = (output_size.h + 1) / 2;
-        }
-        window_mut.rectangle.loc = Point::from((0, 0));
-        window_mut.resize(output_size);
-
-        self.primary = Rc::downgrade(&window);
+        self.primary = window.map(|window| Rc::downgrade(&window)).unwrap_or_default();
+        self.update_dimensions(output);
     }
 
     /// Change the secondary window.
     fn set_secondary<'a>(
         &mut self,
-        mut output_size: Size<i32, Logical>,
+        output: &Output,
         window: impl Into<Option<&'a Rc<RefCell<Window>>>>,
     ) {
-        // Set initial size and frozen buffers for new secondary window.
+        // Copy last buffer state to new windows.
         let window = window.into();
-        if let Some(mut window) = window.map(|window| window.borrow_mut()) {
-            if let Some(secondary) = self.secondary.upgrade() {
-                mem::swap(&mut window.textures, &mut secondary.borrow_mut().textures);
-            }
-            let height = output_size.h as f32 / 2.;
-            output_size.h = height.ceil() as i32;
-            window.rectangle.loc = Point::from((0, output_size.h));
-            window.resize(Size::from((output_size.w, height.floor() as i32)));
-            window.frozen = true;
-        }
-
-        // Update secondary window size and frozen buffers.
-        if let Some(mut primary) = self.primary.upgrade().as_ref().map(|p| p.borrow_mut()) {
-            if let Some(secondary) = self.secondary.upgrade().filter(|_| window.is_none()) {
-                primary.textures.append(&mut secondary.borrow_mut().textures);
-            }
-            primary.resize(output_size);
-            primary.frozen = true;
+        if let (Some(window), _, Some(secondary)) | (None, Some(window), Some(secondary)) =
+            (window, &self.primary.upgrade(), self.secondary.upgrade())
+        {
+            window.borrow_mut().textures.append(&mut secondary.borrow_mut().textures);
         }
 
         // Replace window and start transaction for updates.
         self.secondary = window.map(Rc::downgrade).unwrap_or_default();
-        self.transaction_start.get_or_insert_with(Instant::now);
+        self.update_dimensions(output);
     }
 }
 

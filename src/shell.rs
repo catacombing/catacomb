@@ -44,7 +44,7 @@ impl Shells {
                         catacomb.keyboard.set_focus(Some(wl_surface), SERIAL_COUNTER.next_serial());
                     }
 
-                    xdg_windows.borrow_mut().add(surface, catacomb.output.size());
+                    xdg_windows.borrow_mut().add(surface, &catacomb.output);
                 },
                 XdgRequest::NewClient { .. } | XdgRequest::AckConfigure { .. } => (),
                 _ => eprintln!("UNHANDLED EVENT: {:?}", event),
