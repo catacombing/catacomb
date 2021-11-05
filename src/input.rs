@@ -10,13 +10,10 @@ use crate::output::Orientation;
 
 impl Catacomb {
     /// Process winit-specific input events.
-    pub fn handle_winit_input<B>(&mut self, event: InputEvent<B>)
-    where
-        B: InputBackend<SpecialEvent = WinitEvent>,
-    {
+    pub fn handle_winit_input(&mut self, event: WinitEvent) {
         match event {
             // Toggle between portrait/landscape based on window size.
-            InputEvent::Special(WinitEvent::Resized { size, .. }) => {
+            WinitEvent::Resized { size, .. } => {
                 if size.h >= size.w {
                     self.output.orientation = Orientation::Portrait;
                 } else {
@@ -25,7 +22,8 @@ impl Catacomb {
                 self.output.mode.size = size;
                 self.windows.borrow_mut().update_dimensions(&self.output);
             },
-            event => self.handle_input(event),
+            WinitEvent::Input(event) => self.handle_input(event),
+            _ => (),
         }
     }
 

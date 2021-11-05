@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use smithay::backend::input::InputBackend;
 use smithay::backend::renderer::{Frame, ImportDma, ImportEgl};
 use smithay::backend::winit;
 use smithay::reexports::calloop::EventLoop;
