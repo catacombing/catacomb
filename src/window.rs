@@ -186,6 +186,9 @@ pub struct Window {
     /// Initial size configure status.
     pub initial_configure_sent: bool,
 
+    /// Buffers pending to be imported.
+    pub buffers_pending: bool,
+
     /// Desired window dimensions.
     rectangle: Rectangle<i32, Logical>,
 
@@ -204,6 +207,7 @@ impl Window {
         Window {
             surface,
             initial_configure_sent: Default::default(),
+            buffers_pending: Default::default(),
             buffer_size: Default::default(),
             rectangle: Default::default(),
             textures: Default::default(),
@@ -256,7 +260,7 @@ impl Window {
     /// Render this window's buffers.
     pub fn draw(&mut self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame, output: &Output) {
         // Skip updating windows during transactions.
-        if !self.frozen {
+        if !self.frozen && self.buffers_pending {
             self.import_buffers(renderer);
         }
 
@@ -281,6 +285,7 @@ impl Window {
         };
 
         self.textures.clear();
+        self.buffers_pending = false;
 
         compositor::with_surface_tree_upward(
             wl_surface,

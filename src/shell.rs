@@ -97,6 +97,7 @@ fn surface_commit(surface: WlSurface, mut data: DispatchData) {
         |_, _, _| true,
     );
     window.buffer_size = buffer_size.size;
+    window.buffers_pending = true;
 
     if !window.initial_configure_sent {
         window.initial_configure_sent = true;
