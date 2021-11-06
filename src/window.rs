@@ -1,5 +1,6 @@
 //! Wayland client.
 
+use std::borrow::Cow;
 use std::cell::{RefCell, RefMut};
 use std::mem;
 use std::rc::{Rc, Weak};
@@ -48,8 +49,14 @@ impl Windows {
 
     /// Find the window responsible for a specific surface.
     pub fn find(&mut self, wl_surface: &WlSurface) -> Option<RefMut<Window>> {
+        // Get root surface.
+        let mut wl_surface = Cow::Borrowed(wl_surface);
+        while let Some(surface) = compositor::get_parent(&wl_surface) {
+            wl_surface = Cow::Owned(surface);
+        }
+
         self.windows.iter_mut().map(|window| window.borrow_mut()).find(|window| {
-            window.surface.get_surface().map_or(false, |surface| surface == wl_surface)
+            window.surface.get_surface().map_or(false, |surface| surface.eq(&wl_surface))
         })
     }
 
