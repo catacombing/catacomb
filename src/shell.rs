@@ -99,9 +99,15 @@ fn surface_commit(surface: WlSurface, mut data: DispatchData) {
     window.buffer_size = buffer_size.size;
     window.buffers_pending = true;
 
+    // Send initial configure after the first commit.
     if !window.initial_configure_sent {
         window.initial_configure_sent = true;
         window.reconfigure();
+    }
+
+    // Advertise current output to visible surfaces.
+    if window.visible() {
+        catacomb.output.enter(&surface);
     }
 }
 

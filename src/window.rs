@@ -11,7 +11,7 @@ use smithay::backend::renderer::{self, BufferType, Frame, ImportAll, Transform};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::compositor::{
-    self, Damage, SubsurfaceCachedState, SurfaceAttributes, TraversalAction,
+    self, Damage, SubsurfaceCachedState, SurfaceAttributes, SurfaceData, TraversalAction,
 };
 use smithay::wayland::shell::xdg::ToplevelSurface;
 
@@ -137,8 +137,18 @@ impl Windows {
         output: &Output,
         window: impl Into<Option<&'a Rc<RefCell<Window>>>>,
     ) {
+        let window = window.into();
+
+        // Update output's visible windows.
+        if let Some(primary) = self.primary.upgrade() {
+            primary.borrow_mut().leave(output);
+        }
+        if let Some(window) = &window {
+            window.borrow_mut().enter(output);
+        }
+
         // Copy last buffer state to new windows.
-        let window = window.into().cloned().or_else(|| mem::take(&mut self.secondary).upgrade());
+        let window = window.cloned().or_else(|| mem::take(&mut self.secondary).upgrade());
         if let Some((window, primary)) = window.as_ref().zip(self.primary.upgrade()) {
             window.borrow_mut().textures.append(&mut primary.borrow_mut().textures);
         }
@@ -153,8 +163,17 @@ impl Windows {
         output: &Output,
         window: impl Into<Option<&'a Rc<RefCell<Window>>>>,
     ) {
-        // Copy last buffer state to new windows.
         let window = window.into();
+
+        // Update output's visible windows.
+        if let Some(secondary) = self.secondary.upgrade() {
+            secondary.borrow_mut().leave(output);
+        }
+        if let Some(window) = &window {
+            window.borrow_mut().enter(output);
+        }
+
+        // Copy last buffer state to new windows.
         if let (Some(window), _, Some(secondary)) | (None, Some(window), Some(secondary)) =
             (window, &self.primary.upgrade(), self.secondary.upgrade())
         {
@@ -205,6 +224,9 @@ pub struct Window {
     /// Texture cache, for rendering dead windows.
     textures: Vec<Texture>,
 
+    /// Window is currently visible on the output.
+    visible: bool,
+
     /// Freeze window updates to allow atomic upgrades.
     frozen: bool,
 }
@@ -218,30 +240,19 @@ impl Window {
             buffer_size: Default::default(),
             rectangle: Default::default(),
             textures: Default::default(),
+            visible: Default::default(),
             frozen: Default::default(),
         }
     }
 
     /// Send a frame request to the window.
-    pub fn request_frame(&self, runtime: u32) {
-        // Ensure there is a drawable surface present.
-        let wl_surface = match self.surface.get_surface() {
-            Some(surface) => surface,
-            None => return,
-        };
-
-        compositor::with_surface_tree_downward(
-            wl_surface,
-            (),
-            |_, _, _| TraversalAction::DoChildren(()),
-            |_, surface_data, _| {
-                let mut attributes = surface_data.cached_state.current::<SurfaceAttributes>();
-                for callback in attributes.frame_callbacks.drain(..) {
-                    callback.done(runtime);
-                }
-            },
-            |_, _, _| true,
-        );
+    pub fn request_frame(&mut self, runtime: u32) {
+        self.with_surfaces(|_, surface_data| {
+            let mut attributes = surface_data.cached_state.current::<SurfaceAttributes>();
+            for callback in attributes.frame_callbacks.drain(..) {
+                callback.done(runtime);
+            }
+        });
     }
 
     /// Change the window dimensions.
@@ -264,6 +275,18 @@ impl Window {
         }
     }
 
+    /// Send output enter event to this window's surfaces.
+    pub fn enter(&mut self, output: &Output) {
+        self.with_surfaces(|surface, _| output.enter(surface));
+        self.visible = true;
+    }
+
+    /// Send output leave event to this window's surfaces.
+    pub fn leave(&mut self, output: &Output) {
+        self.with_surfaces(|surface, _| output.leave(surface));
+        self.visible = false;
+    }
+
     /// Render this window's buffers.
     pub fn draw(&mut self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame, output: &Output) {
         // Skip updating windows during transactions.
@@ -281,6 +304,11 @@ impl Window {
                 1.,
             );
         }
+    }
+
+    /// Check if window is visible on the output.
+    pub fn visible(&self) -> bool {
+        self.visible
     }
 
     /// Import the buffers of all surfaces into the renderer.
@@ -359,6 +387,22 @@ impl Window {
                 }
             },
             |_, _, _| (),
+            |_, _, _| true,
+        );
+    }
+
+    /// Execute a function for all surfaces of this window.
+    fn with_surfaces<F: FnMut(&WlSurface, &SurfaceData)>(&mut self, mut fun: F) {
+        let wl_surface = match self.surface.get_surface() {
+            Some(surface) => surface,
+            None => return,
+        };
+
+        compositor::with_surface_tree_upward(
+            wl_surface,
+            (),
+            |_, _, _| TraversalAction::DoChildren(()),
+            |surface, surface_data, _| fun(surface, surface_data),
             |_, _, _| true,
         );
     }

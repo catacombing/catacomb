@@ -5,9 +5,10 @@ use std::time::Duration;
 use smithay::backend::renderer::{Frame, ImportDma, ImportEgl};
 use smithay::backend::winit;
 use smithay::reexports::calloop::EventLoop;
+use smithay::reexports::wayland_server::protocol::wl_output::Subpixel;
 use smithay::reexports::wayland_server::Display;
 use smithay::wayland::dmabuf;
-use smithay::wayland::output::Mode;
+use smithay::wayland::output::{Mode, PhysicalProperties};
 
 use crate::catacomb::Catacomb;
 use crate::output::Output;
@@ -37,7 +38,12 @@ fn main() {
     }
 
     let mode = Mode { size: graphics.borrow().window_size().physical_size, refresh: 200_000 };
-    let output = Output::new(mode);
+    let output = Output::new(&mut display, "output-0", mode, PhysicalProperties {
+        subpixel: Subpixel::Unknown,
+        model: "model-0".into(),
+        make: "make-0".into(),
+        size: (0, 0).into(),
+    });
 
     let mut event_loop: EventLoop<'_, Catacomb> = EventLoop::try_new().expect("event loop");
     let mut catacomb = Catacomb::new(display, output, &mut event_loop);

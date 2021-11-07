@@ -1,7 +1,11 @@
 //! Output region handling.
 
+use std::ops::Deref;
+
+use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
+use smithay::reexports::wayland_server::{Display, Global};
 use smithay::utils::{Logical, Rectangle, Size};
-use smithay::wayland::output::Mode;
+use smithay::wayland::output::{Mode, Output as SmithayOutput, PhysicalProperties};
 
 /// Use a fixed output scale.
 const SCALE: i32 = 1;
@@ -11,11 +15,38 @@ pub struct Output {
     pub orientation: Orientation,
     pub scale: f64,
     pub mode: Mode,
+    global: Option<Global<WlOutput>>,
+    output: SmithayOutput,
+}
+
+impl Drop for Output {
+    fn drop(&mut self) {
+        if let Some(global) = self.global.take() {
+            global.destroy();
+        }
+    }
 }
 
 impl Output {
-    pub fn new(mode: Mode) -> Self {
-        Self { orientation: Orientation::Portrait, scale: SCALE as f64, mode }
+    pub fn new(
+        display: &mut Display,
+        name: impl Into<String>,
+        mode: Mode,
+        properties: PhysicalProperties,
+    ) -> Self {
+        let (output, global) = SmithayOutput::new(display, name.into(), properties, None);
+
+        // Set output mode.
+        output.change_current_state(Some(mode), None, Some(SCALE), None);
+        output.set_preferred(mode);
+
+        Self {
+            orientation: Orientation::Portrait,
+            global: Some(global),
+            scale: SCALE as f64,
+            output,
+            mode,
+        }
     }
 
     /// Primary window dimensions.
@@ -48,6 +79,14 @@ impl Output {
     /// Output dimensions.
     fn size(&self) -> Size<i32, Logical> {
         self.mode.size.to_f64().to_logical(self.scale).to_i32_round()
+    }
+}
+
+impl Deref for Output {
+    type Target = SmithayOutput;
+
+    fn deref(&self) -> &Self::Target {
+        &self.output
     }
 }
 
