@@ -74,6 +74,12 @@ impl Catacomb {
 
         // Initialize input.
         let (mut seat, _) = Seat::new(&mut display, String::from("seat-0"), None);
+        data_device::init_data_device(
+            &mut display,
+            |_| {},
+            data_device::default_action_chooser,
+            None,
+        );
         let keyboard = seat
             .add_keyboard(XkbConfig::default(), 200, 25, |seat, focused_surface| {
                 data_device::set_data_device_focus(
