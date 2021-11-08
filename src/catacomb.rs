@@ -11,8 +11,11 @@ use smithay::reexports::calloop::{EventLoop, Interest, Mode as TriggerMode, Post
 use smithay::reexports::wayland_protocols::unstable::xdg_decoration;
 use smithay::reexports::wayland_server::Display;
 use smithay::wayland::seat::{KeyboardHandle, Seat, XkbConfig};
+use smithay::wayland::shell::legacy::decoration as kde_decoration;
+use smithay::wayland::shell::legacy::decoration::KdeDecorationRequest;
 use smithay::wayland::shell::xdg::decoration::{self, XdgDecorationRequest};
 use smithay::wayland::{data_device, shm};
+use wayland_protocols::misc::server_decoration::server::org_kde_kwin_server_decoration_manager::Mode;
 use xdg_decoration::v1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 
 use crate::output::Output;
@@ -68,6 +71,15 @@ impl Catacomb {
                 },
                 XdgDecorationRequest::SetMode { .. } => (),
                 XdgDecorationRequest::UnsetMode { .. } => (),
+            },
+            None,
+        );
+        kde_decoration::init_kde_decoration_manager(
+            &mut display,
+            |request| match request {
+                KdeDecorationRequest::Setup { manager } => manager.default_mode(Mode::Server),
+                KdeDecorationRequest::RequestMode { decoration, mode, .. } => decoration.mode(mode),
+                _ => (),
             },
             None,
         );

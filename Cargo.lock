@@ -86,6 +86,7 @@ version = "0.1.0"
 dependencies = [
  "smithay",
  "wayland-commons 0.29.1",
+ "wayland-protocols 0.29.1",
 ]
 
 [[package]]
@@ -571,9 +572,9 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "libc"
-version = "0.2.106"
+version = "0.2.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a60553f9a9e039a333b4e9b20573b9e9b9c0bb3a11e201ccc48ef4283456d673"
+checksum = "fbe5e23404da5b4f555ef85ebed98fb4083e55a00c317800bc2a50ede9f3d219"
 
 [[package]]
 name = "libdbus-sys"
@@ -1100,7 +1101,7 @@ checksum = "1ecab6c735a6bb4139c0caafd0cc3635748bbb3acf4550e8138122099251f309"
 [[package]]
 name = "smithay"
 version = "0.3.0"
-source = "git+https://github.com/smithay/smithay#1a1fe01349b93bf3820a4d4b23c8317d3ecb889d"
+source = "git+https://github.com/chrisduerr/smithay?branch=kde_server_decoration#8b1038b271d42b6b2c46e0f7df53db10fabcf0b9"
 dependencies = [
  "appendlist",
  "bitflags",

@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-smithay = { git = "https://github.com/smithay/smithay", features = ["use_system_lib"] }
+smithay = { git = "https://github.com/chrisduerr/smithay", branch = "kde_server_decoration", features = ["use_system_lib"] }
+wayland-protocols = "0.29.1"
 wayland-commons = "0.29.0"
