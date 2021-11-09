@@ -14,6 +14,7 @@ use smithay::wayland::compositor::{
     self, Damage, SubsurfaceCachedState, SurfaceAttributes, SurfaceData, TraversalAction,
 };
 use smithay::wayland::shell::xdg::ToplevelSurface;
+use wayland_protocols::xdg_shell::server::xdg_toplevel::State;
 
 use crate::output::Output;
 use crate::shell::SurfaceBuffer;
@@ -268,6 +269,16 @@ impl Window {
     pub fn reconfigure(&mut self) {
         let result = self.surface.with_pending_state(|state| {
             state.size = Some(self.rectangle.size);
+
+            // Mark window as tiled, using maximized fallback if it is unsupported.
+            if self.surface.version() >= 2 {
+                state.states.set(State::TiledBottom);
+                state.states.set(State::TiledRight);
+                state.states.set(State::TiledLeft);
+                state.states.set(State::TiledTop);
+            } else {
+                state.states.set(State::Maximized);
+            }
         });
 
         if result.is_ok() {
