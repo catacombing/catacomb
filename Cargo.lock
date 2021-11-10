@@ -91,9 +91,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.0.71"
+version = "1.0.72"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79c2681d6594606957bbb8631c4b90a7fcaaa72cdb714743a437b156d6a7eedd"
+checksum = "22a9137b95ea06864e018375b72adfb7db6e6f68cfc8df5a04d00288050485ee"
 
 [[package]]
 name = "cfg-if"
@@ -1101,7 +1101,7 @@ checksum = "1ecab6c735a6bb4139c0caafd0cc3635748bbb3acf4550e8138122099251f309"
 [[package]]
 name = "smithay"
 version = "0.3.0"
-source = "git+https://github.com/chrisduerr/smithay?branch=kde_server_decoration#8b1038b271d42b6b2c46e0f7df53db10fabcf0b9"
+source = "git+https://github.com/chrisduerr/smithay#675142762597a08c920dff40a472e53e992f2983"
 dependencies = [
  "appendlist",
  "bitflags",

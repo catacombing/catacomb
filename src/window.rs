@@ -13,7 +13,7 @@ use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::compositor::{
     self, Damage, SubsurfaceCachedState, SurfaceAttributes, SurfaceData, TraversalAction,
 };
-use smithay::wayland::shell::xdg::ToplevelSurface;
+use smithay::wayland::shell::xdg::{SurfaceCachedState, ToplevelSurface};
 use wayland_protocols::xdg_shell::server::xdg_toplevel::State;
 
 use crate::output::Output;
@@ -94,11 +94,10 @@ impl Windows {
         // Check if the transaction requires updating.
         if Instant::now().duration_since(transaction_start) <= MAX_TRANSACTION_DURATION {
             // Check if all participants are ready.
-            let finished = self
-                .windows
-                .iter()
-                .map(|window| window.borrow())
-                .all(|window| !window.frozen || window.buffer_size == window.rectangle.size);
+            let finished =
+                self.windows.iter().map(|window| window.borrow()).all(|window| {
+                    !window.frozen || window.geometry().size == window.rectangle.size
+                });
 
             // Abort if the transaction is still pending.
             if !finished {
@@ -118,14 +117,15 @@ impl Windows {
         self.transaction_start.get_or_insert_with(Instant::now);
 
         if let Some(mut primary) = self.primary.upgrade().as_ref().map(|p| p.borrow_mut()) {
-            let rectangle = output.primary_rectangle(self.secondary.strong_count() > 0);
+            let secondary_visible = self.secondary.strong_count() > 0;
+            let rectangle = output.primary_rectangle(primary.geometry(), secondary_visible);
             primary.rectangle.loc = rectangle.loc;
             primary.resize(rectangle.size);
             primary.frozen = true;
         }
 
         if let Some(mut secondary) = self.secondary.upgrade().as_ref().map(|s| s.borrow_mut()) {
-            let rectangle = output.secondary_rectangle();
+            let rectangle = output.secondary_rectangle(secondary.geometry());
             secondary.rectangle.loc = rectangle.loc;
             secondary.resize(rectangle.size);
             secondary.frozen = true;
@@ -207,9 +207,6 @@ impl Texture {
 /// Wayland client window state.
 #[derive(Debug)]
 pub struct Window {
-    /// Current buffer dimensions.
-    pub buffer_size: Size<i32, Logical>,
-
     /// Initial size configure status.
     pub initial_configure_sent: bool,
 
@@ -238,7 +235,6 @@ impl Window {
             surface,
             initial_configure_sent: Default::default(),
             buffers_pending: Default::default(),
-            buffer_size: Default::default(),
             rectangle: Default::default(),
             textures: Default::default(),
             visible: Default::default(),
@@ -320,6 +316,20 @@ impl Window {
     /// Check if window is visible on the output.
     pub fn visible(&self) -> bool {
         self.visible
+    }
+
+    /// Geometry of the window's visible bounds.
+    fn geometry(&self) -> Rectangle<i32, Logical> {
+        self.surface
+            .get_surface()
+            .and_then(|surface| {
+                compositor::with_states(&surface, |states| {
+                    states.cached_state.current::<SurfaceCachedState>().geometry
+                })
+                .ok()
+                .flatten()
+            })
+            .unwrap_or_default()
     }
 
     /// Import the buffers of all surfaces into the renderer.
