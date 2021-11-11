@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer, Gles2Texture};
 use smithay::backend::renderer::{self, BufferType, Frame, ImportAll, Transform};
+use smithay::reexports::wayland_protocols::unstable::xdg_decoration;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::compositor::{
@@ -15,6 +16,7 @@ use smithay::wayland::compositor::{
 };
 use smithay::wayland::shell::xdg::{SurfaceCachedState, ToplevelSurface};
 use wayland_protocols::xdg_shell::server::xdg_toplevel::State;
+use xdg_decoration::v1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 
 use crate::output::Output;
 use crate::shell::SurfaceBuffer;
@@ -275,6 +277,9 @@ impl Window {
             } else {
                 state.states.set(State::Maximized);
             }
+
+            // Always use server-side decorations.
+            state.decoration_mode = Some(DecorationMode::ServerSide);
         });
 
         if result.is_ok() {
