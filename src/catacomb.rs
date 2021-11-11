@@ -23,11 +23,13 @@ use crate::window::Windows;
 /// Shared compositor state.
 pub struct Catacomb {
     pub windows: Rc<RefCell<Windows>>,
-    pub display: Rc<RefCell<Display>>,
     pub keyboard: KeyboardHandle,
     pub start_time: Instant,
     pub terminated: bool,
     pub output: Output,
+
+    // NOTE: Must be last field to ensure it's dropped after any global.
+    pub display: Rc<RefCell<Display>>,
 }
 
 impl Catacomb {
