@@ -153,7 +153,7 @@ impl Windows {
         // Copy last buffer state to new windows.
         let window = window.cloned().or_else(|| mem::take(&mut self.secondary).upgrade());
         if let Some((window, primary)) = window.as_ref().zip(self.primary.upgrade()) {
-            window.borrow_mut().textures.append(&mut primary.borrow_mut().textures);
+            window.borrow_mut().texture_cache.append(&mut primary.borrow_mut().texture_cache);
         }
 
         self.primary = window.map(|window| Rc::downgrade(&window)).unwrap_or_default();
@@ -180,12 +180,46 @@ impl Windows {
         if let (Some(window), _, Some(secondary)) | (None, Some(window), Some(secondary)) =
             (window, &self.primary.upgrade(), self.secondary.upgrade())
         {
-            window.borrow_mut().textures.append(&mut secondary.borrow_mut().textures);
+            window.borrow_mut().texture_cache.append(&mut secondary.borrow_mut().texture_cache);
         }
 
         // Replace window and start transaction for updates.
         self.secondary = window.map(Rc::downgrade).unwrap_or_default();
         self.update_dimensions(output);
+    }
+}
+
+/// Cached window textures.
+#[derive(Default, Debug)]
+struct TextureCache {
+    /// Base window position.
+    ///
+    /// Last window origin which the surfaces' location offsets are based on.
+    location: Point<i32, Logical>,
+    textures: Vec<Texture>,
+}
+
+impl TextureCache {
+    /// Reset the texture cache.
+    fn reset(&mut self, location: Point<i32, Logical>) {
+        self.location = location;
+        self.textures.clear();
+    }
+
+    /// Add a new texture.
+    fn push(&mut self, texture: Texture) {
+        self.textures.push(texture);
+    }
+
+    /// Combine two texture caches.
+    fn append(&mut self, other: &mut Self) {
+        // Change the surfaces' location offset to the new base window position.
+        let delta = other.location - self.location;
+        for texture in &mut other.textures {
+            texture.location += delta;
+        }
+
+        self.textures.append(&mut other.textures);
     }
 }
 
@@ -221,8 +255,8 @@ pub struct Window {
     /// Attached surface.
     surface: ToplevelSurface,
 
-    /// Texture cache, for rendering dead windows.
-    textures: Vec<Texture>,
+    /// Texture cache, storing last window state.
+    texture_cache: TextureCache,
 
     /// Window is currently visible on the output.
     visible: bool,
@@ -237,8 +271,8 @@ impl Window {
             surface,
             initial_configure_sent: Default::default(),
             buffers_pending: Default::default(),
+            texture_cache: Default::default(),
             rectangle: Default::default(),
-            textures: Default::default(),
             visible: Default::default(),
             frozen: Default::default(),
         }
@@ -306,7 +340,8 @@ impl Window {
             self.import_buffers(renderer);
         }
 
-        for Texture { texture, location, scale } in &self.textures {
+        for Texture { texture, location, scale } in &self.texture_cache.textures {
+            let location = self.texture_cache.location + *location;
             let _ = frame.render_texture_at(
                 texture,
                 location.to_f64().to_physical(output.scale).to_i32_round(),
@@ -345,12 +380,12 @@ impl Window {
             None => return,
         };
 
-        self.textures.clear();
+        self.texture_cache.reset(self.rectangle.loc);
         self.buffers_pending = false;
 
         compositor::with_surface_tree_upward(
             wl_surface,
-            self.rectangle.loc,
+            Point::from((0, 0)),
             |_, surface_data, location| {
                 let data = match surface_data.data_map.get::<RefCell<SurfaceBuffer>>() {
                     Some(data) => data,
@@ -370,7 +405,7 @@ impl Window {
 
                 // Skip surface if buffer was already imported.
                 if let Some(texture) = &data.texture {
-                    self.textures.push(Texture::new(texture.clone(), location, scale));
+                    self.texture_cache.push(Texture::new(texture.clone(), location, scale));
                     return TraversalAction::DoChildren(location);
                 }
 
@@ -400,7 +435,7 @@ impl Window {
                         // Update and cache the texture.
                         let texture = Rc::new(texture);
                         data.texture = Some(texture.clone());
-                        self.textures.push(Texture::new(texture, location, scale));
+                        self.texture_cache.push(Texture::new(texture, location, scale));
 
                         TraversalAction::DoChildren(location)
                     },
