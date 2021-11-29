@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::{env, io};
 
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
@@ -16,6 +16,7 @@ use smithay::wayland::shell::xdg::decoration;
 use smithay::wayland::{data_device, shm};
 use wayland_protocols::misc::server_decoration::server::org_kde_kwin_server_decoration_manager::Mode;
 
+use crate::input::TouchState;
 use crate::output::Output;
 use crate::shell::Shells;
 use crate::window::Windows;
@@ -24,7 +25,7 @@ use crate::window::Windows;
 pub struct Catacomb {
     pub windows: Rc<RefCell<Windows>>,
     pub keyboard: KeyboardHandle,
-    pub start_time: Instant,
+    pub touch_state: TouchState,
     pub terminated: bool,
     pub output: Output,
 
@@ -90,11 +91,11 @@ impl Catacomb {
 
         Self {
             display: Rc::new(RefCell::new(display)),
-            start_time: Instant::now(),
             windows: shells.windows,
-            terminated: false,
             keyboard,
             output,
+            touch_state: Default::default(),
+            terminated: Default::default(),
         }
     }
 
@@ -112,20 +113,8 @@ impl Catacomb {
         }
     }
 
-    /// Request redraws for all windows.
-    pub fn request_frames(&mut self) {
-        let runtime = self.start_time.elapsed().as_millis() as u32;
-        self.windows.borrow_mut().with_visible(|window| {
-            window.request_frame(runtime);
-        });
-
-        self.display.clone().borrow_mut().flush_clients(self);
-    }
-
-    /// Render all windows.
-    pub fn draw_windows(&self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame) {
-        self.windows.borrow_mut().with_visible(|window| {
-            window.draw(renderer, frame, &self.output);
-        });
+    /// Render the current compositor state.
+    pub fn draw(&self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame) {
+        self.windows.borrow_mut().draw(renderer, frame, &self.output);
     }
 }

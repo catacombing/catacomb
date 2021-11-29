@@ -61,7 +61,7 @@ impl Output {
             (Orientation::Landscape, true) => ((output_size.w + 1) / 2, output_size.h).into(),
             (_, false) => (output_size.w, output_size.h).into(),
         };
-        Rectangle::from_loc_and_size(Self::offset(geometry.size, size) - geometry.loc, size)
+        Rectangle::from_loc_and_size(Self::offset(geometry.size, size), size)
     }
 
     /// Secondary window dimensions.
@@ -70,7 +70,7 @@ impl Output {
         geometry: Rectangle<i32, Logical>,
     ) -> Rectangle<i32, Logical> {
         let output_size = self.size();
-        let mut rectangle = match self.orientation {
+        match self.orientation {
             Orientation::Portrait => {
                 let size = (output_size.w, output_size.h / 2).into();
                 let offset = Self::offset(geometry.size, size);
@@ -81,9 +81,7 @@ impl Output {
                 let offset = Self::offset(geometry.size, size);
                 Rectangle::from_loc_and_size(((output_size.w + 1) / 2 + offset.x, offset.y), size)
             },
-        };
-        rectangle.loc -= geometry.loc;
-        rectangle
+        }
     }
 
     /// Output dimensions.

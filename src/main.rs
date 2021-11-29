@@ -63,14 +63,13 @@ fn main() {
             .render(|renderer, frame| {
                 let _ = frame.clear([1., 0., 1., 1.]);
 
-                catacomb.draw_windows(renderer, frame);
+                catacomb.draw(renderer, frame);
             })
             .expect("buffer swap");
 
-        // Handle window liveliness changes.
+        // Handle window liveliness changes and frame requests.
         catacomb.windows.borrow_mut().refresh(&catacomb.output);
-
-        catacomb.request_frames();
+        display.borrow_mut().flush_clients(&mut catacomb);
 
         // NOTE: The timeout picked here is 5ms to allow for up to 200 FPS. Increasing it would
         // reduce the framerate, while decreasing it would mean that most of the vblank interval is

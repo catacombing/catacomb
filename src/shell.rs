@@ -4,10 +4,12 @@ use std::cell::RefCell;
 use std::ops::Deref;
 use std::rc::Rc;
 
+use smithay::backend::renderer;
 use smithay::backend::renderer::gles2::Gles2Texture;
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Display;
+use smithay::utils::{Logical, Physical, Size};
 use smithay::wayland::compositor::{self, BufferAssignment, SurfaceAttributes, TraversalAction};
 use smithay::wayland::shell::xdg::{self as xdg_shell, XdgRequest};
 use smithay::wayland::SERIAL_COUNTER;
@@ -75,7 +77,7 @@ fn surface_commit(surface: WlSurface, mut data: DispatchData) {
             if let Some(assignment) = attributes.buffer.take() {
                 data.data_map.insert_if_missing(|| RefCell::new(SurfaceBuffer::new()));
                 let buffer = data.data_map.get::<RefCell<SurfaceBuffer>>().unwrap();
-                buffer.borrow_mut().update_buffer(assignment);
+                buffer.borrow_mut().update_buffer(&attributes, assignment);
             }
             TraversalAction::DoChildren(())
         },
@@ -104,20 +106,43 @@ fn surface_commit(surface: WlSurface, mut data: DispatchData) {
 pub struct SurfaceBuffer {
     pub texture: Option<Rc<Gles2Texture>>,
     pub buffer: Option<Buffer>,
+    pub scale: i32,
+
+    dimensions: Size<i32, Physical>,
+}
+
+impl Default for SurfaceBuffer {
+    fn default() -> Self {
+        Self {
+            scale: 1,
+            dimensions: Default::default(),
+            texture: Default::default(),
+            buffer: Default::default(),
+        }
+    }
 }
 
 impl SurfaceBuffer {
     fn new() -> Self {
-        Self { texture: Default::default(), buffer: Default::default() }
+        Self::default()
     }
 
     /// Handle buffer creation/removal.
-    fn update_buffer(&mut self, assignment: BufferAssignment) {
-        self.buffer = match assignment {
-            BufferAssignment::NewBuffer { buffer, .. } => Some(Buffer(buffer)),
-            BufferAssignment::Removed => None,
-        };
-        self.texture = None;
+    fn update_buffer(&mut self, attributes: &SurfaceAttributes, assignment: BufferAssignment) {
+        match assignment {
+            BufferAssignment::NewBuffer { buffer, .. } => {
+                self.dimensions = renderer::buffer_dimensions(&buffer).unwrap_or_default();
+                self.scale = attributes.buffer_scale;
+                self.buffer = Some(Buffer(buffer));
+                self.texture = None;
+            },
+            BufferAssignment::Removed => *self = Self::default(),
+        }
+    }
+
+    /// Surface size.
+    pub fn size(&self) -> Size<i32, Logical> {
+        self.dimensions.to_logical(self.scale)
     }
 }
 
