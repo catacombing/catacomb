@@ -31,11 +31,17 @@ const FG_OVERVIEW_PERCENTAGE: f64 = 0.75;
 /// Percentage of remaining space reserved for background windows in the application overview.
 const BG_OVERVIEW_PERCENTAGE: f64 = 0.5;
 
+/// Animation speed for the return from overdrag, lower means faster.
+const OVERDRAG_ANIMATION_SPEED: f64 = 25.;
+
+/// Maximum amount of overdrag before inputs are ignored.
+const OVERDRAG_LIMIT: f64 = 3.;
+
 /// Compositor window arrangements.
 #[derive(PartialEq, Debug)]
-pub enum View {
+enum View {
     /// List of all open windows.
-    Overview(f64),
+    Overview { offset: f64, last_overdrag_step: Option<Instant> },
     /// Currently active windows.
     Workspace,
 }
@@ -49,14 +55,12 @@ impl Default for View {
 /// Container tracking all known clients.
 #[derive(Debug)]
 pub struct Windows {
-    pub view: View,
-
     windows: Vec<Rc<RefCell<Window>>>,
     primary: Weak<RefCell<Window>>,
     secondary: Weak<RefCell<Window>>,
-
     transaction_start: Option<Instant>,
     start_time: Instant,
+    view: View,
 }
 
 impl Default for Windows {
@@ -110,18 +114,34 @@ impl Windows {
     }
 
     /// Draw the current window state.
-    pub fn draw(&mut self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame, output: &Output) {
-        let offset = match &mut self.view {
+    pub fn draw(
+        &mut self,
+        renderer: &mut Gles2Renderer,
+        frame: &mut Gles2Frame,
+        output: &Output,
+    ) {
+        let (offset, last_overdrag_step) = match &mut self.view {
             View::Workspace => {
                 self.with_visible(|window| window.draw(renderer, frame, output, 1., None));
                 return;
             },
-            View::Overview(offset) => offset,
+            View::Overview { offset, last_overdrag_step } => (offset, last_overdrag_step),
         };
 
-        // Clamp the offset based on visible windows.
+        // Handle bounce-back animation from overdrag.
         let window_count = self.windows.len() as i32;
-        *offset = offset.min(0.).max(-window_count as f64 + 1.);
+        let min_offset = -window_count as f64 + 1.;
+        if let Some(last_overdrag_step) = last_overdrag_step {
+            let delta = last_overdrag_step.elapsed().as_millis() as f64 / OVERDRAG_ANIMATION_SPEED;
+            if *offset > 0. {
+                *offset -= delta.min(*offset);
+            } else if *offset < min_offset {
+                *offset = (*offset + delta).min(min_offset);
+            }
+            *last_overdrag_step = Instant::now();
+        }
+
+        *offset = offset.clamp(min_offset - OVERDRAG_LIMIT, OVERDRAG_LIMIT);
 
         // Create an iterator over all windows in the overview.
         //
@@ -130,8 +150,8 @@ impl Windows {
         // windows are rendered below the ones toward the center.
         let min_inc = offset.round() as i32;
         let max_exc = window_count + offset.round() as i32;
-        let neg_iter = (min_inc..0).into_iter().zip(0..);
-        let pos_iter = (0..max_exc).into_iter().zip(min_inc.abs()..window_count).rev();
+        let neg_iter = (min_inc..0).zip(0..window_count);
+        let pos_iter = (min_inc.max(0)..max_exc).zip(-min_inc.min(0)..window_count).rev();
 
         // Maximum window size. Bigger windows will be truncated.
         let output_size = output.size();
@@ -151,7 +171,7 @@ impl Windows {
                 BG_OVERVIEW_PERCENTAGE,
                 output_size.w,
                 max_size.w,
-                position as f64 + offset.fract().abs().round() + offset.fract(),
+                position as f64 - offset.fract().round() + offset.fract(),
             );
             let y_position = (output_size.h - max_size.h) / 2;
             let bounds = Rectangle::from_loc_and_size((x_position, y_position), max_size);
@@ -228,6 +248,29 @@ impl Windows {
             secondary.rectangle.loc = rectangle.loc;
             secondary.resize(rectangle.size);
             secondary.frozen = true;
+        }
+    }
+
+    /// Toggle the active view.
+    pub fn toggle_view(&mut self) {
+        self.view = match self.view {
+            View::Workspace => View::Overview { last_overdrag_step: None, offset: 0. },
+            View::Overview { .. } => View::Workspace,
+        };
+    }
+
+    /// Handle touch drag.
+    pub fn on_drag(&mut self, delta: f64) {
+        if let View::Overview { offset, last_overdrag_step } = &mut self.view {
+            *last_overdrag_step = None;
+            *offset += delta;
+        }
+    }
+
+    /// Handle touch release.
+    pub fn on_release(&mut self) {
+        if let View::Overview { last_overdrag_step, .. } = &mut self.view {
+            *last_overdrag_step = Some(Instant::now());
         }
     }
 

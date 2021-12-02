@@ -11,10 +11,9 @@ use smithay::wayland::SERIAL_COUNTER;
 
 use crate::catacomb::Catacomb;
 use crate::output::Orientation;
-use crate::window::View;
 
 /// Mouse pointer sensitivity in the application overview.
-const POINTER_OVERVIEW_SENSITIVITY: f64 = 250.;
+const MOUSE_OVERVIEW_SENSITIVITY: f64 = 250.;
 
 /// Touch input state.
 #[derive(Default)]
@@ -51,6 +50,7 @@ impl Catacomb {
                     self.touch_state.touching = event.state() == ButtonState::Pressed;
                     if !self.touch_state.touching {
                         self.touch_state.position = None;
+                        self.windows.borrow_mut().on_release();
                     }
                 }
             },
@@ -59,9 +59,7 @@ impl Catacomb {
                 let old_position = self.touch_state.position.replace(new_position);
                 let delta = old_position.map(|pos| new_position - pos).unwrap_or_default();
 
-                if let View::Overview(offset) = &mut self.windows.borrow_mut().view {
-                    *offset += delta.x / POINTER_OVERVIEW_SENSITIVITY;
-                }
+                self.windows.borrow_mut().on_drag(delta.x / MOUSE_OVERVIEW_SENSITIVITY);
             },
             _ => (),
         };
@@ -77,10 +75,7 @@ impl Catacomb {
         self.keyboard.input(keycode, state, serial, time, |modifiers, keysym| {
             if modifiers.ctrl && keysym.modified_sym() == keysyms::KEY_t {
                 if state == KeyState::Released {
-                    match &mut self.windows.borrow_mut().view {
-                        view @ View::Overview(_) => *view = View::Workspace,
-                        view @ View::Workspace => *view = View::Overview(0.),
-                    }
+                    self.windows.borrow_mut().toggle_view();
                 }
                 FilterResult::Intercept(())
             } else {
