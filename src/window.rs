@@ -198,7 +198,7 @@ impl Windows {
 
         // Request frames for visible windows.
         if self.view == View::Workspace {
-            let runtime = self.start_time.elapsed().as_millis() as u32;
+            let runtime = self.runtime();
             self.with_visible(|window| window.request_frame(runtime));
         }
     }
@@ -272,6 +272,11 @@ impl Windows {
         if let View::Overview { last_overdrag_step, .. } = &mut self.view {
             *last_overdrag_step = Some(Instant::now());
         }
+    }
+
+    /// Application runtime.
+    pub fn runtime(&self) -> u32 {
+        self.start_time.elapsed().as_millis() as u32
     }
 
     /// Change the primary window.
@@ -529,6 +534,9 @@ impl Window {
     pub fn leave(&mut self, output: &Output) {
         self.with_surfaces(|surface, _| output.leave(surface));
         self.visible = false;
+
+        // Resize to fullscreen for app overview.
+        self.resize(output.size());
     }
 
     /// Check if window is visible on the output.

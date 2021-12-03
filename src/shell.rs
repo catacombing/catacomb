@@ -44,7 +44,14 @@ impl Shells {
 
                     xdg_windows.borrow_mut().add(surface, &catacomb.output);
                 },
-                XdgRequest::NewClient { .. } | XdgRequest::AckConfigure { .. } => (),
+                XdgRequest::AckConfigure { surface, .. } => {
+                    // Request new frames after each resize.
+                    let runtime = xdg_windows.borrow().runtime();
+                    if let Some(mut window) = xdg_windows.borrow_mut().find(&surface) {
+                        window.request_frame(runtime);
+                    }
+                },
+                XdgRequest::NewClient { .. } => (),
                 _ => eprintln!("UNHANDLED EVENT: {:?}", event),
             },
             None,
