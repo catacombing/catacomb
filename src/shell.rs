@@ -103,10 +103,6 @@ fn surface_commit(surface: WlSurface, mut data: DispatchData) {
     if window.visible() {
         catacomb.output.enter(&surface);
     }
-
-    // Handle window geometry changes.
-    drop(window);
-    windows.update_dimensions(&catacomb.output);
 }
 
 /// Surface buffer cache.

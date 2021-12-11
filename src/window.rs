@@ -38,7 +38,7 @@ const OVERDRAG_ANIMATION_SPEED: f64 = 25.;
 const OVERDRAG_LIMIT: f64 = 3.;
 
 /// Compositor window arrangements.
-#[derive(PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 enum View {
     /// List of all open windows.
     Overview { offset: f64, last_overdrag_step: Option<Instant> },
@@ -53,12 +53,12 @@ impl Default for View {
 }
 
 /// Container tracking all known clients.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Windows {
     windows: Vec<Rc<RefCell<Window>>>,
     primary: Weak<RefCell<Window>>,
     secondary: Weak<RefCell<Window>>,
-    transaction_start: Option<Instant>,
+    transaction: Option<Transaction>,
     start_time: Instant,
     view: View,
 }
@@ -67,7 +67,7 @@ impl Default for Windows {
     fn default() -> Self {
         Self {
             start_time: Instant::now(),
-            transaction_start: Default::default(),
+            transaction: Default::default(),
             secondary: Default::default(),
             windows: Default::default(),
             primary: Default::default(),
@@ -85,10 +85,10 @@ impl Windows {
     pub fn add(&mut self, surface: ToplevelSurface, output: &Output) {
         let window = Rc::new(RefCell::new(Window::new(surface)));
         if self.primary.strong_count() > 0 && self.secondary.strong_count() == 0 {
-            self.set_secondary(output, &window);
+            self.set_secondary(&window, output);
         } else {
-            self.set_primary(output, &window);
-            self.set_secondary(output, None);
+            self.set_primary(&window, output);
+            self.set_secondary(None, output);
         }
         self.windows.push(window);
     }
@@ -114,12 +114,7 @@ impl Windows {
     }
 
     /// Draw the current window state.
-    pub fn draw(
-        &mut self,
-        renderer: &mut Gles2Renderer,
-        frame: &mut Gles2Frame,
-        output: &Output,
-    ) {
+    pub fn draw(&mut self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame, output: &Output) {
         let (offset, last_overdrag_step) = match &mut self.view {
             View::Workspace => {
                 self.with_visible(|window| window.draw(renderer, frame, output, 1., None));
@@ -185,38 +180,45 @@ impl Windows {
     /// This function will remove all dead windows and resize remaining windows accordingly.
     /// Subsequently new frames are requested from all visible windows.
     pub fn refresh(&mut self, output: &Output) {
-        // Remove dead visible windows.
-        if self.primary.upgrade().map_or(false, |primary| !primary.borrow().surface.alive()) {
-            self.set_primary(output, None);
-        }
-        if self.secondary.upgrade().map_or(false, |secondary| !secondary.borrow().surface.alive()) {
-            self.set_secondary(output, None);
-        }
-
-        // Remove dead windows.
-        self.windows.retain(|window| window.borrow().surface.alive());
-
         // Request frames for visible windows.
         if self.view == View::Workspace {
             let runtime = self.runtime();
             self.with_visible(|window| window.request_frame(runtime));
         }
+
+        // Start transaction if any window died.
+        if self.windows.iter().all(|window| window.borrow().surface.alive()) {
+            return;
+        }
+        let transaction = self.start_transaction();
+
+        // Remove dead primary/secondary windows.
+        if transaction.secondary.upgrade().map_or(false, |window| !window.borrow().surface.alive())
+        {
+            transaction.secondary = Weak::new();
+        }
+        if transaction.primary.upgrade().map_or(false, |window| !window.borrow().surface.alive()) {
+            transaction.primary = mem::take(&mut transaction.secondary);
+        }
+
+        transaction.update_dimensions(output);
     }
 
     /// Attempt to execute pending transactions.
     pub fn update_transaction(&mut self) {
-        let transaction_start = match self.transaction_start {
+        let transaction = match &mut self.transaction {
             Some(start) => start,
             None => return,
         };
 
         // Check if the transaction requires updating.
-        if Instant::now().duration_since(transaction_start) <= MAX_TRANSACTION_DURATION {
+        if Instant::now().duration_since(transaction.start) <= MAX_TRANSACTION_DURATION {
             // Check if all participants are ready.
-            let finished =
-                self.windows.iter().map(|window| window.borrow()).all(|window| {
-                    !window.frozen || window.geometry().size == window.rectangle.size
-                });
+            let finished = self.windows.iter().map(|window| window.borrow()).all(|window| {
+                window.transaction.as_ref().map_or(true, |transaction| {
+                    window.geometry().size == transaction.rectangle.size
+                })
+            });
 
             // Abort if the transaction is still pending.
             if !finished {
@@ -225,30 +227,17 @@ impl Windows {
         }
 
         // Execute the transaction.
-        for window in &self.windows {
-            window.borrow_mut().frozen = false;
-        }
-        self.transaction_start = None;
-    }
-
-    /// Update window dimensions.
-    pub fn update_dimensions(&mut self, output: &Output) {
-        self.transaction_start.get_or_insert_with(Instant::now);
-
-        if let Some(mut primary) = self.primary.upgrade().as_ref().map(|p| p.borrow_mut()) {
-            let secondary_visible = self.secondary.strong_count() > 0;
-            let rectangle = output.primary_rectangle(primary.geometry(), secondary_visible);
-            primary.rectangle.loc = rectangle.loc;
-            primary.resize(rectangle.size);
-            primary.frozen = true;
+        for i in (0..self.windows.len()).rev() {
+            if self.windows[i].borrow().surface.alive() {
+                self.windows[i].borrow_mut().apply_transaction();
+            } else {
+                self.windows.swap_remove(i);
+            }
         }
 
-        if let Some(mut secondary) = self.secondary.upgrade().as_ref().map(|s| s.borrow_mut()) {
-            let rectangle = output.secondary_rectangle(secondary.geometry());
-            secondary.rectangle.loc = rectangle.loc;
-            secondary.resize(rectangle.size);
-            secondary.frozen = true;
-        }
+        let transaction = self.transaction.take().unwrap();
+        self.secondary = transaction.secondary;
+        self.primary = transaction.primary;
     }
 
     /// Toggle the active view.
@@ -279,75 +268,113 @@ impl Windows {
         self.start_time.elapsed().as_millis() as u32
     }
 
+    /// Create a new transaction, or access the active one.
+    pub fn start_transaction(&mut self) -> &mut Transaction {
+        self.transaction.get_or_insert(Transaction::new(self))
+    }
+
     /// Change the primary window.
     fn set_primary<'a>(
         &mut self,
-        output: &Output,
         window: impl Into<Option<&'a Rc<RefCell<Window>>>>,
+        output: &Output,
     ) {
-        let window = window.into();
+        let transaction = self.start_transaction();
 
         // Update output's visible windows.
-        if let Some(primary) = self.primary.upgrade() {
-            primary.borrow_mut().leave(output);
+        let window = window.into();
+        if let Some(primary) = transaction.primary.upgrade() {
+            primary.borrow_mut().leave(transaction, output);
         }
         if let Some(window) = &window {
             window.borrow_mut().enter(output);
         }
 
-        // Copy last buffer state to new windows.
-        let window = window.cloned().or_else(|| mem::take(&mut self.secondary).upgrade());
-        if let Some((window, primary)) = window.as_ref().zip(self.primary.upgrade()) {
-            window.borrow_mut().texture_cache.append(&primary.borrow_mut().texture_cache);
-        }
-
-        self.primary = window.map(|window| Rc::downgrade(&window)).unwrap_or_default();
-        self.update_dimensions(output);
+        // Set primary and recompute window dimensions.
+        transaction.primary =
+            window.map(Rc::downgrade).unwrap_or_else(|| mem::take(&mut transaction.secondary));
+        transaction.update_dimensions(output);
     }
 
     /// Change the secondary window.
     fn set_secondary<'a>(
         &mut self,
-        output: &Output,
         window: impl Into<Option<&'a Rc<RefCell<Window>>>>,
+        output: &Output,
     ) {
-        let window = window.into();
+        let transaction = self.start_transaction();
 
         // Update output's visible windows.
-        if let Some(secondary) = self.secondary.upgrade() {
-            secondary.borrow_mut().leave(output);
+        let window = window.into();
+        if let Some(secondary) = transaction.secondary.upgrade() {
+            secondary.borrow_mut().leave(transaction, output);
         }
         if let Some(window) = &window {
             window.borrow_mut().enter(output);
         }
 
-        // Copy last buffer state to new windows.
-        if let (Some(window), _, Some(secondary)) | (None, Some(window), Some(secondary)) =
-            (window, &self.primary.upgrade(), self.secondary.upgrade())
-        {
-            window.borrow_mut().texture_cache.append(&secondary.borrow_mut().texture_cache);
+        // Set primary and recompute window dimensions.
+        transaction.secondary = window.map(Rc::downgrade).unwrap_or_default();
+        transaction.update_dimensions(output);
+    }
+}
+
+/// Atomic changes to [`Windows`].
+#[derive(Clone, Debug)]
+pub struct Transaction {
+    primary: Weak<RefCell<Window>>,
+    secondary: Weak<RefCell<Window>>,
+    start: Instant,
+}
+
+impl Transaction {
+    fn new(current_state: &Windows) -> Self {
+        Self {
+            primary: current_state.primary.clone(),
+            secondary: current_state.secondary.clone(),
+            start: Instant::now(),
+        }
+    }
+
+    /// Update window dimensions.
+    pub fn update_dimensions(&mut self, output: &Output) {
+        if let Some(mut primary) = self.primary.upgrade().as_ref().map(|s| s.borrow_mut()) {
+            let secondary_visible = self.secondary.strong_count() > 0;
+            let rectangle = output.primary_rectangle(secondary_visible);
+            primary.update_dimensions(self, rectangle);
         }
 
-        // Replace window and start transaction for updates.
-        self.secondary = window.map(Rc::downgrade).unwrap_or_default();
-        self.update_dimensions(output);
+        if let Some(mut secondary) = self.secondary.upgrade().as_ref().map(|s| s.borrow_mut()) {
+            let rectangle = output.secondary_rectangle();
+            secondary.update_dimensions(self, rectangle);
+        }
+    }
+}
+
+/// Atomic changes to [`Window`].
+#[derive(Debug)]
+struct WindowTransaction {
+    rectangle: Rectangle<i32, Logical>,
+}
+
+impl WindowTransaction {
+    fn new(current_state: &Window) -> Self {
+        Self { rectangle: current_state.rectangle }
     }
 }
 
 /// Cached window textures.
 #[derive(Default, Debug)]
 struct TextureCache {
-    /// Base window position.
-    ///
-    /// Last window origin which the surfaces' location offsets are based on.
-    location: Point<i32, Logical>,
+    /// Geometry of all textures combined.
+    geometry: Size<i32, Logical>,
     textures: Vec<Texture>,
 }
 
 impl TextureCache {
     /// Reset the texture cache.
-    fn reset(&mut self, location: Point<i32, Logical>) {
-        self.location = location;
+    fn reset(&mut self, geometry: Size<i32, Logical>) {
+        self.geometry = geometry;
         self.textures.clear();
     }
 
@@ -355,69 +382,6 @@ impl TextureCache {
     fn push(&mut self, texture: Texture) {
         self.textures.push(texture);
     }
-
-    /// Combine two texture caches.
-    fn append(&mut self, other: &Self) {
-        self.textures.reserve_exact(other.textures.len());
-        let delta = other.location - self.location;
-        for mut texture in other.textures.iter().cloned() {
-            // Change the surfaces' location offset to the new base window position.
-            texture.location += delta;
-
-            self.textures.push(texture);
-        }
-    }
-
-    /// Render the texture at the specified location.
-    ///
-    /// Using the `window_bounds` and `window_scale` parameters, it is possible to scale the
-    /// surface and truncate it to be within the specified window bounds. The scaling will always
-    /// take part **before** the truncation.
-    fn draw_at(
-        &self,
-        frame: &mut Gles2Frame,
-        output: &Output,
-        window_bounds: Rectangle<i32, Logical>,
-        window_scale: f64,
-    ) {
-        let scaled_window_bounds = scale_size(window_bounds.size, 1. / window_scale);
-        for Texture { texture, dimensions, location, scale } in &self.textures {
-            // Skip textures completely outside of the window bounds.
-            if location.x >= scaled_window_bounds.w || location.y >= scaled_window_bounds.h {
-                continue;
-            }
-
-            // Truncate source size based on window bounds.
-            let surface_bounds = scaled_window_bounds - *location;
-            let src_size = Size::from((
-                cmp::min(dimensions.w, surface_bounds.w),
-                cmp::min(dimensions.h, surface_bounds.h),
-            ));
-            let src = Rectangle::from_loc_and_size((0, 0), src_size);
-
-            // Scale output size based on window scale.
-            let location = window_bounds.loc + scale_location(*location, window_scale);
-            let dest = Rectangle::from_loc_and_size(location, scale_size(src_size, window_scale));
-
-            let _ = frame.render_texture_from_to(
-                texture,
-                src.to_buffer(*scale),
-                dest.to_f64().to_physical(output.scale),
-                Transform::Normal,
-                1.,
-            );
-        }
-    }
-}
-
-/// Scale a size by a scaling factor.
-fn scale_size(size: Size<i32, Logical>, scale: f64) -> Size<i32, Logical> {
-    Size::from((size.w as f64 * scale, size.h as f64 * scale)).to_i32_round()
-}
-
-/// Scale a location by a scaling factor.
-fn scale_location(location: Point<i32, Logical>, scale: f64) -> Point<i32, Logical> {
-    Point::from((location.x as f64 * scale, location.y as f64 * scale)).to_i32_round()
 }
 
 /// Cached texture.
@@ -464,8 +428,8 @@ pub struct Window {
     /// Window is currently visible on the output.
     visible: bool,
 
-    /// Freeze window updates to allow atomic upgrades.
-    frozen: bool,
+    /// Transaction for atomic upgrades.
+    transaction: Option<WindowTransaction>,
 }
 
 impl Window {
@@ -475,10 +439,15 @@ impl Window {
             initial_configure_sent: Default::default(),
             buffers_pending: Default::default(),
             texture_cache: Default::default(),
+            transaction: Default::default(),
             rectangle: Default::default(),
             visible: Default::default(),
-            frozen: Default::default(),
         }
+    }
+
+    /// Check if window is visible on the output.
+    pub fn visible(&self) -> bool {
+        self.visible
     }
 
     /// Send a frame request to the window.
@@ -491,19 +460,13 @@ impl Window {
         });
     }
 
-    /// Change the window dimensions.
-    pub fn resize<S: Into<Size<i32, Logical>>>(&mut self, size: S) {
-        // Prevent redundant configure events.
-        let old_size = mem::replace(&mut self.rectangle.size, size.into());
-        if self.initial_configure_sent && self.rectangle.size != old_size {
-            self.reconfigure();
-        }
-    }
-
     /// Send a configure for the latest window properties.
     pub fn reconfigure(&mut self) {
         let result = self.surface.with_pending_state(|state| {
-            state.size = Some(self.rectangle.size);
+            state.size = Some(match &self.transaction {
+                Some(transaction) => transaction.rectangle.size,
+                None => self.rectangle.size,
+            });
 
             // Mark window as tiled, using maximized fallback if tiling is unsupported.
             if self.surface.version() >= 2 {
@@ -524,24 +487,31 @@ impl Window {
         }
     }
 
+    /// Change the window dimensions.
+    fn update_dimensions(&mut self, transaction: &Transaction, rectangle: Rectangle<i32, Logical>) {
+        // Prevent redundant configure events.
+        let transaction = self.start_transaction(transaction);
+        let old_ractangle = mem::replace(&mut transaction.rectangle, rectangle);
+        if transaction.rectangle != old_ractangle && self.initial_configure_sent {
+            self.reconfigure();
+        }
+    }
+
     /// Send output enter event to this window's surfaces.
-    pub fn enter(&mut self, output: &Output) {
+    fn enter(&mut self, output: &Output) {
         self.with_surfaces(|surface, _| output.enter(surface));
         self.visible = true;
     }
 
     /// Send output leave event to this window's surfaces.
-    pub fn leave(&mut self, output: &Output) {
+    fn leave(&mut self, transaction: &Transaction, output: &Output) {
         self.with_surfaces(|surface, _| output.leave(surface));
         self.visible = false;
 
         // Resize to fullscreen for app overview.
-        self.resize(output.size());
-    }
-
-    /// Check if window is visible on the output.
-    pub fn visible(&self) -> bool {
-        self.visible
+        let mut rectangle = self.start_transaction(transaction).rectangle;
+        rectangle.size = output.size();
+        self.update_dimensions(transaction, rectangle);
     }
 
     /// Render this window's buffers.
@@ -556,14 +526,59 @@ impl Window {
         bounds: Option<Rectangle<i32, Logical>>,
     ) {
         // Skip updating windows during transactions.
-        if !self.frozen && self.buffers_pending {
+        if self.transaction.is_none() && self.buffers_pending {
             self.import_buffers(renderer);
         }
 
         let bounds = bounds.unwrap_or_else(|| {
-            Rectangle::from_loc_and_size(self.texture_cache.location, output.size())
+            // Center window inside its space.
+            let x_offset = ((self.rectangle.size.w - self.texture_cache.geometry.w) / 2).max(0);
+            let y_offset = ((self.rectangle.size.h - self.texture_cache.geometry.h) / 2).max(0);
+            let loc = self.rectangle.loc + Size::from((x_offset, y_offset));
+            Rectangle::from_loc_and_size(loc, output.size())
         });
-        self.texture_cache.draw_at(frame, output, bounds, scale);
+        self.draw_at(frame, output, bounds, scale);
+    }
+
+    /// Render the window at the specified location.
+    ///
+    /// Using the `window_bounds` and `window_scale` parameters, it is possible to scale the
+    /// surface and truncate it to be within the specified window bounds. The scaling will always
+    /// take part **before** the truncation.
+    fn draw_at(
+        &self,
+        frame: &mut Gles2Frame,
+        output: &Output,
+        window_bounds: Rectangle<i32, Logical>,
+        window_scale: f64,
+    ) {
+        let scaled_window_bounds = scale_size(window_bounds.size, 1. / window_scale);
+        for Texture { texture, dimensions, location, scale } in &self.texture_cache.textures {
+            // Skip textures completely outside of the window bounds.
+            if location.x >= scaled_window_bounds.w || location.y >= scaled_window_bounds.h {
+                continue;
+            }
+
+            // Truncate source size based on window bounds.
+            let surface_bounds = scaled_window_bounds - *location;
+            let src_size = Size::from((
+                cmp::min(dimensions.w, surface_bounds.w),
+                cmp::min(dimensions.h, surface_bounds.h),
+            ));
+            let src = Rectangle::from_loc_and_size((0, 0), src_size);
+
+            // Scale output size based on window scale.
+            let location = window_bounds.loc + scale_location(*location, window_scale);
+            let dest = Rectangle::from_loc_and_size(location, scale_size(src_size, window_scale));
+
+            let _ = frame.render_texture_from_to(
+                texture,
+                src.to_buffer(*scale),
+                dest.to_f64().to_physical(output.scale),
+                Transform::Normal,
+                1.,
+            );
+        }
     }
 
     /// Import the buffers of all surfaces into the renderer.
@@ -574,7 +589,8 @@ impl Window {
             None => return,
         };
 
-        self.texture_cache.reset(self.rectangle.loc);
+        let geometry = self.geometry();
+        self.texture_cache.reset(geometry.size);
         self.buffers_pending = false;
 
         compositor::with_surface_tree_upward(
@@ -676,6 +692,34 @@ impl Window {
             |_, _, _| true,
         );
     }
+
+    /// Create a new transaction, or access the active one.
+    ///
+    /// Takes in a transaction as parameter to ensure the window will not get stuck in the frozen
+    /// state indefinitely.
+    fn start_transaction(&mut self, _transaction: &Transaction) -> &mut WindowTransaction {
+        self.transaction.get_or_insert(WindowTransaction::new(self))
+    }
+
+    /// Apply all staged changes if there is a transaction.
+    fn apply_transaction(&mut self) {
+        let transaction = match self.transaction.take() {
+            Some(transaction) => transaction,
+            None => return,
+        };
+
+        self.rectangle = transaction.rectangle;
+    }
+}
+
+/// Scale a size by a scaling factor.
+fn scale_size(size: Size<i32, Logical>, scale: f64) -> Size<i32, Logical> {
+    Size::from((size.w as f64 * scale, size.h as f64 * scale)).to_i32_round()
+}
+
+/// Scale a location by a scaling factor.
+fn scale_location(location: Point<i32, Logical>, scale: f64) -> Point<i32, Logical> {
+    Point::from((location.x as f64 * scale, location.y as f64 * scale)).to_i32_round()
 }
 
 /// Calculate the X coordinate of a window in the application overview based on its position.
