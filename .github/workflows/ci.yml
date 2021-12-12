@@ -1,0 +1,32 @@
+name: CI
+
+on: [push, pull_request]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Dependencies
+        run: |
+          sudo apt-get install libudev-dev libdbus-1-dev libsystemd-dev libxkbcommon-dev libinput-dev
+      - uses: actions/checkout@v2
+      - name: Stable
+        run: cargo test
+      - name: Oldstable
+        run: |
+          oldstable=$(cat Cargo.toml | grep "rust-version" | sed 's/.*"\(.*\)".*/\1/')
+          rustup toolchain install --profile minimal $oldstable
+          rustup default $oldstable
+          cargo test
+      - name: Clippy
+        run: |
+          rustup component add clippy
+          cargo clippy --all-targets
+      - name: Rustfmt
+        run: |
+          rustup toolchain install nightly -c rustfmt
+          cargo +nightly fmt -- --check

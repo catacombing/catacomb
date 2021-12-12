@@ -2,6 +2,7 @@
 name = "catacomb"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.56.0"
 
 [dependencies]
 smithay = { git = "https://github.com/chrisduerr/smithay", features = ["use_system_lib"] }
