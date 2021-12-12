@@ -204,6 +204,11 @@ impl Windows {
         transaction.update_dimensions(output);
     }
 
+    /// Create a new transaction, or access the active one.
+    pub fn start_transaction(&mut self) -> &mut Transaction {
+        self.transaction.get_or_insert(Transaction::new(self))
+    }
+
     /// Attempt to execute pending transactions.
     pub fn update_transaction(&mut self) {
         let transaction = match &mut self.transaction {
@@ -215,9 +220,10 @@ impl Windows {
         if Instant::now().duration_since(transaction.start) <= MAX_TRANSACTION_DURATION {
             // Check if all participants are ready.
             let finished = self.windows.iter().map(|window| window.borrow()).all(|window| {
-                window.transaction.as_ref().map_or(true, |transaction| {
-                    window.geometry().size == transaction.rectangle.size
-                })
+                window
+                    .transaction
+                    .as_ref()
+                    .map_or(true, |transaction| window.acked_size == transaction.rectangle.size)
             });
 
             // Abort if the transaction is still pending.
@@ -266,11 +272,6 @@ impl Windows {
     /// Application runtime.
     pub fn runtime(&self) -> u32 {
         self.start_time.elapsed().as_millis() as u32
-    }
-
-    /// Create a new transaction, or access the active one.
-    pub fn start_transaction(&mut self) -> &mut Transaction {
-        self.transaction.get_or_insert(Transaction::new(self))
     }
 
     /// Change the primary window.
@@ -416,6 +417,9 @@ pub struct Window {
     /// Buffers pending to be imported.
     pub buffers_pending: bool,
 
+    /// Last configure size acked by the client.
+    pub acked_size: Size<i32, Logical>,
+
     /// Desired window dimensions.
     rectangle: Rectangle<i32, Logical>,
 
@@ -440,6 +444,7 @@ impl Window {
             buffers_pending: Default::default(),
             texture_cache: Default::default(),
             transaction: Default::default(),
+            acked_size: Default::default(),
             rectangle: Default::default(),
             visible: Default::default(),
         }
@@ -595,7 +600,7 @@ impl Window {
 
         compositor::with_surface_tree_upward(
             wl_surface,
-            Point::from((0, 0)) - self.geometry().loc,
+            Point::from((0, 0)) - geometry.loc,
             |_, surface_data, location| {
                 let data = match surface_data.data_map.get::<RefCell<SurfaceBuffer>>() {
                     Some(data) => data,

@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 use std::ops::Deref;
 use std::rc::Rc;
+use std::sync::Mutex;
 
 use smithay::backend::renderer;
 use smithay::backend::renderer::gles2::Gles2Texture;
@@ -11,7 +12,9 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Display;
 use smithay::utils::{Logical, Physical, Size};
 use smithay::wayland::compositor::{self, BufferAssignment, SurfaceAttributes, TraversalAction};
-use smithay::wayland::shell::xdg::{self as xdg_shell, XdgRequest};
+use smithay::wayland::shell::xdg::{
+    self as xdg_shell, XdgRequest, XdgToplevelSurfaceRoleAttributes,
+};
 use smithay::wayland::SERIAL_COUNTER;
 use wayland_commons::filter::DispatchData;
 
@@ -74,6 +77,18 @@ fn surface_commit(surface: WlSurface, mut data: DispatchData) {
         Some(window) => window,
         None => return,
     };
+
+    // Cancel transactions on the commit after the configure was acked.
+    let _ = compositor::with_states(&surface, |states| {
+        let attributes = states
+            .data_map
+            .get::<Mutex<XdgToplevelSurfaceRoleAttributes>>()
+            .and_then(|attributes| attributes.lock().ok());
+
+        if let Some(attributes) = attributes {
+            window.acked_size = attributes.current.size.unwrap_or_default();
+        }
+    });
 
     // Handle surface buffer changes.
     compositor::with_surface_tree_upward(
