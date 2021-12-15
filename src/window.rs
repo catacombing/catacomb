@@ -1,4 +1,4 @@
-//! Wayland client.
+//! Window management.
 
 use std::borrow::Cow;
 use std::cell::{RefCell, RefMut};
@@ -244,14 +244,46 @@ impl Windows {
         let transaction = self.transaction.take().unwrap();
         self.secondary = transaction.secondary;
         self.primary = transaction.primary;
+        self.view = transaction.view;
     }
 
     /// Toggle the active view.
     pub fn toggle_view(&mut self) {
-        self.view = match self.view {
+        let transaction = self.start_transaction();
+        transaction.view = match transaction.view {
             View::Workspace => View::Overview { last_overdrag_step: None, offset: 0. },
             View::Overview { .. } => View::Workspace,
         };
+    }
+
+    /// Hand quick touch input.
+    pub fn on_tap(&mut self, output: &Output, point: Point<f64, Logical>) {
+        let offset = match self.view {
+            View::Overview { offset, .. } => offset,
+            View::Workspace => return,
+        };
+
+        // Calculate focused overview window bounds.
+        let output_size = output.size();
+        let window_size = scale_size(output_size, FG_OVERVIEW_PERCENTAGE);
+        let index = (offset.min(0.).abs().round() as usize).min(self.windows.len() - 1);
+        let x = overview_x_position(
+            FG_OVERVIEW_PERCENTAGE,
+            BG_OVERVIEW_PERCENTAGE,
+            output_size.w,
+            window_size.w,
+            index as f64 + offset,
+        );
+        let y = (output_size.h - window_size.h) / 2;
+        let window_bounds = Rectangle::from_loc_and_size((x, y), window_size);
+
+        // Open the window as sole primary.
+        if window_bounds.contains(point.to_i32_round()) {
+            let window = self.windows[index].clone();
+            self.set_primary(&window, output);
+            self.set_secondary(None, output);
+            self.toggle_view();
+        }
     }
 
     /// Handle touch drag.
@@ -263,7 +295,7 @@ impl Windows {
     }
 
     /// Handle touch release.
-    pub fn on_release(&mut self) {
+    pub fn on_drag_release(&mut self) {
         if let View::Overview { last_overdrag_step, .. } = &mut self.view {
             *last_overdrag_step = Some(Instant::now());
         }
@@ -326,6 +358,7 @@ pub struct Transaction {
     primary: Weak<RefCell<Window>>,
     secondary: Weak<RefCell<Window>>,
     start: Instant,
+    view: View,
 }
 
 impl Transaction {
@@ -333,6 +366,7 @@ impl Transaction {
         Self {
             primary: current_state.primary.clone(),
             secondary: current_state.secondary.clone(),
+            view: current_state.view,
             start: Instant::now(),
         }
     }
