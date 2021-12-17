@@ -131,12 +131,8 @@ impl Windows {
     /// Add a new window.
     pub fn add(&mut self, surface: ToplevelSurface, output: &Output) {
         let window = Rc::new(RefCell::new(Window::new(surface)));
-        if self.primary.strong_count() > 0 && self.secondary.strong_count() == 0 {
-            self.set_secondary(&window, output);
-        } else {
-            self.set_primary(&window, output);
-            self.set_secondary(None, output);
-        }
+        self.set_primary(&window, output);
+        self.set_secondary(None, output);
         self.windows.push(window);
     }
 
