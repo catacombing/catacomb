@@ -14,6 +14,7 @@ use crate::catacomb::Catacomb;
 use crate::output::Output;
 
 mod catacomb;
+mod drawing;
 mod input;
 mod output;
 mod shell;
@@ -55,9 +56,6 @@ fn main() {
             break;
         }
 
-        // Attempt to process staged atomic updates.
-        catacomb.windows.borrow_mut().update_transaction();
-
         graphics
             .borrow_mut()
             .render(|renderer, frame| {
@@ -67,8 +65,10 @@ fn main() {
             })
             .expect("buffer swap");
 
-        // Handle window liveliness changes and frame requests.
+        // Handle window liveliness changes.
         catacomb.windows.borrow_mut().refresh(&catacomb.output);
+
+        catacomb.windows.borrow_mut().request_frames();
         display.borrow_mut().flush_clients(&mut catacomb);
 
         // NOTE: The timeout picked here is 5ms to allow for up to 200 FPS. Increasing it would

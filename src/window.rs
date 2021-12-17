@@ -25,11 +25,20 @@ use crate::shell::SurfaceBuffer;
 /// Maximum time before a transaction is cancelled.
 const MAX_TRANSACTION_DURATION: Duration = Duration::from_millis(200);
 
+/// Horizontal sensitivity of the application overview.
+const OVERVIEW_HORIZONTAL_SENSITIVITY: f64 = 250.;
+
 /// Percentage of output width reserved for the main window in the application overview.
 const FG_OVERVIEW_PERCENTAGE: f64 = 0.75;
 
 /// Percentage of remaining space reserved for background windows in the application overview.
 const BG_OVERVIEW_PERCENTAGE: f64 = 0.5;
+
+/// Percentage of the output height a window can be moved before closing it in the overview.
+const OVERVIEW_CLOSE_DISTANCE: f64 = 0.5;
+
+/// Animation speed for the return from close, lower means faster.
+const CLOSE_CANCEL_ANIMATION_SPEED: f64 = 0.3;
 
 /// Animation speed for the return from overdrag, lower means faster.
 const OVERDRAG_ANIMATION_SPEED: f64 = 25.;
@@ -41,7 +50,7 @@ const OVERDRAG_LIMIT: f64 = 3.;
 #[derive(Copy, Clone, PartialEq, Debug)]
 enum View {
     /// List of all open windows.
-    Overview { offset: f64, last_overdrag_step: Option<Instant> },
+    Overview(Overview),
     /// Currently active windows.
     Workspace,
 }
@@ -50,6 +59,15 @@ impl Default for View {
     fn default() -> Self {
         View::Workspace
     }
+}
+
+/// Overview view state.
+#[derive(Default, Copy, Clone, PartialEq, Debug)]
+struct Overview {
+    x_offset: f64,
+    y_offset: f64,
+    last_overdrag_step: Option<Instant>,
+    close_release_pending: bool,
 }
 
 /// Container tracking all known clients.
@@ -115,36 +133,61 @@ impl Windows {
 
     /// Draw the current window state.
     pub fn draw(&mut self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame, output: &Output) {
-        let (offset, last_overdrag_step) = match &mut self.view {
+        self.update_transaction();
+
+        match &mut self.view {
             View::Workspace => {
                 self.with_visible(|window| window.draw(renderer, frame, output, 1., None));
-                return;
             },
-            View::Overview { offset, last_overdrag_step } => (offset, last_overdrag_step),
-        };
+            View::Overview(Overview { x_offset, y_offset, last_overdrag_step, .. }) => {
+                // Handle bounce-back from overdrag/cancelled application close.
+                let window_count = self.windows.len() as i32;
+                let min_offset = -window_count as f64 + 1.;
+                if let Some(last_overdrag_step) = last_overdrag_step {
+                    // Compute framerate-independent delta.
+                    let delta = last_overdrag_step.elapsed().as_millis() as f64;
+                    let overdrag_delta = delta / OVERDRAG_ANIMATION_SPEED;
+                    let close_delta = delta / CLOSE_CANCEL_ANIMATION_SPEED;
 
-        // Handle bounce-back animation from overdrag.
-        let window_count = self.windows.len() as i32;
-        let min_offset = -window_count as f64 + 1.;
-        if let Some(last_overdrag_step) = last_overdrag_step {
-            let delta = last_overdrag_step.elapsed().as_millis() as f64 / OVERDRAG_ANIMATION_SPEED;
-            if *offset > 0. {
-                *offset -= delta.min(*offset);
-            } else if *offset < min_offset {
-                *offset = (*offset + delta).min(min_offset);
-            }
-            *last_overdrag_step = Instant::now();
+                    // Overdrag bounce-back.
+                    if *x_offset > 0. {
+                        *x_offset -= overdrag_delta.min(*x_offset);
+                    } else if *x_offset < min_offset {
+                        *x_offset = (*x_offset + overdrag_delta).min(min_offset);
+                    }
+
+                    // Close window bounce-back.
+                    *y_offset -= close_delta.min(y_offset.abs()).copysign(*y_offset);
+
+                    *last_overdrag_step = Instant::now();
+                }
+
+                // Limit maximum overdrag.
+                *x_offset = x_offset.clamp(min_offset - OVERDRAG_LIMIT, OVERDRAG_LIMIT);
+
+                let (x_offset, y_offset) = (*x_offset, *y_offset);
+                self.draw_overview(renderer, frame, output, x_offset, y_offset);
+            },
         }
+    }
 
-        *offset = offset.clamp(min_offset - OVERDRAG_LIMIT, OVERDRAG_LIMIT);
-
+    /// Render the application overview.
+    fn draw_overview(
+        &mut self,
+        renderer: &mut Gles2Renderer,
+        frame: &mut Gles2Frame,
+        output: &Output,
+        x_offset: f64,
+        y_offset: f64,
+    ) {
         // Create an iterator over all windows in the overview.
         //
         // We start by going over all negative index windows from lowest to highest index and then
         // proceed from highest to lowest index with the positive windows. This ensures that outer
         // windows are rendered below the ones toward the center.
-        let min_inc = offset.round() as i32;
-        let max_exc = window_count + offset.round() as i32;
+        let window_count = self.windows.len() as i32;
+        let min_inc = x_offset.round() as i32;
+        let max_exc = window_count + x_offset.round() as i32;
         let neg_iter = (min_inc..0).zip(0..window_count);
         let pos_iter = (min_inc.max(0)..max_exc).zip(-min_inc.min(0)..window_count).rev();
 
@@ -166,38 +209,46 @@ impl Windows {
                 BG_OVERVIEW_PERCENTAGE,
                 output_size.w,
                 max_size.w,
-                position as f64 - offset.fract().round() + offset.fract(),
+                position as f64 - x_offset.fract().round() + x_offset.fract(),
             );
             let y_position = (output_size.h - max_size.h) / 2;
-            let bounds = Rectangle::from_loc_and_size((x_position, y_position), max_size);
+            let mut bounds = Rectangle::from_loc_and_size((x_position, y_position), max_size);
+
+            // Offset windows in the process of being closed.
+            if position == min_inc.max(0) {
+                bounds.loc.y += y_offset.round() as i32;
+            }
 
             window.draw(renderer, frame, output, scale, Some(bounds));
         }
     }
 
-    /// Refresh the client list.
-    ///
-    /// This function will remove all dead windows and resize remaining windows accordingly.
-    /// Subsequently new frames are requested from all visible windows.
-    pub fn refresh(&mut self, output: &Output) {
-        // Request frames for visible windows.
+    /// Request new frames for all visible windows.
+    pub fn request_frames(&mut self) {
         if self.view == View::Workspace {
             let runtime = self.runtime();
             self.with_visible(|window| window.request_frame(runtime));
         }
+    }
 
-        // Start transaction if any window died.
-        if self.windows.iter().all(|window| window.borrow().surface.alive()) {
-            return;
+    /// Reap dead windows.
+    pub fn refresh(&mut self, output: &Output) {
+        if self.windows.iter().any(|window| !window.borrow().surface.alive()) {
+            self.refresh_visible(output);
         }
+    }
+
+    /// Reap dead visible windows.
+    ///
+    /// This will reorder and resize visible windows when any of them has died.
+    fn refresh_visible(&mut self, output: &Output) {
         let transaction = self.start_transaction();
 
         // Remove dead primary/secondary windows.
-        if transaction.secondary.upgrade().map_or(false, |window| !window.borrow().surface.alive())
-        {
+        if transaction.secondary.upgrade().map_or(true, |window| !window.borrow().surface.alive()) {
             transaction.secondary = Weak::new();
         }
-        if transaction.primary.upgrade().map_or(false, |window| !window.borrow().surface.alive()) {
+        if transaction.primary.upgrade().map_or(true, |window| !window.borrow().surface.alive()) {
             transaction.primary = mem::take(&mut transaction.secondary);
         }
 
@@ -210,7 +261,7 @@ impl Windows {
     }
 
     /// Attempt to execute pending transactions.
-    pub fn update_transaction(&mut self) {
+    fn update_transaction(&mut self) {
         let transaction = match &mut self.transaction {
             Some(start) => start,
             None => return,
@@ -232,47 +283,48 @@ impl Windows {
             }
         }
 
-        // Execute the transaction.
+        // Apply window changes.
         for i in (0..self.windows.len()).rev() {
             if self.windows[i].borrow().surface.alive() {
                 self.windows[i].borrow_mut().apply_transaction();
             } else {
-                self.windows.swap_remove(i);
+                self.windows.remove(i);
             }
         }
 
+        // Apply window management changes.
         let transaction = self.transaction.take().unwrap();
+        self.view = transaction.view.unwrap_or(self.view);
         self.secondary = transaction.secondary;
         self.primary = transaction.primary;
-        self.view = transaction.view;
     }
 
     /// Toggle the active view.
     pub fn toggle_view(&mut self) {
-        let transaction = self.start_transaction();
-        transaction.view = match transaction.view {
-            View::Workspace => View::Overview { last_overdrag_step: None, offset: 0. },
-            View::Overview { .. } => View::Workspace,
+        let new_view = match self.view {
+            View::Workspace => Some(View::Overview(Overview::default())),
+            View::Overview { .. } => Some(View::Workspace),
         };
+        self.start_transaction().view = new_view;
     }
 
     /// Hand quick touch input.
     pub fn on_tap(&mut self, output: &Output, point: Point<f64, Logical>) {
-        let offset = match self.view {
-            View::Overview { offset, .. } => offset,
+        let x_offset = match self.view {
+            View::Overview(Overview { x_offset, .. }) => x_offset,
             View::Workspace => return,
         };
 
         // Calculate focused overview window bounds.
         let output_size = output.size();
         let window_size = scale_size(output_size, FG_OVERVIEW_PERCENTAGE);
-        let index = (offset.min(0.).abs().round() as usize).min(self.windows.len() - 1);
+        let index = (x_offset.min(0.).abs().round() as usize).min(self.windows.len() - 1);
         let x = overview_x_position(
             FG_OVERVIEW_PERCENTAGE,
             BG_OVERVIEW_PERCENTAGE,
             output_size.w,
             window_size.w,
-            index as f64 + offset,
+            index as f64 + x_offset,
         );
         let y = (output_size.h - window_size.h) / 2;
         let window_bounds = Rectangle::from_loc_and_size((x, y), window_size);
@@ -286,18 +338,49 @@ impl Windows {
         }
     }
 
-    /// Handle touch drag.
-    pub fn on_drag(&mut self, delta: f64) {
-        if let View::Overview { offset, last_overdrag_step } = &mut self.view {
+    /// Handle horizontal touch drag.
+    pub fn on_horizontal_drag(&mut self, delta: f64) {
+        if let View::Overview(Overview { x_offset, y_offset, last_overdrag_step, .. }) =
+            &mut self.view
+        {
+            *x_offset += delta / OVERVIEW_HORIZONTAL_SENSITIVITY;
             *last_overdrag_step = None;
-            *offset += delta;
+            *y_offset = 0.;
+        }
+    }
+
+    /// Handle vertical touch drag.
+    pub fn on_vertical_drag(&mut self, output: &Output, delta: f64) {
+        let overview = match &mut self.view {
+            View::Overview(view) if !view.close_release_pending => view,
+            _ => return,
+        };
+
+        overview.last_overdrag_step = None;
+        overview.y_offset += delta;
+
+        // Close window once offset surpassed the threshold.
+        let close_distance = output.size().h as f64 * OVERVIEW_CLOSE_DISTANCE;
+        if overview.y_offset.abs() >= close_distance && !self.windows.is_empty() {
+            let i = (overview.x_offset.min(0.).abs().round() as usize).min(self.windows.len() - 1);
+            self.windows[i].borrow_mut().surface.send_close();
+            self.windows.remove(i);
+
+            overview.last_overdrag_step = Some(Instant::now());
+            overview.close_release_pending = true;
+            overview.y_offset = 0.;
+
+            self.refresh_visible(output);
         }
     }
 
     /// Handle touch release.
     pub fn on_drag_release(&mut self) {
-        if let View::Overview { last_overdrag_step, .. } = &mut self.view {
+        if let View::Overview(Overview { last_overdrag_step, close_release_pending, .. }) =
+            &mut self.view
+        {
             *last_overdrag_step = Some(Instant::now());
+            *close_release_pending = false;
         }
     }
 
@@ -357,8 +440,8 @@ impl Windows {
 pub struct Transaction {
     primary: Weak<RefCell<Window>>,
     secondary: Weak<RefCell<Window>>,
+    view: Option<View>,
     start: Instant,
-    view: View,
 }
 
 impl Transaction {
@@ -366,8 +449,8 @@ impl Transaction {
         Self {
             primary: current_state.primary.clone(),
             secondary: current_state.secondary.clone(),
-            view: current_state.view,
             start: Instant::now(),
+            view: None,
         }
     }
 

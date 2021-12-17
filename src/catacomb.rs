@@ -114,7 +114,7 @@ impl Catacomb {
     }
 
     /// Render the current compositor state.
-    pub fn draw(&self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame) {
+    pub fn draw(&mut self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame) {
         self.windows.borrow_mut().draw(renderer, frame, &self.output);
     }
 }

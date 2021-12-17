@@ -1,6 +1,7 @@
 //! Input event handling.
 
 use std::time::{Duration, Instant};
+use std::mem;
 
 use smithay::backend::input::{
     Event, InputBackend, InputEvent, KeyState, KeyboardKeyEvent, MouseButton, PointerButtonEvent,
@@ -14,39 +15,60 @@ use smithay::wayland::SERIAL_COUNTER;
 use crate::catacomb::Catacomb;
 use crate::output::Orientation;
 
-/// Mouse pointer sensitivity in the application overview.
-const MOUSE_OVERVIEW_SENSITIVITY: f64 = 250.;
-
 /// Maximum time before touch input is considered a drag.
 const MAX_TAP_DURATION: Duration = Duration::from_millis(750);
 
 /// Maximum distance before touch input is considered a drag.
-const MAX_TAP_DISTANCE: f64 = 35.;
+const MAX_TAP_DISTANCE: f64 = 20.;
 
 /// Touch input state.
 #[derive(Default)]
 pub struct TouchState {
-    last_drag_end: Option<Point<f64, Logical>>,
-    touch_start: Option<TouchStart>,
     position: Point<f64, Logical>,
+    action: Option<TouchAction>,
 }
 
-struct TouchStart {
-    position: Point<f64, Logical>,
-    instant: Instant,
+impl TouchState {
+    /// Get the updated active touch action.
+    fn action(&mut self) -> &mut Option<TouchAction> {
+        // Change state to drag when tap deadzone tolerance was exceeded.
+        if let Some(TouchAction::Tap { position, instant }) = self.action {
+            let delta = position - self.position;
+            if instant.elapsed() > MAX_TAP_DURATION
+                || f64::sqrt(delta.x.powi(2) + delta.y.powi(2)) > MAX_TAP_DISTANCE
+            {
+                let direction = if delta.x.abs() >= delta.y.abs() {
+                    Direction::Horizontal
+                } else {
+                    Direction::Vertical
+                };
+
+                self.action = Some(TouchAction::Drag { last_position: position, direction });
+            }
+        }
+
+        &mut self.action
+    }
 }
 
-impl TouchStart {
+/// Available touch input actions.
+#[derive(Copy, Clone)]
+enum TouchAction {
+    Tap { position: Point<f64, Logical>, instant: Instant },
+    Drag { last_position: Point<f64, Logical>, direction: Direction },
+}
+
+impl TouchAction {
     fn new(position: Point<f64, Logical>) -> Self {
-        Self { instant: Instant::now(), position }
+        TouchAction::Tap { instant: Instant::now(), position }
     }
+}
 
-    /// Determine if a touch release is within margin of error for a single tap.
-    fn is_tap(&self, position: Point<f64, Logical>) -> bool {
-        let delta = self.position - position;
-        self.instant.elapsed() <= MAX_TAP_DURATION
-            && f64::sqrt(delta.x.powi(2) + delta.y.powi(2)) <= MAX_TAP_DISTANCE
-    }
+/// Directional plane.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum Direction {
+    Horizontal,
+    Vertical,
 }
 
 impl Catacomb {
@@ -73,34 +95,36 @@ impl Catacomb {
         match event {
             InputEvent::Keyboard { event, .. } => self.handle_keyboard_input(event),
             InputEvent::PointerButton { event } if event.button() == Some(MouseButton::Left) => {
-                if let Some(touch_start) = &self.touch_state.touch_start {
-                    if touch_start.is_tap(self.touch_state.position) {
-                        self.windows.borrow_mut().on_tap(&self.output, self.touch_state.position);
-                    } else {
+                self.touch_state.action = match &self.touch_state.action {
+                    Some(TouchAction::Tap { position, .. }) => {
+                        self.windows.borrow_mut().on_tap(&self.output, *position);
+                        None
+                    },
+                    Some(TouchAction::Drag { .. }) => {
                         self.windows.borrow_mut().on_drag_release();
-                    }
-                }
-                self.touch_state.touch_start = Some(TouchStart::new(self.touch_state.position))
-                    .xor(self.touch_state.touch_start.take());
-
-                self.touch_state.last_drag_end = None;
+                        None
+                    },
+                    None => Some(TouchAction::new(self.touch_state.position)),
+                };
             },
             InputEvent::PointerMotionAbsolute { event } => {
-                let new_position = event.position_transformed(self.output.size());
+                let position = event.position_transformed(self.output.size());
 
-                if let Some(touch_start) = self
-                    .touch_state
-                    .touch_start
-                    .as_ref()
-                    .filter(|touch_start| !touch_start.is_tap(self.touch_state.position))
+                if let Some(TouchAction::Drag { last_position, direction }) =
+                    self.touch_state.action()
                 {
-                    let position = self.touch_state.last_drag_end.unwrap_or(touch_start.position);
-                    let delta = new_position - position;
-                    self.windows.borrow_mut().on_drag(delta.x / MOUSE_OVERVIEW_SENSITIVITY);
-                    self.touch_state.last_drag_end = Some(new_position);
+                    let delta = position - mem::replace(last_position, position);
+                    match direction {
+                        Direction::Horizontal => {
+                            self.windows.borrow_mut().on_horizontal_drag(delta.x);
+                        },
+                        Direction::Vertical => {
+                            self.windows.borrow_mut().on_vertical_drag(&self.output, delta.y);
+                        }
+                    }
                 }
 
-                self.touch_state.position = new_position;
+                self.touch_state.position = position;
             },
             _ => (),
         };
