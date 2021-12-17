@@ -1,6 +1,5 @@
 //! Input event handling.
 
-use std::time::{Duration, Instant};
 use std::mem;
 
 use smithay::backend::input::{
@@ -14,9 +13,6 @@ use smithay::wayland::SERIAL_COUNTER;
 
 use crate::catacomb::Catacomb;
 use crate::output::Orientation;
-
-/// Maximum time before touch input is considered a drag.
-const MAX_TAP_DURATION: Duration = Duration::from_millis(750);
 
 /// Maximum distance before touch input is considered a drag.
 const MAX_TAP_DISTANCE: f64 = 20.;
@@ -32,11 +28,9 @@ impl TouchState {
     /// Get the updated active touch action.
     fn action(&mut self) -> &mut Option<TouchAction> {
         // Change state to drag when tap deadzone tolerance was exceeded.
-        if let Some(TouchAction::Tap { position, instant }) = self.action {
+        if let Some(TouchAction::Tap { position }) = self.action {
             let delta = position - self.position;
-            if instant.elapsed() > MAX_TAP_DURATION
-                || f64::sqrt(delta.x.powi(2) + delta.y.powi(2)) > MAX_TAP_DISTANCE
-            {
+            if f64::sqrt(delta.x.powi(2) + delta.y.powi(2)) > MAX_TAP_DISTANCE {
                 let direction = if delta.x.abs() >= delta.y.abs() {
                     Direction::Horizontal
                 } else {
@@ -54,13 +48,13 @@ impl TouchState {
 /// Available touch input actions.
 #[derive(Copy, Clone)]
 enum TouchAction {
-    Tap { position: Point<f64, Logical>, instant: Instant },
+    Tap { position: Point<f64, Logical> },
     Drag { last_position: Point<f64, Logical>, direction: Direction },
 }
 
 impl TouchAction {
     fn new(position: Point<f64, Logical>) -> Self {
-        TouchAction::Tap { instant: Instant::now(), position }
+        TouchAction::Tap { position }
     }
 }
 
@@ -95,16 +89,20 @@ impl Catacomb {
         match event {
             InputEvent::Keyboard { event, .. } => self.handle_keyboard_input(event),
             InputEvent::PointerButton { event } if event.button() == Some(MouseButton::Left) => {
+                let mut windows = self.windows.borrow_mut();
                 self.touch_state.action = match &self.touch_state.action {
                     Some(TouchAction::Tap { position, .. }) => {
-                        self.windows.borrow_mut().on_tap(&self.output, *position);
+                        windows.on_tap(&self.output, *position);
                         None
                     },
                     Some(TouchAction::Drag { .. }) => {
-                        self.windows.borrow_mut().on_drag_release();
+                        windows.on_drag_release();
                         None
                     },
-                    None => Some(TouchAction::new(self.touch_state.position)),
+                    None => {
+                        windows.on_touch_start(&self.output, self.touch_state.position);
+                        Some(TouchAction::new(self.touch_state.position))
+                    },
                 };
             },
             InputEvent::PointerMotionAbsolute { event } => {
@@ -120,7 +118,7 @@ impl Catacomb {
                         },
                         Direction::Vertical => {
                             self.windows.borrow_mut().on_vertical_drag(&self.output, delta.y);
-                        }
+                        },
                     }
                 }
 

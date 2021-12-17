@@ -34,6 +34,9 @@ const FG_OVERVIEW_PERCENTAGE: f64 = 0.75;
 /// Percentage of remaining space reserved for background windows in the application overview.
 const BG_OVERVIEW_PERCENTAGE: f64 = 0.5;
 
+/// Time before a tap is considered a hold.
+const HOLD_DURATION: Duration = Duration::from_secs(1);
+
 /// Percentage of the output height a window can be moved before closing it in the overview.
 const OVERVIEW_CLOSE_DISTANCE: f64 = 0.5;
 
@@ -68,6 +71,32 @@ struct Overview {
     y_offset: f64,
     last_overdrag_step: Option<Instant>,
     close_release_pending: bool,
+    hold_start: Option<Instant>,
+}
+
+impl Overview {
+    /// Index of the focused window.
+    fn focused_index(&self, window_count: usize) -> usize {
+        (self.x_offset.min(0.).abs().round() as usize).min(window_count - 1)
+    }
+
+    /// Focused window bounds.
+    fn focused_bounds(
+        &self,
+        output_size: Size<i32, Logical>,
+        window_count: usize,
+    ) -> Rectangle<i32, Logical> {
+        let window_size = scale_size(output_size, FG_OVERVIEW_PERCENTAGE);
+        let x = overview_x_position(
+            FG_OVERVIEW_PERCENTAGE,
+            BG_OVERVIEW_PERCENTAGE,
+            output_size.w,
+            window_size.w,
+            self.focused_index(window_count) as f64 + self.x_offset,
+        );
+        let y = (output_size.h - window_size.h) / 2;
+        Rectangle::from_loc_and_size((x, y), window_size)
+    }
 }
 
 /// Container tracking all known clients.
@@ -231,10 +260,22 @@ impl Windows {
         }
     }
 
-    /// Reap dead windows.
+    /// Update window manager state.
     pub fn refresh(&mut self, output: &Output) {
         if self.windows.iter().any(|window| !window.borrow().surface.alive()) {
             self.refresh_visible(output);
+        }
+
+        // Open as secondary on long touch in overview.
+        if let View::Overview(overview) = &mut self.view {
+            if overview.hold_start.map_or(false, |start| start.elapsed() >= HOLD_DURATION) {
+                overview.hold_start = None;
+
+                let index = overview.focused_index(self.windows.len());
+                let window = self.windows[index].clone();
+                self.set_secondary(&window, output);
+                self.toggle_view();
+            }
         }
     }
 
@@ -308,44 +349,49 @@ impl Windows {
         self.start_transaction().view = new_view;
     }
 
+    /// Handle start of touch input.
+    pub fn on_touch_start(&mut self, output: &Output, point: Point<f64, Logical>) {
+        if let View::Overview(overview) = &mut self.view {
+            // Click inside focused window stages it for opening as secondary.
+            let window_bounds = overview.focused_bounds(output.size(), self.windows.len());
+            if window_bounds.contains(point.to_i32_round()) {
+                overview.hold_start = Some(Instant::now());
+            }
+        }
+    }
+
     /// Hand quick touch input.
     pub fn on_tap(&mut self, output: &Output, point: Point<f64, Logical>) {
-        let x_offset = match self.view {
-            View::Overview(Overview { x_offset, .. }) => x_offset,
+        let overview = match &mut self.view {
+            View::Overview(overview) => overview,
             View::Workspace => return,
         };
 
-        // Calculate focused overview window bounds.
-        let output_size = output.size();
-        let window_size = scale_size(output_size, FG_OVERVIEW_PERCENTAGE);
-        let index = (x_offset.min(0.).abs().round() as usize).min(self.windows.len() - 1);
-        let x = overview_x_position(
-            FG_OVERVIEW_PERCENTAGE,
-            BG_OVERVIEW_PERCENTAGE,
-            output_size.w,
-            window_size.w,
-            index as f64 + x_offset,
-        );
-        let y = (output_size.h - window_size.h) / 2;
-        let window_bounds = Rectangle::from_loc_and_size((x, y), window_size);
+        overview.hold_start = None;
 
-        // Open the window as sole primary.
+        // Click inside focused window opens it as primary.
+        let window_bounds = overview.focused_bounds(output.size(), self.windows.len());
         if window_bounds.contains(point.to_i32_round()) {
+            let index = overview.focused_index(self.windows.len());
             let window = self.windows[index].clone();
+
+            // Clear secondary unless *only* primary is empty.
+            if self.primary.strong_count() > 0 {
+                self.set_secondary(None, output);
+            }
             self.set_primary(&window, output);
-            self.set_secondary(None, output);
+
             self.toggle_view();
         }
     }
 
     /// Handle horizontal touch drag.
     pub fn on_horizontal_drag(&mut self, delta: f64) {
-        if let View::Overview(Overview { x_offset, y_offset, last_overdrag_step, .. }) =
-            &mut self.view
-        {
-            *x_offset += delta / OVERVIEW_HORIZONTAL_SENSITIVITY;
-            *last_overdrag_step = None;
-            *y_offset = 0.;
+        if let View::Overview(overview) = &mut self.view {
+            overview.x_offset += delta / OVERVIEW_HORIZONTAL_SENSITIVITY;
+            overview.last_overdrag_step = None;
+            overview.hold_start = None;
+            overview.y_offset = 0.;
         }
     }
 
@@ -357,14 +403,15 @@ impl Windows {
         };
 
         overview.last_overdrag_step = None;
+        overview.hold_start = None;
         overview.y_offset += delta;
 
         // Close window once offset surpassed the threshold.
         let close_distance = output.size().h as f64 * OVERVIEW_CLOSE_DISTANCE;
         if overview.y_offset.abs() >= close_distance && !self.windows.is_empty() {
-            let i = (overview.x_offset.min(0.).abs().round() as usize).min(self.windows.len() - 1);
-            self.windows[i].borrow_mut().surface.send_close();
-            self.windows.remove(i);
+            let index = overview.focused_index(self.windows.len());
+            self.windows[index].borrow_mut().surface.send_close();
+            self.windows.remove(index);
 
             overview.last_overdrag_step = Some(Instant::now());
             overview.close_release_pending = true;
@@ -406,9 +453,14 @@ impl Windows {
             window.borrow_mut().enter(output);
         }
 
+        // Clear secondary if it's the new primary.
+        let weak_window = window.map(Rc::downgrade);
+        if weak_window.as_ref().map_or(false, |window| window.ptr_eq(&transaction.secondary)) {
+            transaction.secondary = Weak::new();
+        }
+
         // Set primary and recompute window dimensions.
-        transaction.primary =
-            window.map(Rc::downgrade).unwrap_or_else(|| mem::take(&mut transaction.secondary));
+        transaction.primary = weak_window.unwrap_or_else(|| mem::take(&mut transaction.secondary));
         transaction.update_dimensions(output);
     }
 
@@ -429,8 +481,14 @@ impl Windows {
             window.borrow_mut().enter(output);
         }
 
+        // Clear primary if it's the new secondary.
+        let weak_window = window.map(Rc::downgrade);
+        if weak_window.as_ref().map_or(false, |window| window.ptr_eq(&transaction.primary)) {
+            transaction.primary = Weak::new();
+        }
+
         // Set primary and recompute window dimensions.
-        transaction.secondary = window.map(Rc::downgrade).unwrap_or_default();
+        transaction.secondary = weak_window.unwrap_or_default();
         transaction.update_dimensions(output);
     }
 }
