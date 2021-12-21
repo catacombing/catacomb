@@ -130,10 +130,9 @@ impl Windows {
 
     /// Add a new window.
     pub fn add(&mut self, surface: ToplevelSurface, output: &Output) {
-        let window = Rc::new(RefCell::new(Window::new(surface)));
-        self.set_primary(&window, output);
-        self.set_secondary(None, output);
-        self.windows.push(window);
+        self.windows.push(Rc::new(RefCell::new(Window::new(surface))));
+        self.set_primary(output, self.windows.len() - 1);
+        self.set_secondary(output, None);
     }
 
     /// Find the window responsible for a specific surface.
@@ -268,8 +267,7 @@ impl Windows {
                 overview.hold_start = None;
 
                 let index = overview.focused_index(self.windows.len());
-                let window = self.windows[index].clone();
-                self.set_secondary(&window, output);
+                self.set_secondary(output, index);
                 self.toggle_view();
             }
         }
@@ -369,13 +367,12 @@ impl Windows {
         let window_bounds = overview.focused_bounds(output.size(), self.windows.len());
         if window_bounds.contains(point.to_i32_round()) {
             let index = overview.focused_index(self.windows.len());
-            let window = self.windows[index].clone();
 
             // Clear secondary unless *only* primary is empty.
             if self.primary.strong_count() > 0 {
-                self.set_secondary(None, output);
+                self.set_secondary(output, None);
             }
-            self.set_primary(&window, output);
+            self.set_primary(output, index);
 
             self.toggle_view();
         }
@@ -433,15 +430,12 @@ impl Windows {
     }
 
     /// Change the primary window.
-    fn set_primary<'a>(
-        &mut self,
-        window: impl Into<Option<&'a Rc<RefCell<Window>>>>,
-        output: &Output,
-    ) {
-        let transaction = self.start_transaction();
+    fn set_primary(&mut self, output: &Output, index: impl Into<Option<usize>>) {
+        let index = index.into();
+        let transaction = self.transaction.get_or_insert(Transaction::new(self));
+        let window = index.map(|index| &self.windows[index]);
 
         // Update output's visible windows.
-        let window = window.into();
         if let Some(primary) = transaction.primary.upgrade() {
             primary.borrow_mut().leave(transaction, output);
         }
@@ -458,18 +452,25 @@ impl Windows {
         // Set primary and recompute window dimensions.
         transaction.primary = weak_window.unwrap_or_else(|| mem::take(&mut transaction.secondary));
         transaction.update_dimensions(output);
+
+        // Ensure primary is always the first element.
+        match index {
+            Some(index) => self.windows.swap(0, index),
+            None => {
+                if self.windows.len() >= 2 {
+                    self.windows.swap(0, 1);
+                }
+            },
+        }
     }
 
     /// Change the secondary window.
-    fn set_secondary<'a>(
-        &mut self,
-        window: impl Into<Option<&'a Rc<RefCell<Window>>>>,
-        output: &Output,
-    ) {
-        let transaction = self.start_transaction();
+    fn set_secondary(&mut self, output: &Output, index: impl Into<Option<usize>>) {
+        let index = index.into();
+        let transaction = self.transaction.get_or_insert(Transaction::new(self));
+        let window = index.map(|i| &self.windows[i]);
 
         // Update output's visible windows.
-        let window = window.into();
         if let Some(secondary) = transaction.secondary.upgrade() {
             secondary.borrow_mut().leave(transaction, output);
         }
@@ -486,6 +487,11 @@ impl Windows {
         // Set primary and recompute window dimensions.
         transaction.secondary = weak_window.unwrap_or_default();
         transaction.update_dimensions(output);
+
+        // Ensure secondary is always the second element.
+        if let Some(index) = index.filter(|index| *index > 1) {
+            self.windows.swap(1, index);
+        }
     }
 }
 
