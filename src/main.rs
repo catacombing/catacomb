@@ -14,7 +14,6 @@ use crate::catacomb::Catacomb;
 use crate::output::Output;
 
 mod catacomb;
-mod drawing;
 mod input;
 mod output;
 mod shell;
