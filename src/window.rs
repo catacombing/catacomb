@@ -318,12 +318,28 @@ impl Windows {
             }
         }
 
-        // Apply window changes.
-        for i in (0..self.windows.len()).rev() {
-            if self.windows[i].borrow().surface.alive() {
-                self.windows[i].borrow_mut().apply_transaction();
-            } else {
+        let secondary_index = self.primary.strong_count().max(1);
+        let mut i = self.windows.len();
+        while i > 0 {
+            i -= 1;
+
+            // Remove dead windows.
+            if !self.windows[i].borrow().surface.alive() {
                 self.windows.remove(i);
+                continue;
+            }
+
+            // Apply transaction changes.
+            self.windows[i].borrow_mut().apply_transaction();
+
+            // Ensure primary/secondary are always first/second window.
+            let weak = Rc::downgrade(&self.windows[i]);
+            if i > 0 && transaction.primary.ptr_eq(&weak) {
+                self.windows.swap(0, i);
+                i += 1;
+            } else if i > secondary_index && transaction.secondary.ptr_eq(&weak) {
+                self.windows.swap(secondary_index, i);
+                i += 1;
             }
         }
 
@@ -431,9 +447,8 @@ impl Windows {
 
     /// Change the primary window.
     fn set_primary(&mut self, output: &Output, index: impl Into<Option<usize>>) {
-        let index = index.into();
         let transaction = self.transaction.get_or_insert(Transaction::new(self));
-        let window = index.map(|index| &self.windows[index]);
+        let window = index.into().map(|index| &self.windows[index]);
 
         // Update output's visible windows.
         if let Some(primary) = transaction.primary.upgrade() {
@@ -452,23 +467,12 @@ impl Windows {
         // Set primary and recompute window dimensions.
         transaction.primary = weak_window.unwrap_or_else(|| mem::take(&mut transaction.secondary));
         transaction.update_dimensions(output);
-
-        // Ensure primary is always the first element.
-        match index {
-            Some(index) => self.windows.swap(0, index),
-            None => {
-                if self.windows.len() >= 2 {
-                    self.windows.swap(0, 1);
-                }
-            },
-        }
     }
 
     /// Change the secondary window.
     fn set_secondary(&mut self, output: &Output, index: impl Into<Option<usize>>) {
-        let index = index.into();
         let transaction = self.transaction.get_or_insert(Transaction::new(self));
-        let window = index.map(|i| &self.windows[i]);
+        let window = index.into().map(|i| &self.windows[i]);
 
         // Update output's visible windows.
         if let Some(secondary) = transaction.secondary.upgrade() {
@@ -487,11 +491,6 @@ impl Windows {
         // Set primary and recompute window dimensions.
         transaction.secondary = weak_window.unwrap_or_default();
         transaction.update_dimensions(output);
-
-        // Ensure secondary is always the second element.
-        if let Some(index) = index.filter(|index| *index > 1) {
-            self.windows.swap(1, index);
-        }
     }
 }
 
