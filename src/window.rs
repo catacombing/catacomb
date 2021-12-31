@@ -43,13 +43,11 @@ const OVERVIEW_CLOSE_DISTANCE: f64 = 0.5;
 /// Percentage of the screen for the drop highlight areas.
 const DRAG_AND_DROP_PERCENTAGE: f64 = 0.3;
 
-// TODO: Colors
 /// Color of the hovered overview tiling location highlight.
-const ACTIVE_DROP_TARGET_RGBA: [u8; 4] = [255, 0, 255, 128];
+const ACTIVE_DROP_TARGET_RGBA: [u8; 4] = [128, 128, 128, 128];
 
-// TODO: Colors
 /// Color of the overview tiling location highlight.
-const DROP_TARGET_RGBA: [u8; 4] = [255, 0, 255, 64];
+const DROP_TARGET_RGBA: [u8; 4] = [128, 128, 128, 64];
 
 /// Animation speed for the return from close, lower means faster.
 const CLOSE_CANCEL_ANIMATION_SPEED: f64 = 0.3;
@@ -620,6 +618,14 @@ impl DragAndDrop {
         windows: &[Rc<RefCell<Window>>],
         graphics: &Graphics,
     ) {
+        // Render the subject of the drag and drop.
+        let output_size = output.size();
+        let size = output_size.scale(FG_OVERVIEW_PERCENTAGE);
+        let loc = (output_size - size).to_point() / 2 + self.window_position.to_i32_round();
+        let bounds = Rectangle::from_loc_and_size(loc, size);
+        let mut window = windows[self.window_index].borrow_mut();
+        window.draw(renderer, frame, output, FG_OVERVIEW_PERCENTAGE, bounds);
+
         // Set custom OpenGL blending function.
         let _ = renderer.with_context(|_, gl| unsafe {
             gl.BlendFunc(ffi::SRC_ALPHA, ffi::ONE_MINUS_SRC_ALPHA);
@@ -629,7 +635,6 @@ impl DragAndDrop {
         let (primary_bounds, secondary_bounds) = self.drop_bounds(output);
 
         // Render the drop areas.
-        let output_size = output.size();
         let scale = cmp::max(output_size.w, output_size.h) as f64;
         for bounds in [primary_bounds, secondary_bounds] {
             if bounds.to_f64().contains(self.touch_position) {
@@ -643,13 +648,6 @@ impl DragAndDrop {
         let _ = renderer.with_context(|_, gl| unsafe {
             gl.BlendFunc(ffi::ONE, ffi::ONE_MINUS_SRC_ALPHA);
         });
-
-        // Render the subject of the drag and drop.
-        let size = output_size.scale(FG_OVERVIEW_PERCENTAGE);
-        let loc = (output_size - size).to_point() / 2 + self.window_position.to_i32_round();
-        let bounds = Rectangle::from_loc_and_size(loc, size);
-        let mut window = windows[self.window_index].borrow_mut();
-        window.draw(renderer, frame, output, FG_OVERVIEW_PERCENTAGE, bounds);
     }
 
     /// Bounds for the drop preview areas of the D&D action.
