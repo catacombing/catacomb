@@ -69,7 +69,7 @@ impl Catacomb {
                     self.output.orientation = Orientation::Landscape;
                 }
                 self.output.mode.size = size;
-                self.windows.borrow_mut().start_transaction().update_dimensions(&self.output);
+                self.windows.borrow_mut().resize_all(&self.output);
             },
             WinitEvent::Input(event) => self.handle_input(event),
             _ => (),

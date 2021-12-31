@@ -172,7 +172,7 @@ impl Windows {
     }
 
     /// Create a new transaction, or access the active one.
-    pub fn start_transaction(&mut self) -> &mut Transaction {
+    fn start_transaction(&mut self) -> &mut Transaction {
         self.transaction.get_or_insert(Transaction::new(self))
     }
 
@@ -229,6 +229,21 @@ impl Windows {
         self.view = transaction.view.unwrap_or(self.view);
         self.secondary = transaction.secondary;
         self.primary = transaction.primary;
+    }
+
+    /// Resize all windows to their expected size.
+    pub fn resize_all(&mut self, output: &Output) {
+        let transaction = self.transaction.get_or_insert(Transaction::new(self));
+
+        // Resize invisible windows.
+        for window in &self.windows {
+            let mut window = window.borrow_mut();
+            let rectangle = Rectangle::from_loc_and_size((0, 0), output.size());
+            window.update_dimensions(transaction, rectangle);
+        }
+
+        // Resize primary/secondary.
+        transaction.update_dimensions(output);
     }
 
     /// Handle start of touch input.
@@ -839,8 +854,7 @@ impl Window {
         self.visible = false;
 
         // Resize to fullscreen for app overview.
-        let mut rectangle = self.start_transaction(transaction).rectangle;
-        rectangle.size = output.size();
+        let rectangle = Rectangle::from_loc_and_size((0, 0), output.size());
         self.update_dimensions(transaction, rectangle);
     }
 
