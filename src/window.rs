@@ -348,8 +348,13 @@ impl Windows {
     }
 
     /// Show the application overview.
-    pub fn show_overview(&mut self) {
-        self.set_view(View::Overview(Overview::default()));
+    pub fn toggle_overview(&mut self) {
+        let current_view = self.view;
+        let transaction = self.start_transaction();
+        transaction.view = match transaction.view.unwrap_or(current_view) {
+            View::Overview(_) | View::DragAndDrop(_) => Some(View::Workspace),
+            View::Workspace => Some(View::Overview(Overview::default())),
+        };
     }
 
     /// Change the active view.

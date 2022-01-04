@@ -120,7 +120,7 @@ impl Catacomb {
         self.keyboard.input(keycode, state, serial, time, |modifiers, keysym| {
             if modifiers.ctrl && keysym.modified_sym() == keysyms::KEY_t {
                 if state == KeyState::Released {
-                    self.windows.borrow_mut().show_overview();
+                    self.windows.borrow_mut().toggle_overview();
                 }
                 FilterResult::Intercept(())
             } else {
