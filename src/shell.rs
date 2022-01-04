@@ -19,6 +19,7 @@ use smithay::wayland::SERIAL_COUNTER;
 use wayland_commons::filter::DispatchData;
 
 use crate::catacomb::Catacomb;
+use crate::output::Output;
 use crate::window::Windows;
 
 /// Wayland shells.
@@ -28,11 +29,11 @@ pub struct Shells {
 
 impl Shells {
     /// Initialize all available shells.
-    pub fn new(display: &mut Display, renderer: &mut Gles2Renderer) -> Self {
+    pub fn new(display: &mut Display, renderer: &mut Gles2Renderer, output: &Output) -> Self {
         // Create the compositor and register a surface commit handler.
         compositor::compositor_init(display, surface_commit, None);
 
-        let windows = Rc::new(RefCell::new(Windows::new(renderer)));
+        let windows = Rc::new(RefCell::new(Windows::new(renderer, output)));
 
         let xdg_windows = windows.clone();
         let _ = xdg_shell::xdg_shell_init(

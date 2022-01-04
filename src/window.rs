@@ -7,7 +7,7 @@ use std::mem;
 use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 
-use smithay::backend::renderer::gles2::{ffi, Gles2Error, Gles2Frame, Gles2Renderer};
+use smithay::backend::renderer::gles2::{ffi, Gles2Frame, Gles2Renderer};
 use smithay::backend::renderer::{self, BufferType, ImportAll};
 use smithay::reexports::wayland_protocols::unstable::xdg_decoration;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -19,35 +19,26 @@ use smithay::wayland::shell::xdg::{SurfaceCachedState, ToplevelSurface};
 use wayland_protocols::xdg_shell::server::xdg_toplevel::State;
 use xdg_decoration::v1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 
-use crate::drawing::Texture;
+use crate::drawing::{Graphics, Texture};
 use crate::geometry::CatacombVector;
 use crate::input::HOLD_DURATION;
 use crate::output::{Orientation, Output};
 use crate::shell::SurfaceBuffer;
 
-/// Maximum time before a transaction is cancelled.
-const MAX_TRANSACTION_DURATION: Duration = Duration::from_millis(200);
-
-/// Horizontal sensitivity of the application overview.
-const OVERVIEW_HORIZONTAL_SENSITIVITY: f64 = 250.;
-
 /// Percentage of output width reserved for the main window in the application overview.
-const FG_OVERVIEW_PERCENTAGE: f64 = 0.75;
+pub const FG_OVERVIEW_PERCENTAGE: f64 = 0.75;
 
 /// Percentage of remaining space reserved for background windows in the application overview.
 const BG_OVERVIEW_PERCENTAGE: f64 = 0.5;
+
+/// Horizontal sensitivity of the application overview.
+const OVERVIEW_HORIZONTAL_SENSITIVITY: f64 = 250.;
 
 /// Percentage of the output height a window can be moved before closing it in the overview.
 const OVERVIEW_CLOSE_DISTANCE: f64 = 0.5;
 
 /// Percentage of the screen for the drop highlight areas.
 const DRAG_AND_DROP_PERCENTAGE: f64 = 0.3;
-
-/// Color of the hovered overview tiling location highlight.
-const ACTIVE_DROP_TARGET_RGBA: [u8; 4] = [128, 128, 128, 128];
-
-/// Color of the overview tiling location highlight.
-const DROP_TARGET_RGBA: [u8; 4] = [128, 128, 128, 64];
 
 /// Animation speed for the return from close, lower means faster.
 const CLOSE_CANCEL_ANIMATION_SPEED: f64 = 0.3;
@@ -57,6 +48,9 @@ const OVERDRAG_ANIMATION_SPEED: f64 = 25.;
 
 /// Maximum amount of overdrag before inputs are ignored.
 const OVERDRAG_LIMIT: f64 = 3.;
+
+/// Maximum time before a transaction is cancelled.
+const MAX_TRANSACTION_DURATION: Duration = Duration::from_millis(200);
 
 /// Container tracking all known clients.
 #[derive(Debug)]
@@ -71,9 +65,9 @@ pub struct Windows {
 }
 
 impl Windows {
-    pub fn new(renderer: &mut Gles2Renderer) -> Self {
+    pub fn new(renderer: &mut Gles2Renderer, output: &Output) -> Self {
         Self {
-            graphics: Graphics::new(renderer).expect("texture creation error"),
+            graphics: Graphics::new(renderer, output).expect("texture creation error"),
             start_time: Instant::now(),
             transaction: Default::default(),
             secondary: Default::default(),
@@ -120,10 +114,10 @@ impl Windows {
             },
             View::DragAndDrop(ref dnd) => {
                 self.with_visible(|window| window.draw(renderer, frame, output, 1., None));
-                dnd.draw(renderer, frame, output, &self.windows, &self.graphics);
+                dnd.draw(renderer, frame, output, &self.windows, &mut self.graphics);
             },
             View::Overview(ref mut overview) => {
-                overview.draw(renderer, frame, output, &self.windows);
+                overview.draw(renderer, frame, output, &self.windows, &mut self.graphics);
             },
         }
     }
@@ -427,22 +421,6 @@ impl Windows {
     }
 }
 
-/// Grahpics texture cache.
-#[derive(Debug)]
-struct Graphics {
-    active_drop_target: Texture,
-    drop_target: Texture,
-}
-
-impl Graphics {
-    fn new(renderer: &mut Gles2Renderer) -> Result<Self, Gles2Error> {
-        Ok(Self {
-            active_drop_target: Texture::from_buffer(renderer, &ACTIVE_DROP_TARGET_RGBA, 1, 1)?,
-            drop_target: Texture::from_buffer(renderer, &DROP_TARGET_RGBA, 1, 1)?,
-        })
-    }
-}
-
 /// Compositor window arrangements.
 #[derive(Copy, Clone, PartialEq, Debug)]
 enum View {
@@ -539,6 +517,7 @@ impl Overview {
         frame: &mut Gles2Frame,
         output: &Output,
         windows: &[Rc<RefCell<Window>>],
+        graphics: &mut Graphics,
     ) {
         let window_count = windows.len() as i32;
         self.clamp_offset(window_count);
@@ -557,6 +536,11 @@ impl Overview {
         let output_size = output.size();
         let max_size = output_size.scale(FG_OVERVIEW_PERCENTAGE);
 
+        // Window decoration.
+        let decoration = graphics.decoration(renderer, output);
+        let border_width = Graphics::border_width(output);
+        let title_height = Graphics::title_height(output);
+
         // Render each window at the desired location in the overview.
         for (position, i) in neg_iter.chain(pos_iter) {
             let mut window = windows[i as usize].borrow_mut();
@@ -572,14 +556,21 @@ impl Overview {
                 output_size.w,
                 max_size.w,
                 position as f64 - self.x_offset.fract().round() + self.x_offset.fract(),
-            );
-            let y_position = (output_size.h - max_size.h) / 2;
+            ) - border_width;
+            let y_position = (output_size.h - max_size.h + title_height + border_width) / 2;
             let mut bounds = Rectangle::from_loc_and_size((x_position, y_position), max_size);
 
             // Offset windows in the process of being closed.
             if position == min_inc.max(0) {
                 bounds.loc.y += self.y_offset.round() as i32;
             }
+
+            // Draw decoration.
+            let decoration_bounds = Rectangle::from_loc_and_size(
+                (bounds.loc.x - border_width, bounds.loc.y - title_height),
+                decoration.size(),
+            );
+            decoration.draw_at(frame, output, decoration_bounds, 1.);
 
             window.draw(renderer, frame, output, scale, bounds);
         }
@@ -616,13 +607,34 @@ impl DragAndDrop {
         frame: &mut Gles2Frame,
         output: &Output,
         windows: &[Rc<RefCell<Window>>],
-        graphics: &Graphics,
+        graphics: &mut Graphics,
     ) {
-        // Render the subject of the drag and drop.
         let output_size = output.size();
-        let size = output_size.scale(FG_OVERVIEW_PERCENTAGE);
-        let loc = (output_size - size).to_point() / 2 + self.window_position.to_i32_round();
-        let bounds = Rectangle::from_loc_and_size(loc, size);
+        let border_width = Graphics::border_width(output);
+        let title_height = Graphics::title_height(output);
+
+        // Calculate window bounds.
+        let max_size = output_size.scale(FG_OVERVIEW_PERCENTAGE);
+        let x_position = overview_x_position(
+            FG_OVERVIEW_PERCENTAGE,
+            BG_OVERVIEW_PERCENTAGE,
+            output_size.w,
+            max_size.w,
+            self.overview_x_offset.fract() - self.overview_x_offset.fract().round(),
+        ) - border_width;
+        let y_position = (output_size.h - max_size.h + title_height + border_width) / 2;
+        let mut bounds = Rectangle::from_loc_and_size((x_position, y_position), max_size);
+        bounds.loc += self.window_position.to_i32_round();
+
+        // Render decoration for the window.
+        let decoration = graphics.decoration(renderer, output);
+        let decoration_bounds = Rectangle::from_loc_and_size(
+            (bounds.loc.x - border_width, bounds.loc.y - title_height),
+            decoration.size(),
+        );
+        decoration.draw_at(frame, output, decoration_bounds, 1.);
+
+        // Render the window being drag-and-dropped.
         let mut window = windows[self.window_index].borrow_mut();
         window.draw(renderer, frame, output, FG_OVERVIEW_PERCENTAGE, bounds);
 
@@ -821,7 +833,7 @@ impl Window {
                 state.states.set(State::Maximized);
             }
 
-            // Always use server-side decorations.
+            // Always use server-side decoration.
             state.decoration_mode = Some(DecorationMode::ServerSide);
         });
 

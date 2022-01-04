@@ -92,7 +92,7 @@ impl Catacomb {
             .expect("adding keyboard");
 
         // Initialize all available shells.
-        let shells = Shells::new(&mut display, renderer);
+        let shells = Shells::new(&mut display, renderer, &output);
 
         Self {
             display: Rc::new(RefCell::new(display)),
