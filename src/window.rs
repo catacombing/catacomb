@@ -420,8 +420,12 @@ impl Windows {
             transaction.primary = Weak::new();
         }
 
-        // Set primary and recompute window dimensions.
-        transaction.secondary = weak_window;
+        // Set secondary and move old one to primary if it is empty.
+        let old_secondary = mem::replace(&mut transaction.secondary, weak_window);
+        if transaction.primary.strong_count() == 0 {
+            transaction.primary = old_secondary;
+        }
+
         transaction.update_dimensions(output);
     }
 }
