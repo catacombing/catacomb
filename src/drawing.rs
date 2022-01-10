@@ -1,14 +1,18 @@
 //! Drawing utilities.
 
+use std::ops::Deref;
 use std::rc::Rc;
 
+use smithay::backend::renderer;
 use smithay::backend::renderer::gles2::{ffi, Gles2Error, Gles2Frame, Gles2Renderer, Gles2Texture};
 use smithay::backend::renderer::{Frame, Transform};
-use smithay::utils::{Logical, Point, Rectangle, Size};
+use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
+use smithay::utils::{Logical, Physical, Point, Rectangle, Size};
+use smithay::wayland::compositor::{BufferAssignment, SurfaceAttributes};
 
-use crate::geometry::CatacombVector;
+use crate::geometry::Vector;
 use crate::output::Output;
-use crate::window::FG_OVERVIEW_PERCENTAGE;
+use crate::overview::FG_OVERVIEW_PERCENTAGE;
 
 /// Color of the hovered overview tiling location highlight.
 const ACTIVE_DROP_TARGET_RGBA: [u8; 4] = [128, 128, 128, 128];
@@ -227,5 +231,66 @@ impl Graphics {
         let height = window_size.h + title_height + border_width;
 
         Size::from((width, height))
+    }
+}
+
+/// Surface buffer cache.
+pub struct SurfaceBuffer {
+    pub texture: Option<Rc<Gles2Texture>>,
+    pub buffer: Option<Buffer>,
+    pub scale: i32,
+
+    dimensions: Size<i32, Physical>,
+}
+
+impl Default for SurfaceBuffer {
+    fn default() -> Self {
+        Self {
+            scale: 1,
+            dimensions: Default::default(),
+            texture: Default::default(),
+            buffer: Default::default(),
+        }
+    }
+}
+
+impl SurfaceBuffer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Handle buffer creation/removal.
+    pub fn update_buffer(&mut self, attributes: &SurfaceAttributes, assignment: BufferAssignment) {
+        match assignment {
+            BufferAssignment::NewBuffer { buffer, .. } => {
+                self.dimensions = renderer::buffer_dimensions(&buffer).unwrap_or_default();
+                self.scale = attributes.buffer_scale;
+                self.buffer = Some(Buffer(buffer));
+                self.texture = None;
+            },
+            BufferAssignment::Removed => *self = Self::default(),
+        }
+    }
+
+    /// Surface size.
+    pub fn size(&self) -> Size<i32, Logical> {
+        self.dimensions.to_logical(self.scale)
+    }
+}
+
+/// Container for automatically releasing a buffer on drop.
+pub struct Buffer(WlBuffer);
+
+impl Drop for Buffer {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+impl Deref for Buffer {
+    type Target = WlBuffer;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }

@@ -4,7 +4,7 @@ use std::cmp;
 
 use smithay::utils::{Point, Size};
 
-pub trait CatacombVector: Sized {
+pub trait Vector: Sized {
     /// Scale the size by a scaling factor.
     fn scale(&self, scale: f64) -> Self;
 
@@ -32,7 +32,7 @@ impl<K> IntoVector for Size<i32, K> {
     }
 }
 
-impl<T> CatacombVector for T
+impl<T> Vector for T
 where
     T: IntoVector,
     T: From<(i32, i32)>,

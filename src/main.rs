@@ -17,7 +17,9 @@ mod catacomb;
 mod drawing;
 mod geometry;
 mod input;
+mod layer;
 mod output;
+mod overview;
 mod shell;
 mod window;
 

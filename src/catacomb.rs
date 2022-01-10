@@ -9,6 +9,7 @@ use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{EventLoop, Interest, Mode as TriggerMode, PostAction};
 use smithay::reexports::wayland_server::Display;
+use smithay::wayland::output::xdg;
 use smithay::wayland::seat::{KeyboardHandle, Seat, XkbConfig};
 use smithay::wayland::shell::legacy::decoration as kde_decoration;
 use smithay::wayland::shell::legacy::decoration::KdeDecorationRequest;
@@ -48,7 +49,7 @@ impl Catacomb {
             .into_string()
             .expect("wayland socket name");
         env::set_var("WAYLAND_DISPLAY", &socket_name);
-        println!("Wayland socket: {}", socket_name);
+        println!("Wayland socket: {socket_name}");
 
         // Subscribe to Wayland socket events.
         event_loop
@@ -94,6 +95,9 @@ impl Catacomb {
         // Initialize all available shells.
         let shells = Shells::new(&mut display, renderer, &output);
 
+        // XDG output protocol.
+        xdg::init_xdg_output_manager(&mut display, None);
+
         Self {
             display: Rc::new(RefCell::new(display)),
             windows: shells.windows,
@@ -110,10 +114,10 @@ impl Catacomb {
         let mut display = display.borrow_mut();
         match display.dispatch(Duration::from_millis(0), self) {
             Ok(_) => Ok(PostAction::Continue),
-            Err(e) => {
-                eprintln!("I/O error on the Wayland display: {}", e);
+            Err(error) => {
+                eprintln!("I/O error on the Wayland display: {error}");
                 self.terminated = true;
-                Err(e)
+                Err(error)
             },
         }
     }
