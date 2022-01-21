@@ -16,10 +16,10 @@ use smithay::wayland::compositor::{
     self, Damage, SubsurfaceCachedState, SurfaceAttributes, SurfaceData, TraversalAction,
 };
 use smithay::wayland::shell::wlr_layer::{
-    Anchor, Layer, LayerSurface, LayerSurfaceAttributes, LayerSurfaceCachedState, LayerSurfaceState,
+    Anchor, ExclusiveZone, Layer, LayerSurface, LayerSurfaceAttributes, LayerSurfaceCachedState,
 };
 use smithay::wayland::shell::xdg::{
-    SurfaceCachedState, ToplevelState, ToplevelSurface, XdgToplevelSurfaceRoleAttributes,
+    SurfaceCachedState, ToplevelSurface, XdgToplevelSurfaceRoleAttributes,
 };
 use wayland_protocols::xdg_shell::server::xdg_toplevel::State;
 use xdg_decoration::v1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
@@ -27,7 +27,7 @@ use xdg_decoration::v1::server::zxdg_toplevel_decoration_v1::Mode as DecorationM
 use crate::drawing::{Graphics, SurfaceBuffer, Texture};
 use crate::input::HOLD_DURATION;
 use crate::layer::Layers;
-use crate::output::Output;
+use crate::output::{Output, ExclusiveSpace};
 use crate::overview::{Direction, DragAndDrop, Overview};
 
 /// Horizontal sensitivity of the application overview.
@@ -76,8 +76,8 @@ impl Windows {
     }
 
     /// Add a new layer shell window.
-    pub fn add_layer(&mut self, layer: Layer, surface: LayerSurface) {
-        self.layers.add(layer, surface);
+    pub fn add_layer(&mut self, layer: Layer, surface: impl Into<CatacombLayerSurface>) {
+        self.layers.add(layer, surface.into());
     }
 
     /// Find the XDG shell window responsible for a specific surface.
@@ -110,12 +110,18 @@ impl Windows {
         }
 
         // Handle layer shell surface commits.
+        let old_exclusive = output.exclusive;
         let transaction = self.transaction.get_or_insert(Transaction::new(self));
-        for mut window in self.layers.iter().map(|window| window.borrow_mut()) {
+        for mut window in self.layers.iter_mut() {
             if window.surface.get_surface() == Some(&root_surface) {
                 window.surface_commit(surface, output, transaction);
-                return;
+                break;
             }
+        }
+
+        // Resize windows after exclusive zone change.
+        if output.exclusive != old_exclusive {
+            self.resize_all(output);
         }
     }
 
@@ -151,11 +157,21 @@ impl Windows {
     }
 
     /// Update window manager state.
-    pub fn refresh(&mut self, output: &Output) {
-        if self.windows.iter().any(|window| !window.borrow().alive()) {
+    pub fn refresh(&mut self, output: &mut Output) {
+        // Handle layer shell death.
+        let old_exclusive = output.exclusive;
+        for window in self.layers.iter() {
+            if !window.alive() {
+                self.transaction.get_or_insert(Transaction::new(self));
+                output.exclusive.reset(window.surface.anchor, window.surface.exclusive_zone);
+            }
+        }
+
+        // Resize windows on demand.
+        if output.exclusive != old_exclusive {
+            self.resize_all(output);
+        } else if self.windows.iter().any(|window| !window.borrow().alive()) {
             self.refresh_visible(output);
-        } else if self.layers.iter().any(|window| !window.borrow().alive()) {
-            self.start_transaction();
         }
 
         // Start D&D on long touch in overview.
@@ -182,7 +198,7 @@ impl Windows {
             transaction.primary = mem::take(&mut transaction.secondary);
         }
 
-        transaction.update_dimensions(output);
+        transaction.update_visible_dimensions(output);
     }
 
     /// Create a new transaction, or access the active one.
@@ -201,7 +217,7 @@ impl Windows {
         if Instant::now().duration_since(transaction.start) <= MAX_TRANSACTION_DURATION {
             // Check if all participants are ready.
             let finished = self.windows.iter().all(|window| window.borrow().transaction_done())
-                && self.layers.iter().all(|window| window.borrow().transaction_done());
+                && self.layers.iter().all(|window| window.transaction_done());
 
             // Abort if the transaction is still pending.
             if !finished {
@@ -245,25 +261,30 @@ impl Windows {
     }
 
     /// Resize all windows to their expected size.
-    pub fn resize_all(&mut self, output: &Output) {
+    pub fn resize_all(&mut self, output: &mut Output) {
         let transaction = self.transaction.get_or_insert(Transaction::new(self));
 
         // Resize invisible windows.
         for window in &self.windows {
             let mut window = window.borrow_mut();
-            let rectangle = Rectangle::from_loc_and_size((0, 0), output.size());
+            let rectangle = Rectangle::from_loc_and_size((0, 0), output.available().size);
             window.set_dimensions(transaction, rectangle);
         }
 
         // Resize primary/secondary.
-        transaction.update_dimensions(output);
+        transaction.update_visible_dimensions(output);
+
+        // Resize layer shell windows.
+        for mut window in self.layers.iter_mut() {
+            window.update_dimensions(output, transaction);
+        }
     }
 
     /// Handle start of touch input.
     pub fn on_touch_start(&mut self, output: &Output, point: Point<f64, Logical>) {
         if let View::Overview(overview) = &mut self.view {
             // Click inside focused window stages it for opening as secondary.
-            let window_bounds = overview.focused_bounds(output.size(), self.windows.len());
+            let window_bounds = overview.focused_bounds(output, self.windows.len());
             if window_bounds.contains(point.to_i32_round()) {
                 overview.hold_start = Some(Instant::now());
             }
@@ -283,7 +304,7 @@ impl Windows {
         overview.hold_start = None;
 
         // Click inside focused window opens it as primary.
-        let window_bounds = overview.focused_bounds(output.size(), self.windows.len());
+        let window_bounds = overview.focused_bounds(output, self.windows.len());
         if window_bounds.contains(point.to_i32_round()) {
             let index = overview.focused_index(self.windows.len());
 
@@ -332,7 +353,7 @@ impl Windows {
     pub fn on_drag_release(&mut self, output: &Output) {
         match self.view {
             View::Overview(ref mut overview) => {
-                let close_distance = output.size().h as f64 * OVERVIEW_CLOSE_DISTANCE;
+                let close_distance = output.available().size.h as f64 * OVERVIEW_CLOSE_DISTANCE;
                 let should_close = overview.y_offset.abs() >= close_distance;
 
                 overview.last_overdrag_step = Some(Instant::now());
@@ -421,7 +442,7 @@ impl Windows {
             transaction.secondary = old_primary;
         }
 
-        transaction.update_dimensions(output);
+        transaction.update_visible_dimensions(output);
     }
 
     /// Change the secondary window.
@@ -454,7 +475,7 @@ impl Windows {
             transaction.primary = old_secondary;
         }
 
-        transaction.update_dimensions(output);
+        transaction.update_visible_dimensions(output);
     }
 }
 
@@ -494,8 +515,8 @@ impl Transaction {
         }
     }
 
-    /// Update window dimensions.
-    pub fn update_dimensions(&mut self, output: &Output) {
+    /// Update visible window dimensions.
+    pub fn update_visible_dimensions(&mut self, output: &Output) {
         if let Some(mut primary) = self.primary.upgrade().as_ref().map(|s| s.borrow_mut()) {
             let secondary_visible = self.secondary.strong_count() > 0;
             let rectangle = output.primary_rectangle(secondary_visible);
@@ -544,8 +565,6 @@ impl TextureCache {
 
 /// Common surface functionality.
 pub trait Surface {
-    type State;
-
     fn get_surface(&self) -> Option<&WlSurface>;
 
     /// Check if the window has been closed.
@@ -565,8 +584,6 @@ pub trait Surface {
 }
 
 impl Surface for ToplevelSurface {
-    type State = ToplevelState;
-
     fn get_surface(&self) -> Option<&WlSurface> {
         self.get_surface()
     }
@@ -634,33 +651,44 @@ impl Surface for ToplevelSurface {
     }
 }
 
-impl Surface for LayerSurface {
-    type State = LayerSurfaceState;
+#[derive(Debug)]
+pub struct CatacombLayerSurface {
+    pub exclusive_zone: ExclusiveZone,
+    pub anchor: Anchor,
+    surface: LayerSurface,
+}
 
+impl From<LayerSurface> for CatacombLayerSurface {
+    fn from(surface: LayerSurface) -> Self {
+        Self { surface, exclusive_zone: Default::default(), anchor: Default::default() }
+    }
+}
+
+impl Surface for CatacombLayerSurface {
     fn get_surface(&self) -> Option<&WlSurface> {
-        self.get_surface()
+        self.surface.get_surface()
     }
 
     fn alive(&self) -> bool {
-        self.alive()
+        self.surface.alive()
     }
 
     fn send_close(&self) {
-        self.send_close()
+        self.surface.send_close()
     }
 
     fn reconfigure(&self, size: Size<i32, Logical>) {
-        let result = self.with_pending_state(|state| {
+        let result = self.surface.with_pending_state(|state| {
             state.size = Some(size);
         });
 
         if result.is_ok() {
-            self.send_configure();
+            self.surface.send_configure();
         }
     }
 
     fn acked_size(&self) -> Size<i32, Logical> {
-        let surface = match self.get_surface() {
+        let surface = match self.surface.get_surface() {
             Some(surface) => surface,
             None => return Size::default(),
         };
@@ -764,10 +792,10 @@ impl<S: Surface> Window<S> {
 
         let bounds = bounds.into().unwrap_or_else(|| {
             // Center window inside its space.
-            let x_offset = ((self.rectangle.size.w - self.texture_cache.size.w) / 2).max(0);
-            let y_offset = ((self.rectangle.size.h - self.texture_cache.size.h) / 2).max(0);
-            let loc = self.rectangle.loc + Size::from((x_offset, y_offset));
-            Rectangle::from_loc_and_size(loc, output.size())
+            let mut bounds = self.rectangle;
+            bounds.loc.x += ((bounds.size.w - self.texture_cache.size.w) / 2).max(0);
+            bounds.loc.y += ((bounds.size.h - self.texture_cache.size.h) / 2).max(0);
+            bounds
         });
 
         for texture in &self.texture_cache.textures {
@@ -818,9 +846,8 @@ impl<S: Surface> Window<S> {
                     None => return TraversalAction::SkipChildren,
                 };
 
-                let damage: Vec<_> = surface_data
-                    .cached_state
-                    .current::<SurfaceAttributes>()
+                let attributes = surface_data.cached_state.current::<SurfaceAttributes>();
+                let damage: Vec<_> = attributes
                     .damage
                     .iter()
                     .map(|damage| match damage {
@@ -889,7 +916,7 @@ impl<S: Surface> Window<S> {
         self.visible = false;
 
         // Resize to fullscreen for app overview.
-        let rectangle = Rectangle::from_loc_and_size((0, 0), output.size());
+        let rectangle = Rectangle::from_loc_and_size((0, 0), output.available().size);
         self.set_dimensions(transaction, rectangle);
     }
 
@@ -975,58 +1002,74 @@ impl Window {
     }
 }
 
-impl Window<LayerSurface> {
+impl Window<CatacombLayerSurface> {
     /// Handle a surface commit for this window.
-    fn surface_commit(&mut self, surface: &WlSurface, output: &Output, transaction: &Transaction) {
+    fn surface_commit(
+        &mut self,
+        surface: &WlSurface,
+        output: &mut Output,
+        transaction: &Transaction,
+    ) {
         self.update_dimensions(output, transaction);
         self.surface_commit_common(surface, output);
     }
 
     /// Recompute the window's size and location.
-    fn update_dimensions(&mut self, output: &Output, transaction: &Transaction) {
+    fn update_dimensions(&mut self, output: &mut Output, transaction: &Transaction) {
         let surface = match self.surface.get_surface() {
             Some(surface) => surface,
             None => return,
         };
 
-        let (mut window_size, anchor, margin) = compositor::with_states(surface, |states| {
+        let (mut size, margin, anchor, exclusive) = compositor::with_states(surface, |states| {
             let state = states.cached_state.current::<LayerSurfaceCachedState>();
-            (state.size, state.anchor, state.margin)
+            (state.size, state.margin, state.anchor, state.exclusive_zone)
         })
         .unwrap_or_default();
-        let output_size = output.size();
+        let output_size = output.screen_size();
+
+        // Update exclusive zones.
+        let old_anchor = mem::replace(&mut self.surface.anchor, anchor);
+        let old_exclusive = mem::replace(&mut self.surface.exclusive_zone, exclusive);
+        output.exclusive.reset(old_anchor, old_exclusive);
+        output.exclusive.update(anchor, exclusive);
+
+        let exclusive = match exclusive {
+            ExclusiveZone::Neutral => output.exclusive,
+            _ => ExclusiveSpace::default(),
+        };
 
         // Window size.
-        if window_size.w == 0 && anchor.contains(Anchor::LEFT | Anchor::RIGHT) {
-            window_size.w = output_size.w;
+        if size.w == 0 && anchor.contains(Anchor::LEFT | Anchor::RIGHT) {
+            size.w = output_size.w - exclusive.left - exclusive.right;
             if anchor.contains(Anchor::RIGHT) {
-                window_size.w -= margin.right;
+                size.w -= margin.right;
             }
         }
-        if window_size.h == 0 && anchor.contains(Anchor::TOP | Anchor::BOTTOM) {
-            window_size.h = output_size.h;
+        if size.h == 0 && anchor.contains(Anchor::TOP | Anchor::BOTTOM) {
+            size.h = output_size.h - exclusive.top - exclusive.bottom;
             if anchor.contains(Anchor::BOTTOM) {
-                window_size.h -= margin.bottom;
+                size.h -= margin.bottom;
             }
         }
 
         // Window location.
         let x = if anchor.contains(Anchor::LEFT) {
-            margin.left
+            margin.left + exclusive.left
         } else if anchor.contains(Anchor::RIGHT) {
-            output_size.w - window_size.w - margin.right
+            output_size.w - size.w - margin.right - exclusive.right
         } else {
-            (output_size.w - window_size.w) / 2
+            (output_size.w - size.w) / 2
         };
         let y = if anchor.contains(Anchor::TOP) {
-            margin.top
+            margin.top + exclusive.top
         } else if anchor.contains(Anchor::BOTTOM) {
-            output_size.h - window_size.h - margin.bottom
+            output_size.h - size.h - margin.bottom - exclusive.bottom
         } else {
-            (output_size.h - window_size.h) / 2
+            (output_size.h - size.h) / 2
         };
 
-        let dimensions = Rectangle::from_loc_and_size((x, y), window_size);
+        let dimensions = Rectangle::from_loc_and_size((x, y), size);
         self.set_dimensions(transaction, dimensions);
     }
 }

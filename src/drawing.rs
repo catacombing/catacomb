@@ -226,7 +226,7 @@ impl Graphics {
         let title_height = Self::title_height(output);
         let border_width = Self::border_width(output);
 
-        let window_size = output.size().scale(FG_OVERVIEW_PERCENTAGE);
+        let window_size = output.available().size.scale(FG_OVERVIEW_PERCENTAGE);
         let width = window_size.w + border_width * 2;
         let height = window_size.h + title_height + border_width;
 

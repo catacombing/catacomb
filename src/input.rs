@@ -68,8 +68,8 @@ impl Catacomb {
                 } else {
                     self.output.orientation = Orientation::Landscape;
                 }
-                self.output.mode.size = size;
-                self.windows.borrow_mut().resize_all(&self.output);
+                self.output.resize(size);
+                self.windows.borrow_mut().resize_all(&mut self.output);
             },
             WinitEvent::Input(event) => self.handle_input(event),
             _ => (),
@@ -98,7 +98,7 @@ impl Catacomb {
                 };
             },
             InputEvent::PointerMotionAbsolute { event } => {
-                let position = event.position_transformed(self.output.size());
+                let position = event.position_transformed(self.output.screen_size());
 
                 if let Some(TouchAction::Drag) = self.touch_state.action() {
                     self.windows.borrow_mut().on_drag(position);

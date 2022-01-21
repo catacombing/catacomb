@@ -71,7 +71,7 @@ fn main() {
             .expect("buffer swap");
 
         // Handle window liveliness changes.
-        catacomb.windows.borrow_mut().refresh(&catacomb.output);
+        catacomb.windows.borrow_mut().refresh(&mut catacomb.output);
 
         catacomb.windows.borrow_mut().request_frames();
         display.borrow_mut().flush_clients(&mut catacomb);

@@ -53,20 +53,17 @@ impl Overview {
     }
 
     /// Focused window bounds.
-    pub fn focused_bounds(
-        &self,
-        output_size: Size<i32, Logical>,
-        window_count: usize,
-    ) -> Rectangle<i32, Logical> {
-        let window_size = output_size.scale(FG_OVERVIEW_PERCENTAGE);
+    pub fn focused_bounds(&self, output: &Output, window_count: usize) -> Rectangle<i32, Logical> {
+        let available = output.available();
+        let window_size = available.size.scale(FG_OVERVIEW_PERCENTAGE);
         let x = overview_x_position(
             FG_OVERVIEW_PERCENTAGE,
             BG_OVERVIEW_PERCENTAGE,
-            output_size.w,
+            available.size.w,
             window_size.w,
             self.focused_index(window_count) as f64 + self.x_offset,
-        );
-        let y = (output_size.h - window_size.h) / 2;
+        ) + available.loc.x;
+        let y = (available.size.h - window_size.h) / 2 + available.loc.y;
         Rectangle::from_loc_and_size((x, y), window_size)
     }
 
@@ -126,8 +123,8 @@ impl Overview {
         let pos_iter = (min_inc.max(0)..max_exc).zip(-min_inc.min(0)..window_count).rev();
 
         // Maximum window size. Bigger windows will be truncated.
-        let output_size = output.size();
-        let max_size = output_size.scale(FG_OVERVIEW_PERCENTAGE);
+        let available = output.available();
+        let max_size = available.size.scale(FG_OVERVIEW_PERCENTAGE);
 
         // Window decoration.
         let decoration = graphics.decoration(renderer, output);
@@ -143,15 +140,15 @@ impl Overview {
             let scale = (max_size.w as f64 / window_geometry.size.w as f64).min(1.);
 
             // Window boundaries.
-            let x_position = overview_x_position(
+            let mut bounds = Rectangle::from_loc_and_size(available.loc, max_size);
+            bounds.loc.x += overview_x_position(
                 FG_OVERVIEW_PERCENTAGE,
                 BG_OVERVIEW_PERCENTAGE,
-                output_size.w,
+                available.size.w,
                 max_size.w,
                 position as f64 - self.x_offset.fract().round() + self.x_offset.fract(),
             ) - border_width;
-            let y_position = (output_size.h - max_size.h + title_height + border_width) / 2;
-            let mut bounds = Rectangle::from_loc_and_size((x_position, y_position), max_size);
+            bounds.loc.y += (available.size.h - max_size.h + title_height + border_width) / 2;
 
             // Offset windows in the process of being closed.
             if position == min_inc.max(0) {
@@ -202,21 +199,23 @@ impl DragAndDrop {
         windows: &[Rc<RefCell<Window>>],
         graphics: &mut Graphics,
     ) {
-        let output_size = output.size();
+        let available = output.available();
         let border_width = Graphics::border_width(output);
         let title_height = Graphics::title_height(output);
 
         // Calculate window bounds.
-        let max_size = output_size.scale(FG_OVERVIEW_PERCENTAGE);
-        let x_position = overview_x_position(
+        let max_size = available.size.scale(FG_OVERVIEW_PERCENTAGE);
+        let mut bounds = Rectangle::from_loc_and_size(available.loc, max_size);
+        bounds.loc.x += overview_x_position(
             FG_OVERVIEW_PERCENTAGE,
             BG_OVERVIEW_PERCENTAGE,
-            output_size.w,
+            available.size.w,
             max_size.w,
             self.overview_x_offset.fract() - self.overview_x_offset.fract().round(),
         ) - border_width;
-        let y_position = (output_size.h - max_size.h + title_height + border_width) / 2;
-        let mut bounds = Rectangle::from_loc_and_size((x_position, y_position), max_size);
+        bounds.loc.y += (available.size.h - max_size.h + title_height + border_width) / 2;
+
+        // Offset by dragged distance.
         bounds.loc += self.window_position.to_i32_round();
 
         // Render decoration for the window.
@@ -240,7 +239,7 @@ impl DragAndDrop {
         let (primary_bounds, secondary_bounds) = self.drop_bounds(output);
 
         // Render the drop areas.
-        let scale = cmp::max(output_size.w, output_size.h) as f64;
+        let scale = cmp::max(available.size.w, available.size.h) as f64;
         for bounds in [primary_bounds, secondary_bounds] {
             if bounds.to_f64().contains(self.touch_position) {
                 graphics.active_drop_target.draw_at(frame, output, bounds, scale);
@@ -260,20 +259,27 @@ impl DragAndDrop {
         &self,
         output: &Output,
     ) -> (Rectangle<i32, Logical>, Rectangle<i32, Logical>) {
-        let output_size = output.size();
+        let available = output.available();
         match output.orientation {
             Orientation::Landscape => {
-                let dnd_width = (output_size.w as f64 * DRAG_AND_DROP_PERCENTAGE).round() as i32;
-                let size = Size::from((dnd_width, output_size.h));
-                let primary = Rectangle::from_loc_and_size((0, 0), size);
-                let secondary = Rectangle::from_loc_and_size((output_size.w - dnd_width, 0), size);
+                let dnd_width = (available.size.w as f64 * DRAG_AND_DROP_PERCENTAGE).round() as i32;
+                let size = Size::from((dnd_width, available.size.h));
+                let primary = Rectangle::from_loc_and_size(available.loc, size);
+
+                let mut secondary = primary;
+                secondary.loc.x += available.size.w - dnd_width;
+
                 (primary, secondary)
             },
             Orientation::Portrait => {
-                let dnd_height = (output_size.h as f64 * DRAG_AND_DROP_PERCENTAGE).round() as i32;
-                let size = Size::from((output_size.w, dnd_height));
-                let primary = Rectangle::from_loc_and_size((0, 0), size);
-                let secondary = Rectangle::from_loc_and_size((0, output_size.h - dnd_height), size);
+                let dnd_height =
+                    (available.size.h as f64 * DRAG_AND_DROP_PERCENTAGE).round() as i32;
+                let size = Size::from((available.size.w, dnd_height));
+                let primary = Rectangle::from_loc_and_size(available.loc, size);
+
+                let mut secondary = primary;
+                secondary.loc.y += available.size.h - dnd_height;
+
                 (primary, secondary)
             },
         }

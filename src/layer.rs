@@ -1,26 +1,28 @@
 //! Layer shell windows.
 
-use std::cell::RefCell;
+use std::cell::{RefCell, RefMut, Ref};
 use std::rc::Rc;
 
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
-use smithay::wayland::shell::wlr_layer::{Layer, LayerSurface};
+use smithay::wayland::shell::wlr_layer::Layer;
 
 use crate::output::Output;
-use crate::window::{Surface, Window};
+use crate::window::{CatacombLayerSurface, Window};
+
+type LayerWindow = Rc<RefCell<Window<CatacombLayerSurface>>>;
 
 /// Layer shell windows.
 #[derive(Debug, Default)]
 pub struct Layers {
-    background: Vec<Rc<RefCell<Window<LayerSurface>>>>,
-    bottom: Vec<Rc<RefCell<Window<LayerSurface>>>>,
-    top: Vec<Rc<RefCell<Window<LayerSurface>>>>,
-    overlay: Vec<Rc<RefCell<Window<LayerSurface>>>>,
+    background: Vec<LayerWindow>,
+    bottom: Vec<LayerWindow>,
+    top: Vec<LayerWindow>,
+    overlay: Vec<LayerWindow>,
 }
 
 impl Layers {
     /// Add a new layer shell window.
-    pub fn add(&mut self, layer: Layer, surface: LayerSurface) {
+    pub fn add(&mut self, layer: Layer, surface: CatacombLayerSurface) {
         let window = Rc::new(RefCell::new(Window::new(surface)));
         match layer {
             Layer::Background => self.background.push(window),
@@ -31,8 +33,13 @@ impl Layers {
     }
 
     /// Request new frames for all layer windows.
-    pub fn iter(&mut self) -> impl Iterator<Item = &Rc<RefCell<Window<LayerSurface>>>> {
-        self.background.iter().chain(&self.bottom).chain(&self.top).chain(&self.overlay)
+    pub fn iter(&self) -> impl Iterator<Item = Ref<'_, Window<CatacombLayerSurface>>> {
+        self.background.iter().chain(&self.bottom).chain(&self.top).chain(&self.overlay).map(|window| window.borrow())
+    }
+
+    /// Request new frames for all layer windows.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = RefMut<'_, Window<CatacombLayerSurface>>> {
+        self.background.iter().chain(&self.bottom).chain(&self.top).chain(&self.overlay).map(|window| window.borrow_mut())
     }
 
     /// Draw background/bottom layer windows.
@@ -69,8 +76,8 @@ impl Layers {
 
     /// Request new frames from all layer shell windows.
     pub fn request_frames(&mut self, runtime: u32) {
-        for window in self.iter() {
-            window.borrow_mut().request_frame(runtime);
+        for mut window in self.iter_mut() {
+            window.request_frame(runtime);
         }
     }
 
@@ -83,7 +90,7 @@ impl Layers {
     }
 
     /// Apply the window's current transaction then check whether it still is alive.
-    fn apply_transaction_filter<S: Surface>(window: &Rc<RefCell<Window<S>>>) -> bool {
+    fn apply_transaction_filter(window: &LayerWindow) -> bool {
         let mut window = window.borrow_mut();
         window.apply_transaction();
         window.alive()
