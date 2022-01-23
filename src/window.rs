@@ -27,7 +27,7 @@ use xdg_decoration::v1::server::zxdg_toplevel_decoration_v1::Mode as DecorationM
 use crate::drawing::{Graphics, SurfaceBuffer, Texture};
 use crate::input::HOLD_DURATION;
 use crate::layer::Layers;
-use crate::output::{Output, ExclusiveSpace};
+use crate::output::{ExclusiveSpace, Output};
 use crate::overview::{Direction, DragAndDrop, Overview};
 
 /// Horizontal sensitivity of the application overview.
@@ -834,7 +834,7 @@ impl<S: Surface> Window<S> {
 
                 // Skip surface if buffer was already imported.
                 if let Some(texture) = &data.texture {
-                    let texture = Texture::new(texture.clone(), data.size(), location, data.scale);
+                    let texture = Texture::from_surface(texture.clone(), location, &data);
                     self.texture_cache.push(texture);
                     return TraversalAction::DoChildren(location);
                 }
@@ -852,7 +852,11 @@ impl<S: Surface> Window<S> {
                     .iter()
                     .map(|damage| match damage {
                         Damage::Buffer(rect) => *rect,
-                        Damage::Surface(rect) => rect.to_buffer(data.scale),
+                        Damage::Surface(rect) => rect.to_buffer(
+                            data.scale,
+                            data.transform,
+                            &data.size,
+                        ),
                     })
                     .collect();
 
@@ -866,7 +870,7 @@ impl<S: Surface> Window<S> {
                         // Update and cache the texture.
                         let texture = Rc::new(texture);
                         data.texture = Some(texture.clone());
-                        let texture = Texture::new(texture, data.size(), location, data.scale);
+                        let texture = Texture::from_surface(texture, location, &data);
                         self.texture_cache.push(texture);
 
                         TraversalAction::DoChildren(location)

@@ -5,9 +5,9 @@ use std::rc::Rc;
 
 use smithay::backend::renderer;
 use smithay::backend::renderer::gles2::{ffi, Gles2Error, Gles2Frame, Gles2Renderer, Gles2Texture};
-use smithay::backend::renderer::{Frame, Transform};
+use smithay::backend::renderer::Frame;
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
-use smithay::utils::{Logical, Physical, Point, Rectangle, Size};
+use smithay::utils::{Logical, Point, Rectangle, Size, Transform};
 use smithay::wayland::compositor::{BufferAssignment, SurfaceAttributes};
 
 use crate::geometry::Vector;
@@ -44,17 +44,33 @@ pub struct Texture {
     size: Size<i32, Logical>,
     location: Point<i32, Logical>,
     texture: Rc<Gles2Texture>,
+    transform: Transform,
     scale: i32,
 }
 
 impl Texture {
-    pub fn new(
+    pub fn new(texture: Rc<Gles2Texture>, size: impl Into<Size<i32, Logical>>) -> Self {
+        Self {
+            size: size.into(),
+            texture,
+            transform: Default::default(),
+            location: Default::default(),
+            scale: 1,
+        }
+    }
+
+    pub fn from_surface(
         texture: Rc<Gles2Texture>,
-        size: impl Into<Size<i32, Logical>>,
         location: impl Into<Point<i32, Logical>>,
-        scale: i32,
+        buffer: &SurfaceBuffer,
     ) -> Self {
-        Self { size: size.into(), location: location.into(), texture, scale }
+        Self {
+            location: location.into(),
+            transform: buffer.transform,
+            scale: buffer.scale,
+            size: buffer.size,
+            texture,
+        }
     }
 
     /// Create a texture from an RGBA buffer.
@@ -88,7 +104,7 @@ impl Texture {
             Gles2Texture::from_raw(renderer, tex, (width, height).into())
         })?;
 
-        Ok(Texture::new(Rc::new(texture), (width, height), (0, 0), 1))
+        Ok(Texture::new(Rc::new(texture), (width, height)))
     }
 
     /// Render the texture at the specified location.
@@ -112,6 +128,7 @@ impl Texture {
         // Truncate source size based on window bounds.
         let src_size = (self.size + self.location).min(scaled_window_bounds);
         let src = Rectangle::from_loc_and_size((0, 0), src_size);
+        let src_physical = src.to_buffer(self.scale, self.transform, &self.size);
 
         // Scale output size based on window scale.
         let location = window_bounds.loc + self.location.scale(window_scale);
@@ -120,8 +137,9 @@ impl Texture {
 
         let _ = frame.render_texture_from_to(
             &self.texture,
-            src.to_buffer(self.scale),
+            src_physical,
             dest.to_f64().to_physical(output.scale),
+            &[src_physical],
             Transform::Normal,
             1.,
         );
@@ -237,17 +255,18 @@ impl Graphics {
 /// Surface buffer cache.
 pub struct SurfaceBuffer {
     pub texture: Option<Rc<Gles2Texture>>,
+    pub size: Size<i32, Logical>,
     pub buffer: Option<Buffer>,
+    pub transform: Transform,
     pub scale: i32,
-
-    dimensions: Size<i32, Physical>,
 }
 
 impl Default for SurfaceBuffer {
     fn default() -> Self {
         Self {
             scale: 1,
-            dimensions: Default::default(),
+            size: Default::default(),
+            transform: Default::default(),
             texture: Default::default(),
             buffer: Default::default(),
         }
@@ -263,18 +282,16 @@ impl SurfaceBuffer {
     pub fn update_buffer(&mut self, attributes: &SurfaceAttributes, assignment: BufferAssignment) {
         match assignment {
             BufferAssignment::NewBuffer { buffer, .. } => {
-                self.dimensions = renderer::buffer_dimensions(&buffer).unwrap_or_default();
+                self.size = renderer::buffer_dimensions(&buffer)
+                    .unwrap_or_default()
+                    .to_logical(self.scale, self.transform);
+                self.transform = attributes.buffer_transform.into();
                 self.scale = attributes.buffer_scale;
                 self.buffer = Some(Buffer(buffer));
                 self.texture = None;
             },
             BufferAssignment::Removed => *self = Self::default(),
         }
-    }
-
-    /// Surface size.
-    pub fn size(&self) -> Size<i32, Logical> {
-        self.dimensions.to_logical(self.scale)
     }
 }
 

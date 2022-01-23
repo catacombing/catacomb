@@ -2,11 +2,12 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use smithay::backend::renderer::{Frame, ImportDma, ImportEgl};
+use smithay::backend::renderer::{Frame, ImportDma, ImportEgl, Renderer, TextureFilter};
 use smithay::backend::winit;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::protocol::wl_output::Subpixel;
 use smithay::reexports::wayland_server::Display;
+use smithay::utils::{Transform, Rectangle};
 use smithay::wayland::dmabuf;
 use smithay::wayland::output::{Mode, PhysicalProperties};
 
@@ -28,6 +29,8 @@ fn main() {
 
     let (graphics, mut input) = winit::init(None).expect("init winit");
     let graphics = Rc::new(RefCell::new(graphics));
+    graphics.borrow_mut().bind().expect("binding renderer");
+    let _ = graphics.borrow_mut().renderer().downscale_filter(TextureFilter::Linear);
 
     // Setup hardware acceleration.
     if graphics.borrow_mut().renderer().bind_wl_display(&display).is_ok() {
@@ -62,13 +65,18 @@ fn main() {
             break;
         }
 
+        let logical_size = catacomb.output.screen_size().to_f64();
+        let output_size = logical_size.to_physical(catacomb.output.scale).to_i32_round();
         graphics
             .borrow_mut()
-            .render(|renderer, frame| {
-                let _ = frame.clear([1., 0., 1., 1.]);
+            .renderer()
+            .render(output_size, Transform::Flipped180, |renderer, frame| {
+                let full_rect = Rectangle::from_loc_and_size((0, 0), output_size);
+                let _ = frame.clear([1., 0., 1., 1.], &[full_rect]);
                 catacomb.draw(renderer, frame);
             })
-            .expect("buffer swap");
+            .expect("render");
+        graphics.borrow_mut().submit(None, 1.0).expect("submit");
 
         // Handle window liveliness changes.
         catacomb.windows.borrow_mut().refresh(&mut catacomb.output);
