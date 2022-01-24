@@ -1,6 +1,6 @@
 //! Layer shell windows.
 
-use std::cell::{RefCell, RefMut, Ref};
+use std::cell::{Ref, RefCell, RefMut};
 use std::rc::Rc;
 
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
@@ -34,12 +34,22 @@ impl Layers {
 
     /// Request new frames for all layer windows.
     pub fn iter(&self) -> impl Iterator<Item = Ref<'_, Window<CatacombLayerSurface>>> {
-        self.background.iter().chain(&self.bottom).chain(&self.top).chain(&self.overlay).map(|window| window.borrow())
+        self.background
+            .iter()
+            .chain(&self.bottom)
+            .chain(&self.top)
+            .chain(&self.overlay)
+            .map(|window| window.borrow())
     }
 
     /// Request new frames for all layer windows.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = RefMut<'_, Window<CatacombLayerSurface>>> {
-        self.background.iter().chain(&self.bottom).chain(&self.top).chain(&self.overlay).map(|window| window.borrow_mut())
+        self.background
+            .iter()
+            .chain(&self.bottom)
+            .chain(&self.top)
+            .chain(&self.overlay)
+            .map(|window| window.borrow_mut())
     }
 
     /// Draw background/bottom layer windows.

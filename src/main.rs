@@ -7,7 +7,7 @@ use smithay::backend::winit;
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::protocol::wl_output::Subpixel;
 use smithay::reexports::wayland_server::Display;
-use smithay::utils::{Transform, Rectangle};
+use smithay::utils::{Rectangle, Transform};
 use smithay::wayland::dmabuf;
 use smithay::wayland::output::{Mode, PhysicalProperties};
 

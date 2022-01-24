@@ -852,11 +852,9 @@ impl<S: Surface> Window<S> {
                     .iter()
                     .map(|damage| match damage {
                         Damage::Buffer(rect) => *rect,
-                        Damage::Surface(rect) => rect.to_buffer(
-                            data.scale,
-                            data.transform,
-                            &data.size,
-                        ),
+                        Damage::Surface(rect) => {
+                            rect.to_buffer(data.scale, data.transform, &data.size)
+                        },
                     })
                     .collect();
 
