@@ -2,7 +2,7 @@
 
 use std::ops::Deref;
 
-use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
+use smithay::reexports::wayland_server::protocol::wl_output::{Subpixel, WlOutput};
 use smithay::reexports::wayland_server::{Display, Global};
 use smithay::utils::{Logical, Physical, Rectangle, Size};
 use smithay::wayland::output::{Mode, Output as SmithayOutput, PhysicalProperties};
@@ -50,6 +50,24 @@ impl Output {
             mode,
             exclusive: Default::default(),
         }
+    }
+
+    /// Create a new dummy output.
+    pub fn new_dummy(display: &mut Display) -> Self {
+        let mode = Mode { size: (0, 0).into(), refresh: 0 };
+        Output::new(display, "dummy-0", mode, PhysicalProperties {
+            subpixel: Subpixel::Unknown,
+            model: "dummy-0".into(),
+            make: "dummy-0".into(),
+            size: (0, 0).into(),
+        })
+    }
+
+    /// Update the output's active mode.
+    pub fn set_mode(&mut self, mode: Mode) {
+        self.output.change_current_state(Some(mode), None, Some(SCALE), None);
+        self.output.set_preferred(mode);
+        self.mode = mode;
     }
 
     /// Primary window dimensions.

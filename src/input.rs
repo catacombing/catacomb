@@ -11,7 +11,7 @@ use smithay::utils::{Logical, Point};
 use smithay::wayland::seat::{keysyms, FilterResult};
 use smithay::wayland::SERIAL_COUNTER;
 
-use crate::catacomb::Catacomb;
+use crate::catacomb::{Backend, Catacomb};
 use crate::output::Orientation;
 
 /// Time before a tap is considered a hold.
@@ -57,7 +57,7 @@ impl TouchAction {
     }
 }
 
-impl Catacomb {
+impl<B: Backend> Catacomb<B> {
     /// Process winit-specific input events.
     pub fn handle_winit_input(&mut self, event: WinitEvent) {
         match event {
@@ -77,7 +77,7 @@ impl Catacomb {
     }
 
     /// Process new input events.
-    fn handle_input<B: InputBackend>(&mut self, event: InputEvent<B>) {
+    pub fn handle_input<I: InputBackend>(&mut self, event: InputEvent<I>) {
         match event {
             InputEvent::Keyboard { event, .. } => self.handle_keyboard_input(event),
             InputEvent::PointerButton { event } if event.button() == Some(MouseButton::Left) => {
@@ -111,21 +111,25 @@ impl Catacomb {
     }
 
     /// Handle new keyboard input events.
-    fn handle_keyboard_input<B: InputBackend>(&mut self, event: impl KeyboardKeyEvent<B>) {
+    fn handle_keyboard_input<I: InputBackend>(&mut self, event: impl KeyboardKeyEvent<I>) {
         let serial = SERIAL_COUNTER.next_serial();
         let time = Event::time(&event);
         let keycode = event.key_code();
         let state = event.state();
 
         self.keyboard.input(keycode, state, serial, time, |modifiers, keysym| {
-            if modifiers.ctrl && keysym.modified_sym() == keysyms::KEY_t {
-                if state == KeyState::Released {
+            match keysym.modified_sym() {
+                keysyms::KEY_t if modifiers.ctrl && state == KeyState::Released => {
                     self.windows.borrow_mut().toggle_overview();
-                }
-                FilterResult::Intercept(())
-            } else {
-                FilterResult::Forward
+                },
+                keysym @ keysyms::KEY_XF86Switch_VT_1..=keysyms::KEY_XF86Switch_VT_12 => {
+                    let vt = (keysym - keysyms::KEY_XF86Switch_VT_1 + 1) as i32;
+                    self.backend.change_vt(vt);
+                },
+                _ => return FilterResult::Forward,
             }
+
+            FilterResult::Intercept(())
         });
     }
 }
