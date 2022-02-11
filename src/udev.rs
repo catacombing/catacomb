@@ -10,11 +10,11 @@ use smithay::backend::egl::context::EGLContext;
 use smithay::backend::egl::display::EGLDisplay;
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::gles2::Gles2Renderer;
-use smithay::backend::renderer::{Bind, Frame, Renderer};
+use smithay::backend::renderer::{Bind, Frame, ImportDma, ImportEgl, Renderer};
 use smithay::backend::session::auto::AutoSession;
 use smithay::backend::session::{Session, Signal};
 use smithay::backend::udev::{UdevBackend, UdevEvent};
-use smithay::backend::SwapBuffersError;
+use smithay::backend::{udev, SwapBuffersError};
 use smithay::reexports::calloop::{Dispatcher, EventLoop, LoopHandle, RegistrationToken};
 use smithay::reexports::drm::control::connector::State as ConnectorState;
 use smithay::reexports::drm::control::Device;
@@ -24,6 +24,7 @@ use smithay::reexports::nix::sys::stat::dev_t as DeviceId;
 use smithay::reexports::wayland_server::protocol::wl_output::Subpixel;
 use smithay::utils::signaling::{Linkable, SignalToken, Signaler};
 use smithay::utils::{Rectangle, Transform};
+use smithay::wayland::dmabuf;
 use smithay::wayland::output::{Mode, PhysicalProperties};
 
 use crate::catacomb::{Backend, Catacomb};
@@ -39,6 +40,20 @@ pub fn run() {
     for (_, path) in backend.device_list() {
         let _ = catacomb.add_device(path.into());
     }
+
+    // Setup hardware acceleration.
+    let output_device = catacomb.backend.output_device.as_ref();
+    let formats = output_device.map(|device| device.renderer.dmabuf_formats().cloned().collect());
+    dmabuf::init_dmabuf_global(
+        &mut catacomb.display.borrow_mut(),
+        formats.unwrap_or_default(),
+        |buffer, mut data| {
+            let catacomb = data.get::<Catacomb<Udev>>().unwrap();
+            let output_device = catacomb.backend.output_device.as_mut();
+            output_device.and_then(|device| device.renderer.import_dmabuf(buffer).ok()).is_some()
+        },
+        None,
+    );
 
     // Setup input handling.
 
@@ -82,6 +97,7 @@ pub struct Udev {
     output_device: Option<OutputDevice>,
     signaler: Signaler<Signal>,
     session: AutoSession,
+    gpu: Option<PathBuf>,
 }
 
 impl Udev {
@@ -96,7 +112,10 @@ impl Udev {
         // Register session with the event loop so objects can link to the signaler.
         event_loop.handle().insert_source(notifier, |_, _, _| {}).expect("insert notifier source");
 
-        Self { handle, signaler, session, output_device: None }
+        // Find active GPUs for hardware acceleration.
+        let gpu = udev::primary_gpu(session.seat()).ok().flatten();
+
+        Self { handle, signaler, session, gpu, output_device: None }
     }
 }
 
@@ -157,8 +176,14 @@ impl Catacomb<Udev> {
         let display = EGLDisplay::new(&gbm, None)?;
         let context = EGLContext::new(&display, None)?;
 
-        let renderer = unsafe { Gles2Renderer::new(context, None).expect("create renderer") };
+        let mut renderer = unsafe { Gles2Renderer::new(context, None).expect("create renderer") };
 
+        // Initialize GPU for EGL rendering.
+        if Some(path) == self.backend.gpu {
+            let _ = renderer.bind_wl_display(&self.display.borrow());
+        }
+
+        // Create the surface we will render to.
         let gbm_surface = self.create_gbm_surface(&renderer, &drm, &gbm).ok_or("gbm surface")?;
 
         // Redraw when VT is focused.
@@ -198,8 +223,13 @@ impl Catacomb<Udev> {
 
     fn remove_device(&mut self, device_id: DeviceId) {
         let output_device = self.backend.output_device.take();
-        if let Some(output_device) = output_device.filter(|device| device.id == device_id) {
+        if let Some(mut output_device) = output_device.filter(|device| device.id == device_id) {
             self.backend.handle.remove(output_device.token);
+
+            // Disable hardware acceleration when the GPU is removed.
+            if output_device.gbm.dev_path() == self.backend.gpu {
+                output_device.renderer.unbind_wl_display();
+            }
         }
     }
 
