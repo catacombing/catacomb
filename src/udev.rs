@@ -131,7 +131,7 @@ impl Backend for Udev {
 
 /// Target device for rendering.
 struct OutputDevice {
-    gbm_surface: GbmBufferedSurface<RawFd>,
+    gbm_surface: GbmBufferedSurface<GbmDevice<RawFd>, RawFd>,
     gbm: GbmDevice<RawFd>,
     renderer: Gles2Renderer,
     id: DeviceId,
@@ -248,7 +248,7 @@ impl Catacomb<Udev> {
         renderer: &Gles2Renderer,
         drm: &DrmDevice<RawFd>,
         gbm: &GbmDevice<RawFd>,
-    ) -> Option<GbmBufferedSurface<RawFd>> {
+    ) -> Option<GbmBufferedSurface<GbmDevice<RawFd>, RawFd>> {
         let formats = Bind::<Dmabuf>::supported_formats(renderer)?;
         let resources = drm.resource_handles().ok()?;
 

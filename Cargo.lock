@@ -282,10 +282,11 @@ checksum = "9ea835d29036a4087793836fa931b08837ad5e957da9e23886b29586fb9b6650"
 
 [[package]]
 name = "drm"
-version = "0.5.0"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c00d7f6793e5450d907535c66e036b3bb8db6df933025e3ceb0aac1e8f6c63de"
+checksum = "408e87132bd0d8a13a3b418b9d51fb92973b764d1d40785947d233ab2945fd27"
 dependencies = [
+ "bitflags",
  "drm-ffi",
  "drm-fourcc",
  "nix",
@@ -348,9 +349,9 @@ checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
 name = "gbm"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "040856dd5202dbb14f492bd7802e10782a39238fc0bff3a6dcd4feb89e2a7d8e"
+checksum = "06678321b809dfa34ca3be8ac2cb91b22116f86ba37b1610a752eaf90594c450"
 dependencies = [
  "bitflags",
  "drm",
@@ -919,7 +920,7 @@ checksum = "f2dd574626839106c320a323308629dcb1acfc96e32a8cba364ddc61ac23ee83"
 [[package]]
 name = "smithay"
 version = "0.3.0"
-source = "git+https://github.com/chrisduerr/smithay?rev=3550afb969b010fc662a95784e84e68662e8a0ea#3550afb969b010fc662a95784e84e68662e8a0ea"
+source = "git+https://github.com/chrisduerr/smithay?rev=512265ed8011521151da03963882302302454341#512265ed8011521151da03963882302302454341"
 dependencies = [
  "appendlist",
  "bitflags",
