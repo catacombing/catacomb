@@ -305,7 +305,7 @@ impl Windows {
 
         // Click inside focused window opens it as primary.
         let window_bounds = overview.focused_bounds(output, self.windows.len());
-        if window_bounds.contains(point.to_i32_round()) {
+        if !self.windows.is_empty() && window_bounds.contains(point.to_i32_round()) {
             let index = overview.focused_index(self.windows.len());
 
             // Clear secondary unless *only* primary is empty.
