@@ -17,7 +17,7 @@ scriptdir="$(dirname ${BASH_SOURCE[0]})"
 "$scriptdir/build.sh"
 
 # Find executable
-binpath=$(find ./target/aarch64-unknown-linux-gnu/debug -maxdepth 1 -type f -executable | head -n 1)
+binpath=$(find ./target/aarch64-unknown-linux-gnu/release -maxdepth 1 -type f -executable | head -n 1)
 bin=$(basename "$binpath")
 
 # Strip to improve copy speed

@@ -18,4 +18,4 @@ export PKG_CONFIG_ALLOW_CROSS=true
 export RUSTFLAGS="-C linker=aarch64-linux-gnu-gcc -C link-arg=--sysroot=${SYSROOT}"
 
 # Build!
-cargo build --target=aarch64-unknown-linux-gnu
+cargo build --release --target=aarch64-unknown-linux-gnu
