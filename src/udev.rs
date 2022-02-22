@@ -83,7 +83,7 @@ pub fn run() {
     // Continously dispatch event loop.
     let display = catacomb.display.clone();
     loop {
-        if event_loop.dispatch(Some(Duration::from_millis(5)), &mut catacomb).is_err() {
+        if event_loop.dispatch(Some(Duration::from_millis(10)), &mut catacomb).is_err() {
             eprintln!("event loop error");
             break;
         }

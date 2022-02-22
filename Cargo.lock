@@ -61,6 +61,7 @@ dependencies = [
 name = "catacomb"
 version = "0.1.0"
 dependencies = [
+ "calloop",
  "smithay",
  "wayland-commons",
  "wayland-protocols",

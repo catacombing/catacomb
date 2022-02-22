@@ -9,6 +9,7 @@ use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{EventLoop, Interest, Mode as TriggerMode, PostAction};
 use smithay::reexports::wayland_server::Display;
+use smithay::utils::Rectangle;
 use smithay::wayland::output::xdg;
 use smithay::wayland::seat::{KeyboardHandle, Seat, XkbConfig};
 use smithay::wayland::shell::legacy::decoration as kde_decoration;
@@ -17,6 +18,7 @@ use smithay::wayland::shell::xdg::decoration;
 use smithay::wayland::{data_device, shm};
 use wayland_protocols::misc::server_decoration::server::org_kde_kwin_server_decoration_manager::Mode;
 
+use crate::drawing::Graphics;
 use crate::input::TouchState;
 use crate::output::Output;
 use crate::shell::Shells;
@@ -31,6 +33,9 @@ pub struct Catacomb<B> {
     pub terminated: bool,
     pub output: Output,
     pub backend: B,
+
+    graphics: Graphics,
+    touch_debug: bool,
 
     // NOTE: Must be last field to ensure it's dropped after any global.
     pub display: Rc<RefCell<Display>>,
@@ -99,14 +104,16 @@ impl<B: Backend + 'static> Catacomb<B> {
         xdg::init_xdg_output_manager(&mut display, None);
 
         Self {
+            touch_state: TouchState::new(event_loop.handle()),
             output: Output::new_dummy(&mut display),
             display: Rc::new(RefCell::new(display)),
             windows: shells.windows,
             seat_name,
             keyboard,
             backend,
-            touch_state: Default::default(),
+            touch_debug: Default::default(),
             terminated: Default::default(),
+            graphics: Default::default(),
         }
     }
 
@@ -126,7 +133,15 @@ impl<B: Backend + 'static> Catacomb<B> {
 
     /// Render the current compositor state.
     pub fn draw(&mut self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame) {
-        self.windows.borrow_mut().draw(renderer, frame, &self.output);
+        // Render debug indicator showing current touch location.
+        if self.touch_debug {
+            let loc = self.touch_state.position.to_i32_round();
+            let touch_debug = self.graphics.touch_debug(renderer);
+            let rect = Rectangle::from_loc_and_size(loc, self.output.screen_size());
+            touch_debug.draw_at(frame, &self.output, rect, 1.);
+        }
+
+        self.windows.borrow_mut().draw(renderer, frame, &mut self.graphics, &self.output);
     }
 }
 

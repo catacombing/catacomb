@@ -25,16 +25,13 @@ use wayland_protocols::xdg_shell::server::xdg_toplevel::State;
 use xdg_decoration::v1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 
 use crate::drawing::{Graphics, SurfaceBuffer, Texture};
-use crate::input::HOLD_DURATION;
+use crate::input::{Gesture, TouchState, HOLD_DURATION};
 use crate::layer::Layers;
 use crate::output::{ExclusiveSpace, Output};
 use crate::overview::{Direction, DragAndDrop, Overview};
 
 /// Horizontal sensitivity of the application overview.
 const OVERVIEW_HORIZONTAL_SENSITIVITY: f64 = 250.;
-
-/// Percentage of the output height a window can be moved before closing it in the overview.
-const OVERVIEW_CLOSE_DISTANCE: f64 = 0.5;
 
 /// Maximum time before a transaction is cancelled.
 const MAX_TRANSACTION_DURATION: Duration = Duration::from_millis(200);
@@ -51,7 +48,6 @@ pub struct Windows {
 
     transaction: Option<Transaction>,
     start_time: Instant,
-    graphics: Graphics,
 }
 
 impl Windows {
@@ -60,7 +56,6 @@ impl Windows {
             start_time: Instant::now(),
             transaction: Default::default(),
             secondary: Default::default(),
-            graphics: Default::default(),
             windows: Default::default(),
             primary: Default::default(),
             layers: Default::default(),
@@ -126,7 +121,13 @@ impl Windows {
     }
 
     /// Draw the current window state.
-    pub fn draw(&mut self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame, output: &Output) {
+    pub fn draw(
+        &mut self,
+        renderer: &mut Gles2Renderer,
+        frame: &mut Gles2Frame,
+        graphics: &mut Graphics,
+        output: &Output,
+    ) {
         self.update_transaction();
 
         self.layers.draw_background(renderer, frame, output);
@@ -137,10 +138,10 @@ impl Windows {
             },
             View::DragAndDrop(ref dnd) => {
                 self.with_visible(|window| window.draw(renderer, frame, output, 1., None));
-                dnd.draw(renderer, frame, output, &self.windows, &mut self.graphics);
+                dnd.draw(renderer, frame, output, &self.windows, graphics);
             },
             View::Overview(ref mut overview) => {
-                overview.draw(renderer, frame, output, &self.windows, &mut self.graphics);
+                overview.draw(renderer, frame, output, &self.windows, graphics);
             },
         }
 
@@ -291,6 +292,7 @@ impl Windows {
 
             overview.last_drag_point = point;
             overview.drag_direction = None;
+            overview.y_offset = 0.;
         }
     }
 
@@ -319,10 +321,27 @@ impl Windows {
     }
 
     /// Handle a touch drag.
-    pub fn on_drag(&mut self, point: Point<f64, Logical>) {
+    pub fn on_drag(
+        &mut self,
+        output: &Output,
+        touch_state: &mut TouchState,
+        mut point: Point<f64, Logical>,
+    ) {
         let overview = match &mut self.view {
             View::Overview(overview) => overview,
             View::DragAndDrop(dnd) => {
+                // Cancel velocity and clamp if touch position is outside the screen.
+                let output_size = output.screen_size().to_f64();
+                if point.x < 0.
+                    || point.x > output_size.w
+                    || point.y < 0.
+                    || point.y > output_size.h
+                {
+                    point.x = point.x.clamp(0., output_size.w - 1.);
+                    point.y = point.y.clamp(0., output_size.h - 1.);
+                    touch_state.cancel_velocity();
+                }
+
                 let delta = point - mem::replace(&mut dnd.touch_position, point);
                 dnd.window_position += delta;
                 return;
@@ -345,16 +364,20 @@ impl Windows {
             Direction::Vertical => overview.y_offset += delta.y,
         }
 
+        // Cancel velocity once drag actions are completed.
+        if overview.should_close(output) || overview.overdrag_limited(self.windows.len()) {
+            touch_state.cancel_velocity();
+        }
+
         overview.last_overdrag_step = None;
         overview.hold_start = None;
     }
 
-    /// Handle touch release.
+    /// Handle touch drag release.
     pub fn on_drag_release(&mut self, output: &Output) {
         match self.view {
             View::Overview(ref mut overview) => {
-                let close_distance = output.available().size.h as f64 * OVERVIEW_CLOSE_DISTANCE;
-                let should_close = overview.y_offset.abs() >= close_distance;
+                let should_close = overview.should_close(output);
 
                 overview.last_overdrag_step = Some(Instant::now());
                 overview.y_offset = 0.;
@@ -384,19 +407,28 @@ impl Windows {
         }
     }
 
+    /// Handle touch gestures.
+    pub fn on_gesture(&mut self, output: &Output, gesture: Gesture) {
+        match (gesture, self.view) {
+            (Gesture::Overview, _) => self.set_view(View::Overview(Overview::default())),
+            (Gesture::Home, View::Workspace) => {
+                self.set_secondary(output, None);
+                self.set_primary(output, None);
+                self.set_view(View::Workspace);
+            },
+            (Gesture::Home, View::Overview(_)) => self.set_view(View::Workspace),
+            _ => (),
+        }
+    }
+
     /// Application runtime.
     pub fn runtime(&self) -> u32 {
         self.start_time.elapsed().as_millis() as u32
     }
 
-    /// Show the application overview.
-    pub fn toggle_overview(&mut self) {
-        let current_view = self.view;
-        let transaction = self.start_transaction();
-        transaction.view = match transaction.view.unwrap_or(current_view) {
-            View::Overview(_) | View::DragAndDrop(_) => Some(View::Workspace),
-            View::Workspace => Some(View::Overview(Overview::default())),
-        };
+    /// Check if the overview is currently visible.
+    pub fn overview_active(&self) -> bool {
+        matches!(self.view, View::Overview(_))
     }
 
     /// Change the active view.
@@ -438,7 +470,7 @@ impl Windows {
 
         // Set primary and move old one to secondary if it is empty.
         let old_primary = mem::replace(&mut transaction.primary, weak_window);
-        if transaction.secondary.strong_count() == 0 {
+        if transaction.secondary.strong_count() == 0 && transaction.primary.strong_count() != 0 {
             transaction.secondary = old_primary;
         }
 
@@ -471,7 +503,7 @@ impl Windows {
 
         // Set secondary and move old one to primary if it is empty.
         let old_secondary = mem::replace(&mut transaction.secondary, weak_window);
-        if transaction.primary.strong_count() == 0 {
+        if transaction.primary.strong_count() == 0 && transaction.secondary.strong_count() != 0 {
             transaction.primary = old_secondary;
         }
 

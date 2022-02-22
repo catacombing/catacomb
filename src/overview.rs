@@ -22,6 +22,9 @@ const BG_OVERVIEW_PERCENTAGE: f64 = 0.5;
 /// Percentage of the screen for the drop highlight areas.
 const DRAG_AND_DROP_PERCENTAGE: f64 = 0.3;
 
+/// Percentage of the output height a window can be moved before closing it in the overview.
+const OVERVIEW_CLOSE_DISTANCE: f64 = 0.25;
+
 /// Animation speed for the return from close, lower means faster.
 const CLOSE_CANCEL_ANIMATION_SPEED: f64 = 0.3;
 
@@ -164,6 +167,18 @@ impl Overview {
 
             window.draw(renderer, frame, output, scale, bounds);
         }
+    }
+
+    /// Check if the active window has exceeded the minimum close distance.
+    pub fn should_close(&self, output: &Output) -> bool {
+        let close_distance = output.available().size.h as f64 * OVERVIEW_CLOSE_DISTANCE;
+        self.y_offset.abs() >= close_distance
+    }
+
+    /// Check if the overdrag has run into a hard limit.
+    pub fn overdrag_limited(&self, window_count: usize) -> bool {
+        let min_offset = -(window_count as f64) + 1.;
+        self.x_offset <= min_offset - OVERDRAG_LIMIT || self.x_offset >= OVERDRAG_LIMIT
     }
 }
 

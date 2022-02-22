@@ -8,3 +8,4 @@ rust-version = "1.58.0"
 smithay = { git = "https://github.com/chrisduerr/smithay", rev = "512265ed8011521151da03963882302302454341", features = ["use_system_lib"] }
 wayland-protocols = "0.29.1"
 wayland-commons = "0.29.0"
+calloop = "0.9.3"

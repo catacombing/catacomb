@@ -118,6 +118,11 @@ impl Output {
     pub fn resize(&mut self, size: Size<i32, Physical>) {
         self.mode.size = size;
     }
+
+    /// Duration between frames in milliseconds.
+    pub fn frame_interval(&self) -> u64 {
+        1_000_000 / self.mode.refresh as u64
+    }
 }
 
 impl Deref for Output {
