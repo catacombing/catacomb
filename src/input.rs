@@ -217,7 +217,7 @@ impl<B: Backend> Catacomb<B> {
                     self.output.orientation = Orientation::Landscape;
                 }
                 self.output.resize(size);
-                self.windows.borrow_mut().resize_all(&mut self.output);
+                self.windows.resize_all(&mut self.output);
             },
             WinitEvent::Input(event) => self.handle_input(event),
             _ => (),
@@ -289,7 +289,7 @@ impl<B: Backend> Catacomb<B> {
 
         // Only send touch start if there's no gesture in progress.
         if self.touch_state.start.gesture.is_none() {
-            self.windows.borrow_mut().on_touch_start(&self.output, position);
+            self.windows.on_touch_start(&self.output, position);
         }
     }
 
@@ -301,10 +301,10 @@ impl<B: Backend> Catacomb<B> {
         }
         self.touch_state.slot = None;
 
-        let overview_active = self.windows.borrow().overview_active();
+        let overview_active = self.windows.overview_active();
         match self.touch_state.action(&self.output, overview_active) {
             Some(TouchAction::Tap) => {
-                self.windows.borrow_mut().on_tap(&self.output, self.touch_state.position);
+                self.windows.on_tap(&self.output, self.touch_state.position);
             },
             Some(TouchAction::Drag | TouchAction::Gesture(_)) => {
                 self.add_velocity_timeout();
@@ -330,15 +330,14 @@ impl<B: Backend> Catacomb<B> {
     /// NOTE: This should be called after adding new timeouts to allow clearing them instead of
     /// creating a loop which continuously triggers these actions.
     fn update_position(&mut self, position: Point<f64, Logical>) {
-        let overview_active = self.windows.borrow().overview_active();
+        let overview_active = self.windows.overview_active();
         match self.touch_state.action(&self.output, overview_active) {
             Some(TouchAction::Drag) => {
-                let mut windows = self.windows.borrow_mut();
-                windows.on_drag(&self.output, &mut self.touch_state, position);
+                self.windows.on_drag(&self.output, &mut self.touch_state, position);
 
                 // Signal drag end once no more velocity is present.
                 if !self.touch_state.touching() && !self.touch_state.has_velocity() {
-                    windows.on_drag_release(&self.output);
+                    self.windows.on_drag_release(&self.output);
                 }
             },
             Some(TouchAction::Gesture(gesture)) => self.on_gesture(gesture),
@@ -349,13 +348,13 @@ impl<B: Backend> Catacomb<B> {
     }
 
     /// Dispatch gestures if it was completed.
-    fn on_gesture(&self, gesture: Gesture) {
+    fn on_gesture(&mut self, gesture: Gesture) {
         // Only accept gestures when the touch input was released.
         if self.touch_state.touching() {
             return;
         }
 
-        self.windows.borrow_mut().on_gesture(&self.output, gesture);
+        self.windows.on_gesture(&self.output, gesture);
         self.touch_state.timer.cancel_all_timeouts();
     }
 

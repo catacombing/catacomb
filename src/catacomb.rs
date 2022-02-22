@@ -21,16 +21,16 @@ use wayland_protocols::misc::server_decoration::server::org_kde_kwin_server_deco
 use crate::drawing::Graphics;
 use crate::input::TouchState;
 use crate::output::Output;
-use crate::shell::Shells;
+use crate::shell;
 use crate::window::Windows;
 
 /// Shared compositor state.
 pub struct Catacomb<B> {
-    pub windows: Rc<RefCell<Windows>>,
     pub keyboard: KeyboardHandle,
     pub touch_state: TouchState,
     pub seat_name: String,
     pub terminated: bool,
+    pub windows: Windows,
     pub output: Output,
     pub backend: B,
 
@@ -98,7 +98,7 @@ impl<B: Backend + 'static> Catacomb<B> {
             .expect("adding keyboard");
 
         // Initialize all available shells.
-        let shells = Shells::new::<B>(&mut display);
+        shell::init::<B>(&mut display);
 
         // XDG output protocol.
         xdg::init_xdg_output_manager(&mut display, None);
@@ -107,7 +107,7 @@ impl<B: Backend + 'static> Catacomb<B> {
             touch_state: TouchState::new(event_loop.handle()),
             output: Output::new_dummy(&mut display),
             display: Rc::new(RefCell::new(display)),
-            windows: shells.windows,
+            windows: Windows::new(),
             seat_name,
             keyboard,
             backend,
@@ -141,7 +141,7 @@ impl<B: Backend + 'static> Catacomb<B> {
             touch_debug.draw_at(frame, &self.output, rect, 1.);
         }
 
-        self.windows.borrow_mut().draw(renderer, frame, &mut self.graphics, &self.output);
+        self.windows.draw(renderer, frame, &mut self.graphics, &self.output);
     }
 }
 

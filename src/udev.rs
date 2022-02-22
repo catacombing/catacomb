@@ -302,10 +302,10 @@ impl Catacomb<Udev> {
             let _ = device.render(self);
 
             // Handle window liveliness changes.
-            self.windows.borrow_mut().refresh(&mut self.output);
+            self.windows.refresh(&mut self.output);
 
             // Request new frames for visible windows.
-            self.windows.borrow_mut().request_frames();
+            self.windows.request_frames();
         }
 
         self.backend.output_device = device;

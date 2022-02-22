@@ -66,10 +66,10 @@ pub fn run() {
         graphics.borrow_mut().submit(None, 1.0).expect("submit");
 
         // Handle window liveliness changes.
-        catacomb.windows.borrow_mut().refresh(&mut catacomb.output);
+        catacomb.windows.refresh(&mut catacomb.output);
 
         // Request new frames for visible windows.
-        catacomb.windows.borrow_mut().request_frames();
+        catacomb.windows.request_frames();
 
         // NOTE: The timeout picked here is 5ms to allow for up to 200 FPS. Increasing it would
         // reduce the framerate, while decreasing it would mean that most of the vblank interval is
