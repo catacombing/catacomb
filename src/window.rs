@@ -421,6 +421,33 @@ impl Windows {
         }
     }
 
+    /// Find surface at the specified location.
+    pub fn surface_at_position(
+        &self,
+        output: &Output,
+        position: Point<f64, Logical>,
+    ) -> Option<(WlSurface, Point<i32, Logical>)> {
+        // Prevent window interaction in Overview/DnD.
+        match self.view {
+            View::Workspace => (),
+            _ => return None,
+        };
+
+        // Find window at the location.
+        let secondary_visible = self.secondary.strong_count() > 0;
+        let window = if output.primary_rectangle(secondary_visible).to_f64().contains(position) {
+            self.primary.upgrade()?
+        } else if output.secondary_rectangle().to_f64().contains(position) {
+            self.secondary.upgrade()?
+        } else {
+            return None;
+        };
+
+        // Get the correct subsurface.
+        let window = window.borrow();
+        window.surface_at_position(position)
+    }
+
     /// Application runtime.
     pub fn runtime(&self) -> u32 {
         self.start_time.elapsed().as_millis() as u32
@@ -822,17 +849,20 @@ impl<S: Surface> Window<S> {
             self.import_buffers(renderer);
         }
 
-        let bounds = bounds.into().unwrap_or_else(|| {
-            // Center window inside its space.
-            let mut bounds = self.rectangle;
-            bounds.loc.x += ((bounds.size.w - self.texture_cache.size.w) / 2).max(0);
-            bounds.loc.y += ((bounds.size.h - self.texture_cache.size.h) / 2).max(0);
-            bounds
-        });
+        let bounds = bounds.into().unwrap_or_else(|| self.bounds());
 
         for texture in &self.texture_cache.textures {
             texture.draw_at(frame, output, bounds, scale);
         }
+    }
+
+    /// Default window location and size.
+    fn bounds(&self) -> Rectangle<i32, Logical> {
+        // Center window inside its space.
+        let mut bounds = self.rectangle;
+        bounds.loc.x += ((bounds.size.w - self.texture_cache.size.w) / 2).max(0);
+        bounds.loc.y += ((bounds.size.h - self.texture_cache.size.h) / 2).max(0);
+        bounds
     }
 
     /// Import the buffers of all surfaces into the renderer.
@@ -1026,6 +1056,43 @@ impl<S: Surface> Window<S> {
         if self.visible {
             output.enter(surface);
         }
+    }
+
+    /// Find subsurface at the specified location.
+    fn surface_at_position(
+        &self,
+        position: Point<f64, Logical>,
+    ) -> Option<(WlSurface, Point<i32, Logical>)> {
+        let result = RefCell::new(None);
+        compositor::with_surface_tree_upward(
+            self.surface.get_surface()?,
+            self.bounds().loc,
+            |wl_surface, surface_data, location| {
+                let mut location = *location;
+                if surface_data.role == Some("subsurface") {
+                    let current = surface_data.cached_state.current::<SubsurfaceCachedState>();
+                    location += current.location;
+                }
+
+                // Calculate surface's bounding box.
+                let size = surface_data
+                    .data_map
+                    .get::<RefCell<SurfaceBuffer>>()
+                    .map_or_else(Size::default, |data| data.borrow().size);
+                let surface_rect = Rectangle::from_loc_and_size(location.to_f64(), size.to_f64());
+
+                // Check if the position is within the surface bounds.
+                if surface_rect.contains(position) {
+                    *result.borrow_mut() = Some((wl_surface.clone(), location));
+                    TraversalAction::SkipChildren
+                } else {
+                    TraversalAction::DoChildren(location)
+                }
+            },
+            |_, _, _| {},
+            |_, _, _| result.borrow().is_none(),
+        );
+        result.into_inner()
     }
 }
 

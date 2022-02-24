@@ -11,7 +11,7 @@ use smithay::backend::input::{
 };
 use smithay::backend::winit::WinitEvent;
 use smithay::utils::{Logical, Point, Rectangle, Size};
-use smithay::wayland::seat::{keysyms, FilterResult};
+use smithay::wayland::seat::{keysyms, FilterResult, TouchHandle};
 use smithay::wayland::SERIAL_COUNTER;
 
 use crate::catacomb::{Backend, Catacomb};
@@ -35,16 +35,17 @@ const FRICTION: f64 = 0.1;
 /// Touch input state.
 pub struct TouchState {
     pub position: Point<f64, Logical>,
-    slot: Option<Option<TouchSlot>>,
+    slot: Option<TouchSlot>,
     velocity: Point<f64, Logical>,
     events: Vec<TouchEvent>,
     timer: TimerHandle<()>,
+    touch: TouchHandle,
     start: TouchStart,
     is_drag: bool,
 }
 
 impl TouchState {
-    pub fn new<B: Backend>(loop_handle: LoopHandle<'_, Catacomb<B>>) -> Self {
+    pub fn new<B: Backend>(loop_handle: LoopHandle<'_, Catacomb<B>>, touch: TouchHandle) -> Self {
         let timer = Timer::new().expect("create timer");
         let timer_handle = timer.handle();
         loop_handle
@@ -54,6 +55,7 @@ impl TouchState {
         Self {
             start: TouchStart::new(Default::default(), Default::default()),
             timer: timer_handle,
+            touch,
             position: Default::default(),
             velocity: Default::default(),
             is_drag: Default::default(),
@@ -186,23 +188,27 @@ impl Gesture {
     }
 }
 
-/// Staged touch events waiting for a touch frame.
+/// Generic touch event.
 #[derive(Copy, Clone, Debug)]
-enum TouchEvent {
-    Down((Option<TouchSlot>, Point<f64, Logical>)),
-    Up(Option<TouchSlot>),
-    Move((Option<TouchSlot>, Point<f64, Logical>)),
+struct TouchEvent {
+    position: Point<f64, Logical>,
+    ty: TouchEventType,
+    slot: TouchSlot,
+    time: u32,
 }
 
 impl TouchEvent {
-    /// Get the touch event's associated slot.
-    fn slot(&self) -> Option<TouchSlot> {
-        match self {
-            TouchEvent::Down((slot, _)) => *slot,
-            TouchEvent::Up(slot) => *slot,
-            TouchEvent::Move((slot, _)) => *slot,
-        }
+    fn new(ty: TouchEventType, slot: TouchSlot, time: u32, position: Point<f64, Logical>) -> Self {
+        Self { slot, time, position, ty }
     }
+}
+
+/// Types of touch event.
+#[derive(Copy, Clone, Debug)]
+enum TouchEventType {
+    Down,
+    Up,
+    Motion,
 }
 
 impl<B: Backend> Catacomb<B> {
@@ -229,74 +235,89 @@ impl<B: Backend> Catacomb<B> {
         match event {
             InputEvent::Keyboard { event, .. } => self.on_keyboard_input(event),
             InputEvent::PointerButton { event } if event.button() == Some(MouseButton::Left) => {
+                let slot = TouchSlot::default();
+                let position = self.touch_state.position;
                 if event.state() == ButtonState::Pressed {
-                    self.on_touch_down(None, self.touch_state.position);
+                    self.on_touch_down(TouchEvent::new(TouchEventType::Down, slot, 0, position));
                 } else {
-                    self.on_touch_up(None);
+                    self.on_touch_up(TouchEvent::new(TouchEventType::Up, slot, 0, position));
                 }
             },
             InputEvent::PointerMotionAbsolute { event } => {
                 let position = event.position_transformed(self.output.screen_size());
-                self.on_touch_motion(None, position);
+                let slot = TouchSlot::default();
+                self.on_touch_motion(TouchEvent::new(TouchEventType::Down, slot, 0, position));
                 self.touch_state.position = position;
             },
             InputEvent::TouchDown { event } => {
                 let position = event.position_transformed(self.output.screen_size());
-                self.touch_state.events.push(TouchEvent::Down((event.slot(), position)));
+                let event_type = TouchEventType::Down;
+                let event = TouchEvent::new(event_type, event.slot(), event.time(), position);
+                self.touch_state.events.push(event);
             },
             InputEvent::TouchUp { event } => {
-                self.touch_state.events.push(TouchEvent::Up(event.slot()));
+                let position = self.touch_state.position;
+                let event_type = TouchEventType::Up;
+                let event = TouchEvent::new(event_type, event.slot(), event.time(), position);
+                self.touch_state.events.push(event);
             },
             InputEvent::TouchMotion { event } => {
                 let position = event.position_transformed(self.output.screen_size());
-                self.touch_state.events.push(TouchEvent::Move((event.slot(), position)));
+                let event_type = TouchEventType::Motion;
+                let event = TouchEvent::new(event_type, event.slot(), event.time(), position);
+                self.touch_state.events.push(event);
             },
             // Apply all pending touch events.
             InputEvent::TouchFrame { .. } => {
                 for i in 0..self.touch_state.events.len() {
                     let event = self.touch_state.events[i];
-                    match event {
-                        TouchEvent::Down((slot, position)) => {
-                            self.on_touch_down(slot, position);
-                        },
-                        TouchEvent::Up(slot) => self.on_touch_up(slot),
-                        TouchEvent::Move((slot, position)) => {
-                            self.on_touch_motion(slot, position);
-                        },
+                    match event.ty {
+                        TouchEventType::Down => self.on_touch_down(event),
+                        TouchEventType::Up => self.on_touch_up(event),
+                        TouchEventType::Motion => self.on_touch_motion(event),
                     }
                 }
                 self.touch_state.events.clear();
             },
             // Handle gesture touch cancel for nested compositors.
             InputEvent::TouchCancel { event } => {
-                self.touch_state.events.retain(|touch_event| touch_event.slot() != event.slot());
+                self.touch_state.events.retain(|touch_event| touch_event.slot != event.slot());
             },
             _ => (),
         };
     }
 
     /// Handle new touch input start.
-    fn on_touch_down(&mut self, slot: Option<TouchSlot>, position: Point<f64, Logical>) {
+    fn on_touch_down(&mut self, event: TouchEvent) {
+        // Notify client.
+        let surface = self.windows.surface_at_position(&self.output, event.position);
+        if let Some((surface, offset)) = surface {
+            self.touch_state.touch.down(event.time, &surface, offset, event.slot, event.position);
+        }
+
         // Allow only a single touch at a time.
         if self.touch_state.slot.is_some() {
             return;
         }
-        self.touch_state.slot = Some(slot);
+        self.touch_state.slot = Some(event.slot);
 
         // Initialize the touch state.
         let output_size = self.output.screen_size().to_f64();
-        self.touch_state.start(output_size, position);
+        self.touch_state.start(output_size, event.position);
 
         // Only send touch start if there's no gesture in progress.
         if self.touch_state.start.gesture.is_none() {
-            self.windows.on_touch_start(&self.output, position);
+            self.windows.on_touch_start(&self.output, event.position);
         }
     }
 
     /// Handle touch input release.
-    fn on_touch_up(&mut self, slot: Option<TouchSlot>) {
+    fn on_touch_up(&mut self, event: TouchEvent) {
+        // Notify client.
+        self.touch_state.touch.up(event.time, event.slot);
+
         // Check if slot is the active one.
-        if self.touch_state.slot != Some(slot) {
+        if self.touch_state.slot != Some(event.slot) {
             return;
         }
         self.touch_state.slot = None;
@@ -315,14 +336,17 @@ impl<B: Backend> Catacomb<B> {
     }
 
     /// Handle touch input movement.
-    fn on_touch_motion(&mut self, slot: Option<TouchSlot>, position: Point<f64, Logical>) {
+    fn on_touch_motion(&mut self, event: TouchEvent) {
+        // Notify client.
+        self.touch_state.touch.motion(event.time, event.slot, event.position);
+
         // Ignore anything but the active touch slot.
-        if self.touch_state.slot != Some(slot) {
+        if self.touch_state.slot != Some(event.slot) {
             return;
         }
 
-        self.touch_state.velocity = position - self.touch_state.position;
-        self.update_position(position);
+        self.touch_state.velocity = event.position - self.touch_state.position;
+        self.update_position(event.position);
     }
 
     /// Update the touch position.
@@ -356,6 +380,9 @@ impl<B: Backend> Catacomb<B> {
 
         self.windows.on_gesture(&self.output, gesture);
         self.touch_state.timer.cancel_all_timeouts();
+
+        // Notify client.
+        self.touch_state.touch.cancel();
     }
 
     /// Process a single velocity tick.

@@ -96,6 +96,7 @@ impl<B: Backend + 'static> Catacomb<B> {
                 )
             })
             .expect("adding keyboard");
+        let touch = seat.add_touch();
 
         // Initialize all available shells.
         shell::init::<B>(&mut display);
@@ -104,7 +105,7 @@ impl<B: Backend + 'static> Catacomb<B> {
         xdg::init_xdg_output_manager(&mut display, None);
 
         Self {
-            touch_state: TouchState::new(event_loop.handle()),
+            touch_state: TouchState::new(event_loop.handle(), touch),
             output: Output::new_dummy(&mut display),
             display: Rc::new(RefCell::new(display)),
             windows: Windows::new(),
