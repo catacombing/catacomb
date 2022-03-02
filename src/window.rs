@@ -24,6 +24,7 @@ use smithay::wayland::shell::xdg::{
 use wayland_protocols::xdg_shell::server::xdg_toplevel::State;
 use xdg_decoration::v1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 
+use crate::orientation::Orientation;
 use crate::drawing::{Graphics, SurfaceBuffer, Texture};
 use crate::input::{Gesture, TouchState, HOLD_DURATION};
 use crate::layer::Layers;
@@ -48,6 +49,12 @@ pub struct Windows {
 
     transaction: Option<Transaction>,
     start_time: Instant,
+
+    /// Orientation used for the window's current rendered state.
+    ///
+    /// This is used to keep rendering at the previous orientation when a device was rotated and
+    /// there is an active transaction pending waiting for clients to submit new buffers.
+    orientation: Orientation,
 }
 
 impl Windows {
@@ -55,6 +62,7 @@ impl Windows {
         Self {
             start_time: Instant::now(),
             transaction: Default::default(),
+            orientation: Default::default(),
             secondary: Default::default(),
             windows: Default::default(),
             primary: Default::default(),
@@ -128,8 +136,6 @@ impl Windows {
         graphics: &mut Graphics,
         output: &Output,
     ) {
-        self.update_transaction();
-
         self.layers.draw_background(renderer, frame, output);
 
         match self.view {
@@ -208,7 +214,7 @@ impl Windows {
     }
 
     /// Attempt to execute pending transactions.
-    fn update_transaction(&mut self) {
+    pub fn update_transaction(&mut self) {
         let transaction = match &mut self.transaction {
             Some(start) => start,
             None => return,
@@ -257,6 +263,7 @@ impl Windows {
         // Apply window management changes.
         let transaction = self.transaction.take().unwrap();
         self.view = transaction.view.unwrap_or(self.view);
+        self.orientation = transaction.orientation;
         self.secondary = transaction.secondary;
         self.primary = transaction.primary;
     }
@@ -279,6 +286,18 @@ impl Windows {
         for mut window in self.layers.iter_mut() {
             window.update_dimensions(output, transaction);
         }
+    }
+
+    /// Update output orientation.
+    pub fn update_orientation(&mut self, output: &mut Output) {
+        let transaction = self.start_transaction();
+        transaction.orientation = output.orientation();
+        self.resize_all(output);
+    }
+
+    /// Get the current rendering orientation.
+    pub fn orientation(&self) -> Orientation {
+        self.orientation
     }
 
     /// Handle start of touch input.
@@ -331,7 +350,7 @@ impl Windows {
             View::Overview(overview) => overview,
             View::DragAndDrop(dnd) => {
                 // Cancel velocity and clamp if touch position is outside the screen.
-                let output_size = output.screen_size().to_f64();
+                let output_size = output.size().to_f64();
                 if point.x < 0.
                     || point.x > output_size.w
                     || point.y < 0.
@@ -560,6 +579,7 @@ impl Default for View {
 pub struct Transaction {
     primary: Weak<RefCell<Window>>,
     secondary: Weak<RefCell<Window>>,
+    orientation: Orientation,
     view: Option<View>,
     start: Instant,
 }
@@ -569,6 +589,7 @@ impl Transaction {
         Self {
             primary: current_state.primary.clone(),
             secondary: current_state.secondary.clone(),
+            orientation: current_state.orientation,
             start: Instant::now(),
             view: None,
         }
@@ -1127,7 +1148,7 @@ impl Window<CatacombLayerSurface> {
             (state.size, state.margin, state.anchor, state.exclusive_zone)
         })
         .unwrap_or_default();
-        let output_size = output.screen_size();
+        let output_size = output.size();
 
         // Update exclusive zones.
         let old_anchor = mem::replace(&mut self.surface.anchor, anchor);

@@ -5,6 +5,7 @@ mod drawing;
 mod geometry;
 mod input;
 mod layer;
+mod orientation;
 mod output;
 mod overview;
 mod shell;

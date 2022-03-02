@@ -6,8 +6,7 @@ use calloop::timer::{Timer, TimerHandle};
 use calloop::LoopHandle;
 use smithay::backend::input::{
     ButtonState, Event, InputBackend, InputEvent, KeyboardKeyEvent, MouseButton,
-    PointerButtonEvent, PointerMotionAbsoluteEvent, TouchCancelEvent, TouchDownEvent,
-    TouchMotionEvent, TouchSlot, TouchUpEvent,
+    PointerButtonEvent, PositionEvent, TouchEvent as _, TouchSlot,
 };
 use smithay::backend::winit::WinitEvent;
 use smithay::utils::{Logical, Point, Rectangle, Size};
@@ -15,7 +14,8 @@ use smithay::wayland::seat::{keysyms, FilterResult, TouchHandle};
 use smithay::wayland::SERIAL_COUNTER;
 
 use crate::catacomb::{Backend, Catacomb};
-use crate::output::{Orientation, Output};
+use crate::orientation::Orientation;
+use crate::output::Output;
 
 /// Time before a tap is considered a hold.
 pub const HOLD_DURATION: Duration = Duration::from_secs(1);
@@ -46,11 +46,11 @@ pub struct TouchState {
 
 impl TouchState {
     pub fn new<B: Backend>(loop_handle: LoopHandle<'_, Catacomb<B>>, touch: TouchHandle) -> Self {
-        let timer = Timer::new().expect("create timer");
+        let timer = Timer::new().expect("create input timer");
         let timer_handle = timer.handle();
         loop_handle
             .insert_source(timer, |_, _, catacomb| catacomb.on_velocity_tick())
-            .expect("insert timer");
+            .expect("insert input timer");
 
         Self {
             start: TouchStart::new(Default::default(), Default::default()),
@@ -92,7 +92,7 @@ impl TouchState {
 
     /// Get the updated active touch action.
     fn action(&mut self, output: &Output, overview_active: bool) -> Option<TouchAction> {
-        let output_size = output.screen_size().to_f64();
+        let output_size = output.size().to_f64();
         let touching = self.touching();
         match self.start.gesture {
             Some(Gesture::Overview) if overview_active => (),
@@ -175,16 +175,11 @@ impl Gesture {
 
     /// Touch area expected for gesture completion.
     fn end_rect(&self, output_size: Size<f64, Logical>) -> Rectangle<f64, Logical> {
-        match self {
-            Gesture::Overview => {
-                let size = (output_size.w * 0.75, output_size.h * 0.75);
-                Rectangle::from_loc_and_size((0., 0.), size)
-            },
-            Gesture::Home => {
-                let size = (output_size.w, output_size.h * 0.75);
-                Rectangle::from_loc_and_size((0., 0.), size)
-            },
-        }
+        let size = match self {
+            Gesture::Overview => (output_size.w * 0.75, output_size.h * 0.75),
+            Gesture::Home => (output_size.w, output_size.h * 0.75),
+        };
+        Rectangle::from_loc_and_size((0., 0.), size)
     }
 }
 
@@ -212,16 +207,17 @@ enum TouchEventType {
 }
 
 impl<B: Backend> Catacomb<B> {
+    /// Process device orientation changes.
+    pub fn handle_orientation(&mut self, orientation: Orientation) {
+        self.output.set_orientation(orientation);
+        self.windows.update_orientation(&mut self.output);
+    }
+
     /// Process winit-specific input events.
     pub fn handle_winit_input(&mut self, event: WinitEvent) {
         match event {
             // Toggle between portrait/landscape based on window size.
             WinitEvent::Resized { size, .. } => {
-                if size.h >= size.w {
-                    self.output.orientation = Orientation::Portrait;
-                } else {
-                    self.output.orientation = Orientation::Landscape;
-                }
                 self.output.resize(size);
                 self.windows.resize_all(&mut self.output);
             },
@@ -244,13 +240,13 @@ impl<B: Backend> Catacomb<B> {
                 }
             },
             InputEvent::PointerMotionAbsolute { event } => {
-                let position = event.position_transformed(self.output.screen_size());
+                let position = self.transform_position(&event);
                 let slot = TouchSlot::default();
                 self.on_touch_motion(TouchEvent::new(TouchEventType::Down, slot, 0, position));
                 self.touch_state.position = position;
             },
             InputEvent::TouchDown { event } => {
-                let position = event.position_transformed(self.output.screen_size());
+                let position = self.transform_position(&event);
                 let event_type = TouchEventType::Down;
                 let event = TouchEvent::new(event_type, event.slot(), event.time(), position);
                 self.touch_state.events.push(event);
@@ -262,7 +258,7 @@ impl<B: Backend> Catacomb<B> {
                 self.touch_state.events.push(event);
             },
             InputEvent::TouchMotion { event } => {
-                let position = event.position_transformed(self.output.screen_size());
+                let position = self.transform_position(&event);
                 let event_type = TouchEventType::Motion;
                 let event = TouchEvent::new(event_type, event.slot(), event.time(), position);
                 self.touch_state.events.push(event);
@@ -302,7 +298,7 @@ impl<B: Backend> Catacomb<B> {
         self.touch_state.slot = Some(event.slot);
 
         // Initialize the touch state.
-        let output_size = self.output.screen_size().to_f64();
+        let output_size = self.output.size().to_f64();
         self.touch_state.start(output_size, event.position);
 
         // Only send touch start if there's no gesture in progress.
@@ -434,5 +430,26 @@ impl<B: Backend> Catacomb<B> {
 
             FilterResult::Intercept(())
         });
+    }
+
+    /// Apply an output transform to a point.
+    fn transform_position<I, E>(&self, event: &E) -> Point<f64, Logical>
+    where
+        E: PositionEvent<I>,
+        I: InputBackend,
+    {
+        let screen_size = self.output.resolution();
+        let (mut x, mut y) = event.position_transformed(screen_size).into();
+        let (width, height) = screen_size.to_f64().into();
+
+        // Transform X/Y according to output rotation.
+        (x, y) = match self.output.orientation() {
+            Orientation::Portrait => (x, y),
+            Orientation::Landscape => (y, width - x),
+            Orientation::InversePortrait => (width - x, height - y),
+            Orientation::InverseLandscape => (height - y, x),
+        };
+
+        (x, y).into()
     }
 }

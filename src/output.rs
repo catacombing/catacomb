@@ -4,20 +4,25 @@ use std::ops::Deref;
 
 use smithay::reexports::wayland_server::protocol::wl_output::{Subpixel, WlOutput};
 use smithay::reexports::wayland_server::{Display, Global};
-use smithay::utils::{Logical, Physical, Rectangle, Size};
+use smithay::utils::{Logical, Rectangle, Size, Transform, Physical};
 use smithay::wayland::output::{Mode, Output as SmithayOutput, PhysicalProperties};
 use smithay::wayland::shell::wlr_layer::{Anchor, ExclusiveZone};
 
+use crate::orientation::Orientation;
+
 /// Use a fixed output scale.
-const SCALE: i32 = 1;
+const SCALE: f64 = 1.;
 
 /// Wayland output, typically a screen.
 pub struct Output {
+    /// Layer shell reserved space.
     pub exclusive: ExclusiveSpace,
-    pub orientation: Orientation,
-    pub scale: f64,
+
     global: Option<Global<WlOutput>>,
+    orientation: Orientation,
     output: SmithayOutput,
+    transform: Transform,
+    scale: f64,
     mode: Mode,
 }
 
@@ -37,19 +42,22 @@ impl Output {
         properties: PhysicalProperties,
     ) -> Self {
         let (output, global) = SmithayOutput::new(display, name.into(), properties, None);
+        let scale = SCALE;
 
-        // Set output mode.
-        output.change_current_state(Some(mode), None, Some(SCALE), None);
-        output.set_preferred(mode);
-
-        Self {
-            orientation: Orientation::Portrait,
+        let mut output = Self {
             global: Some(global),
-            scale: SCALE as f64,
             output,
+            scale,
             mode,
+            orientation: Default::default(),
+            transform: Default::default(),
             exclusive: Default::default(),
-        }
+        };
+
+        // Update the active mode.
+        output.set_mode(output.mode);
+
+        output
     }
 
     /// Create a new dummy output.
@@ -64,8 +72,10 @@ impl Output {
     }
 
     /// Update the output's active mode.
+    #[inline]
     pub fn set_mode(&mut self, mode: Mode) {
-        self.output.change_current_state(Some(mode), None, Some(SCALE), None);
+        let transform = Some(self.transform.into());
+        self.output.change_current_state(Some(mode), transform, Some(self.scale as i32), None);
         self.output.set_preferred(mode);
         self.mode = mode;
     }
@@ -73,12 +83,13 @@ impl Output {
     /// Primary window dimensions.
     pub fn primary_rectangle(&self, secondary_visible: bool) -> Rectangle<i32, Logical> {
         let available = self.available();
-        let size: Size<i32, Logical> = match (self.orientation, secondary_visible) {
-            (Orientation::Portrait, true) => (available.size.w, (available.size.h + 1) / 2).into(),
-            (Orientation::Landscape, true) => ((available.size.w + 1) / 2, available.size.h).into(),
-            (_, false) => (available.size.w, available.size.h).into(),
+        let size: Size<i32, Logical> = if available.size.h > available.size.w && secondary_visible {
+            (available.size.w, (available.size.h + 1) / 2).into()
+        } else if available.size.w > available.size.h && secondary_visible {
+            ((available.size.w + 1) / 2, available.size.h).into()
+        } else {
+            (available.size.w, available.size.h).into()
         };
-
         Rectangle::from_loc_and_size(available.loc, size)
     }
 
@@ -86,29 +97,44 @@ impl Output {
     pub fn secondary_rectangle(&self) -> Rectangle<i32, Logical> {
         let available = self.available();
         let mut loc = available.loc;
-        match self.orientation {
-            Orientation::Portrait => {
-                let size: Size<i32, Logical> = (available.size.w, available.size.h / 2).into();
-                loc.y += (available.size.h + 1) / 2;
-                Rectangle::from_loc_and_size(loc, size)
-            },
-            Orientation::Landscape => {
-                let size: Size<i32, Logical> = (available.size.w / 2, available.size.h).into();
-                loc.x += (available.size.w + 1) / 2;
-                Rectangle::from_loc_and_size(loc, size)
-            },
+        if available.size.h > available.size.w {
+            let size: Size<i32, Logical> = (available.size.w, available.size.h / 2).into();
+            loc.y += (available.size.h + 1) / 2;
+            Rectangle::from_loc_and_size(loc, size)
+        } else {
+            let size: Size<i32, Logical> = (available.size.w / 2, available.size.h).into();
+            loc.x += (available.size.w + 1) / 2;
+            Rectangle::from_loc_and_size(loc, size)
         }
     }
 
-    /// Output dimensions including reserved space.
-    pub fn screen_size(&self) -> Size<i32, Logical> {
+    /// Output device resolution.
+    ///
+    /// This represents the size of the display before applying any transformations.
+    pub fn resolution(&self) -> Size<i32, Logical> {
         self.mode.size.to_f64().to_logical(self.scale).to_i32_round()
+    }
+
+    /// Output device resolution in physical coordinates.
+    pub fn physical_resolution(&self) -> Size<i32, Physical> {
+        self.mode.size
+    }
+
+    /// Output size.
+    ///
+    /// Output size with all transformations applied.
+    pub fn size(&self) -> Size<i32, Logical> {
+        let (w, h) = self.resolution().into();
+        match self.orientation {
+            Orientation::Portrait | Orientation::InversePortrait => (w, h).into(),
+            Orientation::Landscape | Orientation::InverseLandscape => (h, w).into(),
+        }
     }
 
     /// Area of the output not reserved for layer shell windows.
     pub fn available(&self) -> Rectangle<i32, Logical> {
         let loc = (self.exclusive.left, self.exclusive.top);
-        let mut size = self.screen_size();
+        let mut size = self.size();
         size.w -= self.exclusive.left + self.exclusive.right;
         size.h -= self.exclusive.top + self.exclusive.bottom;
         Rectangle::from_loc_and_size(loc, size)
@@ -122,6 +148,25 @@ impl Output {
     /// Duration between frames in milliseconds.
     pub fn frame_interval(&self) -> u64 {
         1_000_000 / self.mode.refresh as u64
+    }
+
+    /// Update the device orientation.
+    pub fn set_orientation(&mut self, orientation: Orientation) {
+        self.transform = orientation.transform();
+        self.orientation = orientation;
+
+        // Update output mode to apply transform.
+        self.set_mode(self.mode);
+    }
+
+    /// Device orientation.
+    pub fn orientation(&self) -> Orientation {
+        self.orientation
+    }
+
+    /// Output scale.
+    pub fn scale(&self) -> f64 {
+        self.scale
     }
 }
 
@@ -167,11 +212,4 @@ impl ExclusiveSpace {
             self.update(anchor, ExclusiveZone::Exclusive(0));
         }
     }
-}
-
-/// Device output orientation.
-#[derive(Copy, Clone, Debug)]
-pub enum Orientation {
-    Landscape,
-    Portrait,
 }

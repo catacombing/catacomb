@@ -52,13 +52,15 @@ pub fn run() {
             break;
         }
 
-        let logical_size = catacomb.output.screen_size().to_f64();
-        let output_size = logical_size.to_physical(catacomb.output.scale).to_i32_round();
+        catacomb.windows.update_transaction();
+
+        let logical_size = catacomb.output.resolution().to_f64();
+        let output_size = logical_size.to_physical(catacomb.output.scale()).to_i32_round();
         graphics
             .borrow_mut()
             .renderer()
             .render(output_size, Transform::Flipped180, |renderer, frame| {
-                let full_rect = Rectangle::from_loc_and_size((0, 0), output_size);
+                let full_rect = Rectangle::from_loc_and_size((0, 0), (i32::MAX, i32::MAX));
                 let _ = frame.clear([1., 0., 1., 1.], &[full_rect]);
                 catacomb.draw(renderer, frame);
             })

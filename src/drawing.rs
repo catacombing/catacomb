@@ -143,9 +143,9 @@ impl Texture {
         let _ = frame.render_texture_from_to(
             &self.texture,
             src_physical,
-            dest.to_f64().to_physical(output.scale),
+            dest.to_f64().to_physical(output.scale()),
             &[src_physical],
-            Transform::Normal,
+            self.transform,
             1.,
         );
     }
@@ -201,12 +201,12 @@ impl Graphics {
 
     /// Decoration title bar height.
     pub fn title_height(output: &Output) -> i32 {
-        (OVERVIEW_TITLE_HEIGHT as f64 * output.scale).round() as i32
+        (OVERVIEW_TITLE_HEIGHT as f64 * output.scale()).round() as i32
     }
 
     /// Decoration border width.
     pub fn border_width(output: &Output) -> i32 {
-        (OVERVIEW_BORDER_WIDTH as f64 * output.scale).round() as i32
+        (OVERVIEW_BORDER_WIDTH as f64 * output.scale()).round() as i32
     }
 
     /// Create overview window decoration.

@@ -24,7 +24,7 @@ bin=$(basename "$binpath")
 aarch64-linux-gnu-strip "$binpath"
 
 # Kill potentially running previous executables
-ssh "$remote" "pkill $bin; rm $bin"
+ssh "$remote" "pkill $bin; rm $bin" 2> /dev/null || true
 
 # Copy to the remote machine
 scp "$binpath" "${remote}:~"

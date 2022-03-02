@@ -23,7 +23,7 @@ use smithay::reexports::nix::fcntl::OFlag;
 use smithay::reexports::nix::sys::stat::dev_t as DeviceId;
 use smithay::reexports::wayland_server::protocol::wl_output::Subpixel;
 use smithay::utils::signaling::{Linkable, SignalToken, Signaler};
-use smithay::utils::{Rectangle, Transform};
+use smithay::utils::Rectangle;
 use smithay::wayland::dmabuf;
 use smithay::wayland::output::{Mode, PhysicalProperties};
 
@@ -149,11 +149,14 @@ impl OutputDevice {
         let (dmabuf, _age) = self.gbm_surface.next_buffer()?;
         self.renderer.bind(dmabuf)?;
 
+        // Update transaction before rendering to update device orientation.
+        catacomb.windows.update_transaction();
+
         // Draw the current frame into the buffer.
-        let logical_size = catacomb.output.screen_size().to_f64();
-        let output_size = logical_size.to_physical(catacomb.output.scale).to_i32_round();
-        self.renderer.render(output_size, Transform::Normal, |renderer, frame| {
-            let full_rect = Rectangle::from_loc_and_size((0, 0), output_size);
+        let transform = catacomb.windows.orientation().transform();
+        let output_size = catacomb.output.physical_resolution();
+        self.renderer.render(output_size, transform, |renderer, frame| {
+            let full_rect = Rectangle::from_loc_and_size((0, 0), (i32::MAX, i32::MAX));
             let _ = frame.clear([1., 0., 1., 1.], &[full_rect]);
             catacomb.draw(renderer, frame);
         })?;

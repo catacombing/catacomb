@@ -10,7 +10,7 @@ use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use crate::drawing::Graphics;
 use crate::geometry::Vector;
-use crate::output::{Orientation, Output};
+use crate::output::Output;
 use crate::window::Window;
 
 /// Percentage of output width reserved for the main window in the application overview.
@@ -275,28 +275,24 @@ impl DragAndDrop {
         output: &Output,
     ) -> (Rectangle<i32, Logical>, Rectangle<i32, Logical>) {
         let available = output.available();
-        match output.orientation {
-            Orientation::Landscape => {
-                let dnd_width = (available.size.w as f64 * DRAG_AND_DROP_PERCENTAGE).round() as i32;
-                let size = Size::from((dnd_width, available.size.h));
-                let primary = Rectangle::from_loc_and_size(available.loc, size);
+        if available.size.h > available.size.w {
+            let dnd_height = (available.size.h as f64 * DRAG_AND_DROP_PERCENTAGE).round() as i32;
+            let size = Size::from((available.size.w, dnd_height));
+            let primary = Rectangle::from_loc_and_size(available.loc, size);
 
-                let mut secondary = primary;
-                secondary.loc.x += available.size.w - dnd_width;
+            let mut secondary = primary;
+            secondary.loc.y += available.size.h - dnd_height;
 
-                (primary, secondary)
-            },
-            Orientation::Portrait => {
-                let dnd_height =
-                    (available.size.h as f64 * DRAG_AND_DROP_PERCENTAGE).round() as i32;
-                let size = Size::from((available.size.w, dnd_height));
-                let primary = Rectangle::from_loc_and_size(available.loc, size);
+            (primary, secondary)
+        } else {
+            let dnd_width = (available.size.w as f64 * DRAG_AND_DROP_PERCENTAGE).round() as i32;
+            let size = Size::from((dnd_width, available.size.h));
+            let primary = Rectangle::from_loc_and_size(available.loc, size);
 
-                let mut secondary = primary;
-                secondary.loc.y += available.size.h - dnd_height;
+            let mut secondary = primary;
+            secondary.loc.x += available.size.w - dnd_width;
 
-                (primary, secondary)
-            },
+            (primary, secondary)
         }
     }
 }

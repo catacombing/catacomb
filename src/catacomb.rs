@@ -20,6 +20,7 @@ use wayland_protocols::misc::server_decoration::server::org_kde_kwin_server_deco
 
 use crate::drawing::Graphics;
 use crate::input::TouchState;
+use crate::orientation::{Accelerometer, AccelerometerSource};
 use crate::output::Output;
 use crate::shell;
 use crate::window::Windows;
@@ -98,6 +99,11 @@ impl<B: Backend + 'static> Catacomb<B> {
             .expect("adding keyboard");
         let touch = seat.add_touch();
 
+        // Subscribe to device orientation changes.
+        Accelerometer::new().subscribe(event_loop.handle(), |orientation, catacomb| {
+            catacomb.handle_orientation(orientation);
+        });
+
         // Initialize all available shells.
         shell::init::<B>(&mut display);
 
@@ -138,7 +144,7 @@ impl<B: Backend + 'static> Catacomb<B> {
         if self.touch_debug {
             let loc = self.touch_state.position.to_i32_round();
             let touch_debug = self.graphics.touch_debug(renderer);
-            let rect = Rectangle::from_loc_and_size(loc, self.output.screen_size());
+            let rect = Rectangle::from_loc_and_size(loc, (i32::MAX, i32::MAX));
             touch_debug.draw_at(frame, &self.output, rect, 1.);
         }
 
