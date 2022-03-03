@@ -100,7 +100,7 @@ impl Windows {
     pub fn surface_commit(&mut self, surface: &WlSurface, output: &mut Output) {
         // Get the topmost surface for window comparison.
         let mut root_surface = Cow::Borrowed(surface);
-        while let Some(parent) = compositor::get_parent(surface) {
+        while let Some(parent) = compositor::get_parent(&root_surface) {
             root_surface = Cow::Owned(parent);
         }
 
