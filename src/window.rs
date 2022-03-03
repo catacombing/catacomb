@@ -115,7 +115,7 @@ impl Windows {
         // Handle layer shell surface commits.
         let old_exclusive = output.exclusive;
         let transaction = self.transaction.get_or_insert(Transaction::new(self));
-        for mut window in self.layers.iter_mut() {
+        for window in self.layers.iter_mut() {
             if window.surface.get_surface() == Some(&root_surface) {
                 window.surface_commit(surface, output, transaction);
                 break;
@@ -283,7 +283,7 @@ impl Windows {
         transaction.update_visible_dimensions(output);
 
         // Resize layer shell windows.
-        for mut window in self.layers.iter_mut() {
+        for window in self.layers.iter_mut() {
             window.update_dimensions(output, transaction);
         }
     }
