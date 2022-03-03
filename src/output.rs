@@ -11,7 +11,7 @@ use smithay::wayland::shell::wlr_layer::{Anchor, ExclusiveZone};
 use crate::orientation::Orientation;
 
 /// Use a fixed output scale.
-const SCALE: f64 = 1.;
+const SCALE: f64 = 2.;
 
 /// Wayland output, typically a screen.
 pub struct Output {
