@@ -31,11 +31,7 @@ impl Layers {
 
     /// Request new frames for all layer windows.
     pub fn iter(&self) -> impl Iterator<Item = &LayerWindow> {
-        self.background
-            .iter()
-            .chain(&self.bottom)
-            .chain(&self.top)
-            .chain(&self.overlay)
+        self.background.iter().chain(&self.bottom).chain(&self.top).chain(&self.overlay)
     }
 
     /// Request new frames for all layer windows.

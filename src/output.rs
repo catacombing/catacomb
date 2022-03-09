@@ -4,7 +4,7 @@ use std::ops::Deref;
 
 use smithay::reexports::wayland_server::protocol::wl_output::{Subpixel, WlOutput};
 use smithay::reexports::wayland_server::{Display, Global};
-use smithay::utils::{Logical, Rectangle, Size, Transform, Physical};
+use smithay::utils::{Logical, Physical, Rectangle, Size, Transform};
 use smithay::wayland::output::{Mode, Output as SmithayOutput, PhysicalProperties};
 use smithay::wayland::shell::wlr_layer::{Anchor, ExclusiveZone};
 

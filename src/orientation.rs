@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use smithay::utils::{Transform};
 use calloop::timer::Timer;
 use calloop::LoopHandle;
+use smithay::utils::Transform;
 use udev::{Device, Enumerator};
 
 use crate::catacomb::Catacomb;
@@ -68,7 +68,7 @@ impl SensorAccelerometer {
         enumerator.match_is_initialized().ok()?;
         enumerator.match_subsystem("iio").ok()?;
 
-        let mut devices = enumerator.scan_devices().ok()?.into_iter();
+        let mut devices = enumerator.scan_devices().ok()?;
         let accel = devices.find(|device| device.attribute_value("in_accel_x_raw").is_some());
         accel.map(|accel| Self { syspath: accel.syspath().to_path_buf(), last: None })
     }

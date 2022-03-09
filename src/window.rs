@@ -19,15 +19,16 @@ use smithay::wayland::shell::wlr_layer::{
     Anchor, ExclusiveZone, Layer, LayerSurface, LayerSurfaceAttributes, LayerSurfaceCachedState,
 };
 use smithay::wayland::shell::xdg::{
-    SurfaceCachedState, ToplevelSurface, XdgToplevelSurfaceRoleAttributes,
+    PopupSurface, SurfaceCachedState, ToplevelSurface, XdgPopupSurfaceRoleAttributes,
+    XdgToplevelSurfaceRoleAttributes,
 };
 use wayland_protocols::xdg_shell::server::xdg_toplevel::State;
 use xdg_decoration::v1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 
-use crate::orientation::Orientation;
 use crate::drawing::{Graphics, SurfaceBuffer, Texture};
 use crate::input::{Gesture, TouchState, HOLD_DURATION};
 use crate::layer::Layers;
+use crate::orientation::Orientation;
 use crate::output::{ExclusiveSpace, Output};
 use crate::overview::{Direction, DragAndDrop, Overview};
 
@@ -45,6 +46,7 @@ pub struct Windows {
     view: View,
 
     windows: Vec<Rc<RefCell<Window>>>,
+    orphan_popups: Vec<Window<PopupSurface>>,
     layers: Layers,
 
     transaction: Option<Transaction>,
@@ -61,6 +63,7 @@ impl Windows {
     pub fn new() -> Self {
         Self {
             start_time: Instant::now(),
+            orphan_popups: Default::default(),
             transaction: Default::default(),
             orientation: Default::default(),
             secondary: Default::default(),
@@ -81,6 +84,11 @@ impl Windows {
     /// Add a new layer shell window.
     pub fn add_layer(&mut self, layer: Layer, surface: impl Into<CatacombLayerSurface>) {
         self.layers.add(layer, surface.into());
+    }
+
+    /// Add a new popup window.
+    pub fn add_popup(&mut self, popup: PopupSurface) {
+        self.orphan_popups.push(Window::new(popup));
     }
 
     /// Find the XDG shell window responsible for a specific surface.
@@ -104,28 +112,68 @@ impl Windows {
             root_surface = Cow::Owned(parent);
         }
 
+        // Find a window matching the root surface.
+        macro_rules! find_window {
+            ($windows:expr) => {{
+                $windows.find(|window| window.surface.get_surface() == Some(&root_surface))
+            }};
+        }
+
         // Handle XDG surface commits.
-        for mut window in self.windows.iter().map(|window| window.borrow_mut()) {
-            if window.surface.get_surface() == Some(&root_surface) {
-                window.surface_commit(surface, output);
-                return;
-            }
+        let mut windows = self.windows.iter().map(|window| window.borrow_mut());
+        if let Some(mut window) = find_window!(windows) {
+            window.surface_commit_common(surface, output);
+            return;
+        }
+
+        // Handle popup orphan adoption.
+        self.orphan_surface_commit(&root_surface);
+
+        // Apply popup surface commits.
+        for window in &mut self.windows {
+            window.borrow_mut().popup_surface_commit(&root_surface, surface, output);
         }
 
         // Handle layer shell surface commits.
         let old_exclusive = output.exclusive;
         let transaction = self.transaction.get_or_insert(Transaction::new(self));
-        for window in self.layers.iter_mut() {
-            if window.surface.get_surface() == Some(&root_surface) {
-                window.surface_commit(surface, output, transaction);
-                break;
-            }
+        if let Some(window) = find_window!(self.layers.iter_mut()) {
+            window.surface_commit(surface, output, transaction);
         }
 
         // Resize windows after exclusive zone change.
         if output.exclusive != old_exclusive {
             self.resize_all(output);
         }
+    }
+
+    /// Handle orphan popup surface commits.
+    ///
+    /// After the first surface commit, every popup should have a parent set. This function puts it
+    /// at the correct location in the window tree below its parent.
+    ///
+    /// Popups will be dismissed if a surface commit is made for them without any parent set. They
+    /// will also be dismissed if the parent is not currently visible.
+    pub fn orphan_surface_commit(&mut self, root_surface: &WlSurface) -> Option<()> {
+        let mut orphans = self.orphan_popups.iter();
+        let index = orphans.position(|popup| popup.surface.get_surface() == Some(root_surface))?;
+        let mut popup = self.orphan_popups.swap_remove(index);
+        let parent = popup.parent()?;
+
+        // Try and add it to the primary window.
+        if let Some(primary) = self.primary.upgrade() {
+            popup = primary.borrow_mut().add_popup(popup, &parent)?;
+        }
+
+        // Try and add it to the secondary window.
+        if let Some(secondary) = self.secondary.upgrade() {
+            popup = secondary.borrow_mut().add_popup(popup, &parent)?;
+        }
+
+        // Dismiss popup if it wasn't added to either of the visible windows.
+        popup.surface.send_popup_done();
+
+        Some(())
     }
 
     /// Draw the current window state.
@@ -179,6 +227,11 @@ impl Windows {
             self.resize_all(output);
         } else if self.windows.iter().any(|window| !window.borrow().alive()) {
             self.refresh_visible(output);
+        }
+
+        // Cleanup old popup windows.
+        for window in &mut self.windows {
+            window.borrow_mut().refresh_popups();
         }
 
         // Start D&D on long touch in overview.
@@ -557,23 +610,6 @@ impl Windows {
     }
 }
 
-/// Compositor window arrangements.
-#[derive(Copy, Clone, PartialEq, Debug)]
-enum View {
-    /// List of all open windows.
-    Overview(Overview),
-    /// Drag and drop for tiling windows.
-    DragAndDrop(DragAndDrop),
-    /// Currently active windows.
-    Workspace,
-}
-
-impl Default for View {
-    fn default() -> Self {
-        View::Workspace
-    }
-}
-
 /// Atomic changes to [`Windows`].
 #[derive(Clone, Debug)]
 pub struct Transaction {
@@ -660,7 +696,17 @@ pub trait Surface {
     fn acked_size(&self) -> Size<i32, Logical>;
 
     /// Geometry of the window's visible bounds.
-    fn geometry(&self) -> Rectangle<i32, Logical>;
+    fn geometry(&self) -> Rectangle<i32, Logical> {
+        self.get_surface()
+            .and_then(|surface| {
+                compositor::with_states(surface, |states| {
+                    states.cached_state.current::<SurfaceCachedState>().geometry
+                })
+                .ok()
+                .flatten()
+            })
+            .unwrap_or_default()
+    }
 }
 
 impl Surface for ToplevelSurface {
@@ -717,17 +763,25 @@ impl Surface for ToplevelSurface {
         .flatten()
         .unwrap_or_default()
     }
+}
 
-    fn geometry(&self) -> Rectangle<i32, Logical> {
+impl Surface for PopupSurface {
+    fn get_surface(&self) -> Option<&WlSurface> {
         self.get_surface()
-            .and_then(|surface| {
-                compositor::with_states(surface, |states| {
-                    states.cached_state.current::<SurfaceCachedState>().geometry
-                })
-                .ok()
-                .flatten()
-            })
-            .unwrap_or_default()
+    }
+
+    fn alive(&self) -> bool {
+        self.alive()
+    }
+
+    fn send_close(&self) {}
+
+    fn reconfigure(&self, _size: Size<i32, Logical>) {
+        let _ = self.send_configure();
+    }
+
+    fn acked_size(&self) -> Size<i32, Logical> {
+        self.geometry().size
     }
 }
 
@@ -817,6 +871,9 @@ pub struct Window<S = ToplevelSurface> {
 
     /// Transaction for atomic upgrades.
     transaction: Option<WindowTransaction>,
+
+    /// Popup windows.
+    popups: Vec<Window<PopupSurface>>,
 }
 
 impl<S: Surface> Window<S> {
@@ -831,6 +888,7 @@ impl<S: Surface> Window<S> {
             acked_size: Default::default(),
             rectangle: Default::default(),
             visible: Default::default(),
+            popups: Default::default(),
         }
     }
 
@@ -842,6 +900,11 @@ impl<S: Surface> Window<S> {
                 callback.done(runtime);
             }
         });
+
+        // Request new frames from all popups.
+        for window in &mut self.popups {
+            window.request_frame(runtime);
+        }
     }
 
     /// Geometry of the window's visible bounds.
@@ -874,6 +937,13 @@ impl<S: Surface> Window<S> {
 
         for texture in &self.texture_cache.textures {
             texture.draw_at(frame, output, bounds, scale);
+        }
+
+        // Draw popup tree.
+        for popup in &mut self.popups {
+            let loc = popup.rectangle.loc + bounds.loc;
+            let popup_bounds = Rectangle::from_loc_and_size(loc, (i32::MAX, i32::MAX));
+            popup.draw(renderer, frame, output, scale, popup_bounds);
         }
     }
 
@@ -917,8 +987,7 @@ impl<S: Surface> Window<S> {
 
                 // Skip surface if buffer was already imported.
                 if let Some(texture) = &data.texture {
-                    let texture = Texture::from_surface(texture.clone(), location, &data);
-                    self.texture_cache.push(texture);
+                    self.texture_cache.push(texture.clone());
                     return TraversalAction::DoChildren(location);
                 }
 
@@ -949,10 +1018,9 @@ impl<S: Surface> Window<S> {
                         }
 
                         // Update and cache the texture.
-                        let texture = Rc::new(texture);
-                        data.texture = Some(texture.clone());
-                        let texture = Texture::from_surface(texture, location, &data);
-                        self.texture_cache.push(texture);
+                        let texture = Texture::from_surface(Rc::new(texture), location, &data);
+                        self.texture_cache.push(texture.clone());
+                        data.texture = Some(texture);
 
                         TraversalAction::DoChildren(location)
                     },
@@ -1084,6 +1152,13 @@ impl<S: Surface> Window<S> {
         &self,
         position: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<i32, Logical>)> {
+        // Check popups top to bottom first.
+        let relative = position - self.rectangle.loc.to_f64();
+        let popup = self.popups.iter().find_map(|popup| popup.surface_at_position(relative));
+        if let Some(popup_surface) = popup {
+            return Some(popup_surface);
+        }
+
         let result = RefCell::new(None);
         compositor::with_surface_tree_upward(
             self.surface.get_surface()?,
@@ -1115,17 +1190,87 @@ impl<S: Surface> Window<S> {
         );
         result.into_inner()
     }
+
+    /// Add popup at the correct position in the popup tree.
+    ///
+    /// This function will return the popup when no matching parent surface could be found in the
+    /// popup tree.
+    fn add_popup(
+        &mut self,
+        mut popup: Window<PopupSurface>,
+        parent: &WlSurface,
+    ) -> Option<Window<PopupSurface>> {
+        if self.surface.get_surface() == Some(parent) {
+            self.popups.push(popup);
+            return None;
+        }
+
+        for window in &mut self.popups {
+            popup = match window.add_popup(popup, parent) {
+                Some(popup) => popup,
+                None => return None,
+            };
+        }
+
+        Some(popup)
+    }
+
+    /// Apply surface commits for popups.
+    fn popup_surface_commit(
+        &mut self,
+        root_surface: &WlSurface,
+        surface: &WlSurface,
+        output: &Output,
+    ) {
+        for window in &mut self.popups {
+            if window.surface.get_surface() == Some(root_surface) {
+                window.surface_commit_common(surface, output);
+                window.rectangle.loc = window.position();
+                return;
+            }
+
+            window.popup_surface_commit(root_surface, surface, output);
+        }
+    }
+
+    /// Refresh popup windows.
+    fn refresh_popups(&mut self) {
+        for i in (0..self.popups.len()).rev() {
+            self.popups[i].refresh_popups();
+
+            if !self.popups[i].alive() {
+                self.popups.swap_remove(i);
+            }
+        }
+    }
 }
 
-impl Window {
-    /// Handle a surface commit for this window.
-    fn surface_commit(&mut self, surface: &WlSurface, output: &Output) {
-        self.surface_commit_common(surface, output);
+impl Window<PopupSurface> {
+    /// Get the parent of this popup.
+    fn parent(&self) -> Option<WlSurface> {
+        let surface = match self.surface.get_surface() {
+            Some(surface) => surface,
+            None => return None,
+        };
+
+        compositor::with_states(surface, |states| {
+            let attributes = states.data_map.get::<Mutex<XdgPopupSurfaceRoleAttributes>>()?;
+            attributes.lock().ok()?.parent.clone()
+        })
+        .ok()
+        .flatten()
+    }
+
+    /// Get popup window offset from parent.
+    fn position(&self) -> Point<i32, Logical> {
+        self.surface
+            .with_pending_state(|state| state.positioner.get_geometry().loc)
+            .unwrap_or_default()
     }
 }
 
 impl Window<CatacombLayerSurface> {
-    /// Handle a surface commit for this window.
+    /// Handle a surface commit for layer shell windows.
     fn surface_commit(
         &mut self,
         surface: &WlSurface,
@@ -1193,5 +1338,22 @@ impl Window<CatacombLayerSurface> {
 
         let dimensions = Rectangle::from_loc_and_size((x, y), size);
         self.set_dimensions(transaction, dimensions);
+    }
+}
+
+/// Compositor window arrangements.
+#[derive(Copy, Clone, PartialEq, Debug)]
+enum View {
+    /// List of all open windows.
+    Overview(Overview),
+    /// Drag and drop for tiling windows.
+    DragAndDrop(DragAndDrop),
+    /// Currently active windows.
+    Workspace,
+}
+
+impl Default for View {
+    fn default() -> Self {
+        View::Workspace
     }
 }

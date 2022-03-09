@@ -35,6 +35,11 @@ pub fn init<B: 'static>(display: &mut Display) {
                     window.request_frame(runtime);
                 }
             },
+            XdgRequest::NewPopup { surface, .. } => {
+                let catacomb = data.get::<Catacomb<B>>().unwrap();
+                catacomb.windows.add_popup(surface);
+            },
+            XdgRequest::Grab { .. } => (),
             XdgRequest::NewClient { .. } => (),
             _ => eprintln!("UNHANDLED EVENT: {event:?}"),
         },

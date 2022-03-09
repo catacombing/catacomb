@@ -3,9 +3,8 @@
 use std::ops::Deref;
 use std::rc::Rc;
 
-use smithay::backend::renderer;
 use smithay::backend::renderer::gles2::{ffi, Gles2Frame, Gles2Renderer, Gles2Texture};
-use smithay::backend::renderer::Frame;
+use smithay::backend::renderer::{self, Frame};
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::utils::{Logical, Point, Rectangle, Size, Transform};
 use smithay::wayland::compositor::{BufferAssignment, SurfaceAttributes};
@@ -272,7 +271,7 @@ impl Graphics {
 
 /// Surface buffer cache.
 pub struct SurfaceBuffer {
-    pub texture: Option<Rc<Gles2Texture>>,
+    pub texture: Option<Texture>,
     pub size: Size<i32, Logical>,
     pub buffer: Option<Buffer>,
     pub transform: Transform,
