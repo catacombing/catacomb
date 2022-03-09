@@ -20,8 +20,8 @@ use crate::output::Output;
 /// Time before a tap is considered a hold.
 pub const HOLD_DURATION: Duration = Duration::from_secs(1);
 
-/// Percentage of output dimensions before Home gesture start.
-const HOME_HEIGHT_PERCENTAGE: f64 = 0.9;
+/// Accepted gesture deviation in pixels at scale 1.
+const GESTURE_ACCURACY: f64 = 10.;
 
 /// Home gesture distance from the output edges.
 const HOME_WIDTH_PERCENTAGE: f64 = 0.25;
@@ -53,13 +53,13 @@ impl TouchState {
             .expect("insert input timer");
 
         Self {
-            start: TouchStart::new(Default::default(), Default::default()),
             timer: timer_handle,
             touch,
             position: Default::default(),
             velocity: Default::default(),
             is_drag: Default::default(),
             events: Default::default(),
+            start: Default::default(),
             slot: Default::default(),
         }
     }
@@ -71,8 +71,8 @@ impl TouchState {
     }
 
     /// Start a new touch session.
-    fn start(&mut self, output_size: Size<f64, Logical>, position: Point<f64, Logical>) {
-        self.start = TouchStart::new(output_size, position);
+    fn start(&mut self, output: &Output, position: Point<f64, Logical>) {
+        self.start = TouchStart::new(output, position);
         self.velocity = Default::default();
         self.timer.cancel_all_timeouts();
         self.position = position;
@@ -125,9 +125,15 @@ struct TouchStart {
     time: Instant,
 }
 
+impl Default for TouchStart {
+    fn default() -> Self {
+        Self { time: Instant::now(), position: Default::default(), gesture: Default::default() }
+    }
+}
+
 impl TouchStart {
-    fn new(output_size: Size<f64, Logical>, position: Point<f64, Logical>) -> Self {
-        Self { gesture: Gesture::from_start(output_size, position), time: Instant::now(), position }
+    fn new(output: &Output, position: Point<f64, Logical>) -> Self {
+        Self { gesture: Gesture::from_start(output, position), time: Instant::now(), position }
     }
 }
 
@@ -148,25 +154,23 @@ pub enum Gesture {
 
 impl Gesture {
     /// Create a gesture from its starting location.
-    fn from_start(output_size: Size<f64, Logical>, position: Point<f64, Logical>) -> Option<Self> {
+    fn from_start(output: &Output, position: Point<f64, Logical>) -> Option<Self> {
         let match_gesture =
-            |gesture: Gesture| gesture.start_rect(output_size).contains(position).then(|| gesture);
+            |gesture: Gesture| gesture.start_rect(output).contains(position).then(|| gesture);
         match_gesture(Gesture::Overview).or_else(|| match_gesture(Gesture::Home))
     }
 
     /// Touch area expected for gesture initiation.
-    fn start_rect(&self, output_size: Size<f64, Logical>) -> Rectangle<f64, Logical> {
+    fn start_rect(&self, output: &Output) -> Rectangle<f64, Logical> {
+        let accuracy = GESTURE_ACCURACY * output.scale();
+        let output_size = output.size().to_f64();
         match self {
             Gesture::Overview => {
-                let loc = (
-                    output_size.w * (1. - HOME_WIDTH_PERCENTAGE),
-                    output_size.h * (1. - HOME_WIDTH_PERCENTAGE),
-                );
+                let loc = (output_size.w - accuracy, output_size.h - accuracy);
                 Rectangle::from_loc_and_size(loc, output_size)
             },
             Gesture::Home => {
-                let loc =
-                    (output_size.w * HOME_WIDTH_PERCENTAGE, output_size.h * HOME_HEIGHT_PERCENTAGE);
+                let loc = (output_size.w * HOME_WIDTH_PERCENTAGE, output_size.h - accuracy);
                 let size = (output_size.w - 2. * loc.0, output_size.h);
                 Rectangle::from_loc_and_size(loc, size)
             },
@@ -298,8 +302,7 @@ impl<B: Backend> Catacomb<B> {
         self.touch_state.slot = Some(event.slot);
 
         // Initialize the touch state.
-        let output_size = self.output.size().to_f64();
-        self.touch_state.start(output_size, event.position);
+        self.touch_state.start(&self.output, event.position);
 
         // Only send touch start if there's no gesture in progress.
         if self.touch_state.start.gesture.is_none() {
