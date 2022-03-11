@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.58.0"
 
 [dependencies]
-smithay = { git = "https://github.com/chrisduerr/smithay", rev = "fcf9af2063551d81a11ceb9cac0aad9463c4613a", features = ["use_system_lib"] }
+smithay = { git = "https://github.com/chrisduerr/smithay", rev = "45a1340bfbd8a0c98f4ca332c659688860762bd8", features = ["use_system_lib"] }
 wayland-protocols = "0.29.1"
 wayland-commons = "0.29.0"
 calloop = "0.9.3"

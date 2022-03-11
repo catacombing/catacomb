@@ -290,30 +290,33 @@ impl<B: Backend> Catacomb<B> {
     /// Handle new touch input start.
     fn on_touch_down(&mut self, event: TouchEvent) {
         // Notify client.
+        let TouchEvent { time, slot, position, .. } = event;
         let surface = self.windows.surface_at_position(&self.output, event.position);
         if let Some((surface, offset)) = surface {
-            self.touch_state.touch.down(event.time, &surface, offset, event.slot, event.position);
+            let serial = SERIAL_COUNTER.next_serial();
+            self.touch_state.touch.down(serial, time, &surface, offset, slot, position);
         }
 
         // Allow only a single touch at a time.
         if self.touch_state.slot.is_some() {
             return;
         }
-        self.touch_state.slot = Some(event.slot);
+        self.touch_state.slot = Some(slot);
 
         // Initialize the touch state.
-        self.touch_state.start(&self.output, event.position);
+        self.touch_state.start(&self.output, position);
 
         // Only send touch start if there's no gesture in progress.
         if self.touch_state.start.gesture.is_none() {
-            self.windows.on_touch_start(&self.output, event.position);
+            self.windows.on_touch_start(&self.output, position);
         }
     }
 
     /// Handle touch input release.
     fn on_touch_up(&mut self, event: TouchEvent) {
         // Notify client.
-        self.touch_state.touch.up(event.time, event.slot);
+        let serial = SERIAL_COUNTER.next_serial();
+        self.touch_state.touch.up(serial, event.time, event.slot);
 
         // Check if slot is the active one.
         if self.touch_state.slot != Some(event.slot) {
