@@ -65,6 +65,9 @@ impl<B: Backend + 'static> Catacomb<B> {
             )
             .expect("register wayland socket source");
 
+        // Initialize all available shells.
+        shell::init::<B>(&mut display);
+
         // Advertise support for rendering from CPU-based shared memory buffers.
         shm::init_shm_global(&mut display, Vec::new(), None);
 
@@ -103,9 +106,6 @@ impl<B: Backend + 'static> Catacomb<B> {
         Accelerometer::new().subscribe(event_loop.handle(), |orientation, catacomb| {
             catacomb.handle_orientation(orientation);
         });
-
-        // Initialize all available shells.
-        shell::init::<B>(&mut display);
 
         // XDG output protocol.
         xdg::init_xdg_output_manager(&mut display, None);
