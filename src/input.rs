@@ -20,8 +20,11 @@ use crate::output::Output;
 /// Time before a tap is considered a hold.
 pub const HOLD_DURATION: Duration = Duration::from_secs(1);
 
-/// Accepted gesture deviation in pixels at scale 1.
-const GESTURE_ACCURACY: f64 = 10.;
+/// Accepted overview gesture deviation in pixels at scale 1.
+const OVERVIEW_GESTURE_ACCURACY: f64 = 60.;
+
+/// Accepted home gesture deviation in pixels at scale 1.
+const HOME_GESTURE_ACCURACY: f64 = 30.;
 
 /// Home gesture distance from the output edges.
 const HOME_WIDTH_PERCENTAGE: f64 = 0.25;
@@ -162,14 +165,15 @@ impl Gesture {
 
     /// Touch area expected for gesture initiation.
     fn start_rect(&self, output: &Output) -> Rectangle<f64, Logical> {
-        let accuracy = GESTURE_ACCURACY * output.scale();
         let output_size = output.size().to_f64();
         match self {
             Gesture::Overview => {
+                let accuracy = OVERVIEW_GESTURE_ACCURACY / output.scale();
                 let loc = (output_size.w - accuracy, output_size.h - accuracy);
                 Rectangle::from_loc_and_size(loc, output_size)
             },
             Gesture::Home => {
+                let accuracy = HOME_GESTURE_ACCURACY / output.scale();
                 let loc = (output_size.w * HOME_WIDTH_PERCENTAGE, output_size.h - accuracy);
                 let size = (output_size.w - 2. * loc.0, output_size.h);
                 Rectangle::from_loc_and_size(loc, size)
