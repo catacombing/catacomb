@@ -200,12 +200,12 @@ impl Graphics {
 
     /// Decoration title bar height.
     pub fn title_height(output: &Output) -> i32 {
-        (OVERVIEW_TITLE_HEIGHT as f64 * output.scale()).round() as i32
+        (OVERVIEW_TITLE_HEIGHT as f64 / output.scale()).round() as i32
     }
 
     /// Decoration border width.
     pub fn border_width(output: &Output) -> i32 {
-        (OVERVIEW_BORDER_WIDTH as f64 * output.scale()).round() as i32
+        (OVERVIEW_BORDER_WIDTH as f64 / output.scale()).round() as i32
     }
 
     /// Create overview window decoration.
