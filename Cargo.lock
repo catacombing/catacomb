@@ -64,8 +64,6 @@ dependencies = [
  "calloop",
  "smithay",
  "udev",
- "wayland-commons",
- "wayland-protocols",
 ]
 
 [[package]]
@@ -922,7 +920,7 @@ checksum = "f2dd574626839106c320a323308629dcb1acfc96e32a8cba364ddc61ac23ee83"
 [[package]]
 name = "smithay"
 version = "0.3.0"
-source = "git+https://github.com/chrisduerr/smithay?rev=45a1340bfbd8a0c98f4ca332c659688860762bd8#45a1340bfbd8a0c98f4ca332c659688860762bd8"
+source = "git+https://github.com/chrisduerr/smithay?rev=4a0880154779397ee628e3c5ab4c8a76c210dc7e#4a0880154779397ee628e3c5ab4c8a76c210dc7e"
 dependencies = [
  "appendlist",
  "bitflags",
@@ -953,6 +951,7 @@ dependencies = [
  "wayland-commons",
  "wayland-egl",
  "wayland-protocols",
+ "wayland-scanner",
  "wayland-server",
  "wayland-sys",
  "winit",

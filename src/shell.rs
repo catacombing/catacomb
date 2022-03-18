@@ -1,11 +1,10 @@
 //! Wayland shells.
 
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::reexports::wayland_server::Display;
+use smithay::reexports::wayland_server::{DispatchData, Display};
+use smithay::wayland::compositor;
 use smithay::wayland::shell::wlr_layer::{self, LayerShellRequest};
 use smithay::wayland::shell::xdg::{self as xdg_shell, XdgRequest};
-use smithay::wayland::{compositor, SERIAL_COUNTER};
-use wayland_commons::filter::DispatchData;
 
 use crate::catacomb::Catacomb;
 
@@ -19,12 +18,7 @@ pub fn init<B: 'static>(display: &mut Display) {
         display,
         |event, mut data| match event {
             XdgRequest::NewToplevel { surface } => {
-                // Automatically focus new windows.
                 let catacomb = data.get::<Catacomb<B>>().unwrap();
-                if let Some(wl_surface) = surface.get_surface() {
-                    catacomb.keyboard.set_focus(Some(wl_surface), SERIAL_COUNTER.next_serial());
-                }
-
                 catacomb.windows.add(surface, &catacomb.output);
             },
             XdgRequest::AckConfigure { surface, .. } => {

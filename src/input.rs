@@ -16,6 +16,7 @@ use smithay::wayland::SERIAL_COUNTER;
 use crate::catacomb::{Backend, Catacomb};
 use crate::orientation::Orientation;
 use crate::output::Output;
+use crate::window::OffsetSurface;
 
 /// Time before a tap is considered a hold.
 pub const HOLD_DURATION: Duration = Duration::from_secs(1);
@@ -249,9 +250,12 @@ impl<B: Backend> Catacomb<B> {
             },
             InputEvent::PointerMotionAbsolute { event } => {
                 let position = self.transform_position(&event);
-                let slot = TouchSlot::default();
-                self.on_touch_motion(TouchEvent::new(TouchEventType::Down, slot, 0, position));
                 self.touch_state.position = position;
+
+                if self.touch_state.slot.is_some() {
+                    let slot = TouchSlot::default();
+                    self.on_touch_motion(TouchEvent::new(TouchEventType::Down, slot, 0, position));
+                }
             },
             InputEvent::TouchDown { event } => {
                 let position = self.transform_position(&event);
@@ -293,10 +297,11 @@ impl<B: Backend> Catacomb<B> {
 
     /// Handle new touch input start.
     fn on_touch_down(&mut self, event: TouchEvent) {
-        // Notify client.
         let TouchEvent { time, slot, position, .. } = event;
-        let surface = self.windows.surface_at_position(&self.output, event.position);
-        if let Some((surface, offset)) = surface {
+        let surface = self.windows.touch_surface_at(event.position);
+
+        // Notify client.
+        if let Some(OffsetSurface { surface, offset }) = surface {
             let serial = SERIAL_COUNTER.next_serial();
             self.touch_state.touch.down(serial, time, &surface, offset, slot, position);
         }

@@ -10,19 +10,20 @@ use std::time::{Duration, Instant};
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
 use smithay::backend::renderer::{self, BufferType, ImportAll};
 use smithay::reexports::wayland_protocols::unstable::xdg_decoration;
+use smithay::reexports::wayland_protocols::xdg_shell::server::xdg_toplevel::State;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::compositor::{
     self, Damage, SubsurfaceCachedState, SurfaceAttributes, SurfaceData, TraversalAction,
 };
 use smithay::wayland::shell::wlr_layer::{
-    Anchor, ExclusiveZone, Layer, LayerSurface, LayerSurfaceAttributes, LayerSurfaceCachedState,
+    Anchor, ExclusiveZone, KeyboardInteractivity, Layer, LayerSurface, LayerSurfaceAttributes,
+    LayerSurfaceCachedState,
 };
 use smithay::wayland::shell::xdg::{
     PopupSurface, SurfaceCachedState, ToplevelSurface, XdgPopupSurfaceRoleAttributes,
     XdgToplevelSurfaceRoleAttributes,
 };
-use wayland_protocols::xdg_shell::server::xdg_toplevel::State;
 use xdg_decoration::v1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 
 use crate::drawing::{Graphics, SurfaceBuffer, Texture};
@@ -41,6 +42,8 @@ const MAX_TRANSACTION_DURATION: Duration = Duration::from_millis(200);
 /// Container tracking all known clients.
 #[derive(Debug)]
 pub struct Windows {
+    start_time: Instant,
+
     primary: Weak<RefCell<Window>>,
     secondary: Weak<RefCell<Window>>,
     view: View,
@@ -50,7 +53,9 @@ pub struct Windows {
     layers: Layers,
 
     transaction: Option<Transaction>,
-    start_time: Instant,
+
+    last_focus: Option<WlSurface>,
+    focus: Option<WlSurface>,
 
     /// Orientation used for the window's current rendered state.
     ///
@@ -66,16 +71,21 @@ impl Windows {
             orphan_popups: Default::default(),
             transaction: Default::default(),
             orientation: Default::default(),
+            last_focus: Default::default(),
             secondary: Default::default(),
             windows: Default::default(),
             primary: Default::default(),
             layers: Default::default(),
+            focus: Default::default(),
             view: Default::default(),
         }
     }
 
     /// Add a new window.
     pub fn add(&mut self, surface: ToplevelSurface, output: &Output) {
+        // Focus new windows.
+        self.focus = surface.get_surface().cloned();
+
         self.windows.push(Rc::new(RefCell::new(Window::new(surface))));
         self.set_primary(output, self.windows.len() - 1);
         self.set_secondary(output, None);
@@ -99,9 +109,10 @@ impl Windows {
             wl_surface = Cow::Owned(surface);
         }
 
-        self.windows.iter_mut().map(|window| window.borrow_mut()).find(|window| {
-            window.surface.get_surface().map_or(false, |surface| surface.eq(&wl_surface))
-        })
+        self.windows
+            .iter_mut()
+            .map(|window| window.borrow_mut())
+            .find(|window| window.surface().map_or(false, |surface| surface.eq(&wl_surface)))
     }
 
     /// Handle a surface commit for any window.
@@ -115,7 +126,7 @@ impl Windows {
         // Find a window matching the root surface.
         macro_rules! find_window {
             ($windows:expr) => {{
-                $windows.find(|window| window.surface.get_surface() == Some(&root_surface))
+                $windows.find(|window| window.surface() == Some(&root_surface))
             }};
         }
 
@@ -156,7 +167,7 @@ impl Windows {
     /// will also be dismissed if the parent is not currently visible.
     pub fn orphan_surface_commit(&mut self, root_surface: &WlSurface) -> Option<()> {
         let mut orphans = self.orphan_popups.iter();
-        let index = orphans.position(|popup| popup.surface.get_surface() == Some(root_surface))?;
+        let index = orphans.position(|popup| popup.surface() == Some(root_surface))?;
         let mut popup = self.orphan_popups.swap_remove(index);
         let parent = popup.parent()?;
 
@@ -244,21 +255,45 @@ impl Windows {
         }
     }
 
+    /// Check for focus change requests.
+    ///
+    /// If `Some` is returned, the focus should be changed. A value of `Some(None)` indicates that
+    /// the focus should be cleared.
+    pub fn focus_request(&mut self) -> Option<Option<WlSurface>> {
+        let new_focus = match &mut self.view {
+            View::Overview(_) | View::DragAndDrop(_) => None,
+            View::Workspace => self.focus.clone(),
+        };
+
+        (self.last_focus != new_focus).then(|| {
+            self.last_focus = new_focus;
+            self.last_focus.clone()
+        })
+    }
+
     /// Reap dead visible windows.
     ///
     /// This will reorder and resize visible windows when any of them has died.
     fn refresh_visible(&mut self, output: &Output) {
+        let mut focus = self.focus.take();
+
         let transaction = self.start_transaction();
+        let primary = transaction.primary.upgrade();
+        let secondary = transaction.secondary.upgrade();
 
         // Remove dead primary/secondary windows.
-        if transaction.secondary.upgrade().map_or(true, |window| !window.borrow().alive()) {
+        if secondary.as_ref().map_or(true, |window| !window.borrow().alive()) {
+            focus = primary.as_ref().and_then(|window| window.borrow().surface().cloned());
             transaction.secondary = Weak::new();
         }
-        if transaction.primary.upgrade().map_or(true, |window| !window.borrow().alive()) {
+        if primary.map_or(true, |window| !window.borrow().alive()) {
+            focus = secondary.and_then(|window| window.borrow().surface().cloned());
             transaction.primary = mem::take(&mut transaction.secondary);
         }
 
         transaction.update_visible_dimensions(output);
+
+        self.focus = focus;
     }
 
     /// Create a new transaction, or access the active one.
@@ -487,37 +522,52 @@ impl Windows {
                 self.set_secondary(output, None);
                 self.set_primary(output, None);
                 self.set_view(View::Workspace);
+                self.focus = None;
             },
             (Gesture::Home, View::Overview(_)) => self.set_view(View::Workspace),
             _ => (),
         }
     }
 
-    /// Find surface at the specified location.
-    pub fn surface_at_position(
-        &self,
-        output: &Output,
-        position: Point<f64, Logical>,
-    ) -> Option<(WlSurface, Point<i32, Logical>)> {
+    /// Check which surface is at a specific touch point.
+    ///
+    /// If the window at the touch location accepts keyboard input, this function will also change
+    /// focus to the root window associated with the touch surface.
+    pub fn touch_surface_at(&mut self, position: Point<f64, Logical>) -> Option<OffsetSurface> {
         // Prevent window interaction in Overview/DnD.
         match self.view {
             View::Workspace => (),
             _ => return None,
         };
 
-        // Find window at the location.
-        let secondary_visible = self.secondary.strong_count() > 0;
-        let window = if output.primary_rectangle(secondary_visible).to_f64().contains(position) {
-            self.primary.upgrade()?
-        } else if output.secondary_rectangle().to_f64().contains(position) {
-            self.secondary.upgrade()?
-        } else {
-            return None;
-        };
+        // If window is present, return its surface at the position.
+        macro_rules! return_matching {
+            ($window:expr) => {{
+                if let Some(window) = $window {
+                    // Focus the touched window.
+                    if !window.deny_focus {
+                        self.focus = window.surface().cloned();
+                    }
 
-        // Get the correct subsurface.
-        let window = window.borrow();
-        window.surface_at_position(position)
+                    return window.surface_at(position);
+                }
+            }};
+        }
+
+        return_matching!(self.layers.foreground_window_at(position));
+
+        let primary = self.primary.upgrade();
+        return_matching!(primary.as_ref().map(|w| w.borrow()).filter(|w| w.contains(position)));
+
+        let secondary = self.secondary.upgrade();
+        return_matching!(secondary.as_ref().map(|w| w.borrow()).filter(|w| w.contains(position)));
+
+        return_matching!(self.layers.background_window_at(position));
+
+        // Unfocus when touching outside of window bounds.
+        self.focus = None;
+
+        None
     }
 
     /// Application runtime.
@@ -554,6 +604,9 @@ impl Windows {
             return;
         }
 
+        // Update window focus.
+        self.focus = window.and_then(|window| window.borrow().surface().cloned());
+
         // Update output's visible windows.
         if let Some(primary) = transaction.primary.upgrade() {
             primary.borrow_mut().leave(transaction, output);
@@ -587,6 +640,9 @@ impl Windows {
             return;
         }
 
+        // Update window focus.
+        self.focus = window.and_then(|window| window.borrow().surface().cloned());
+
         // Update output's visible windows.
         if let Some(secondary) = transaction.secondary.upgrade() {
             secondary.borrow_mut().leave(transaction, output);
@@ -600,12 +656,7 @@ impl Windows {
             transaction.primary = Weak::new();
         }
 
-        // Set secondary and move old one to primary if it is empty.
-        let old_secondary = mem::replace(&mut transaction.secondary, weak_window);
-        if transaction.primary.strong_count() == 0 && transaction.secondary.strong_count() != 0 {
-            transaction.primary = old_secondary;
-        }
-
+        transaction.secondary = weak_window;
         transaction.update_visible_dimensions(output);
     }
 }
@@ -857,6 +908,9 @@ pub struct Window<S = ToplevelSurface> {
     /// Last configure size acked by the client.
     pub acked_size: Size<i32, Logical>,
 
+    /// Whether the window should be excluded for keyboard focus.
+    pub deny_focus: bool,
+
     /// Desired window dimensions.
     rectangle: Rectangle<i32, Logical>,
 
@@ -885,6 +939,7 @@ impl<S: Surface> Window<S> {
             buffers_pending: Default::default(),
             texture_cache: Default::default(),
             transaction: Default::default(),
+            deny_focus: Default::default(),
             acked_size: Default::default(),
             rectangle: Default::default(),
             visible: Default::default(),
@@ -915,6 +970,11 @@ impl<S: Surface> Window<S> {
     /// Check window liveliness.
     pub fn alive(&self) -> bool {
         self.surface.alive()
+    }
+
+    /// Check if this window contains a specific point.
+    pub fn contains(&self, point: Point<f64, Logical>) -> bool {
+        self.bounds().to_f64().contains(point)
     }
 
     /// Render this window's buffers.
@@ -1148,13 +1208,10 @@ impl<S: Surface> Window<S> {
     }
 
     /// Find subsurface at the specified location.
-    fn surface_at_position(
-        &self,
-        position: Point<f64, Logical>,
-    ) -> Option<(WlSurface, Point<i32, Logical>)> {
+    fn surface_at(&self, position: Point<f64, Logical>) -> Option<OffsetSurface> {
         // Check popups top to bottom first.
         let relative = position - self.rectangle.loc.to_f64();
-        let popup = self.popups.iter().find_map(|popup| popup.surface_at_position(relative));
+        let popup = self.popups.iter().find_map(|popup| popup.surface_at(relative));
         if let Some(popup_surface) = popup {
             return Some(popup_surface);
         }
@@ -1179,7 +1236,8 @@ impl<S: Surface> Window<S> {
 
                 // Check if the position is within the surface bounds.
                 if surface_rect.contains(position) {
-                    *result.borrow_mut() = Some((wl_surface.clone(), location));
+                    let surface = OffsetSurface::new(wl_surface.clone(), location);
+                    *result.borrow_mut() = Some(surface);
                     TraversalAction::SkipChildren
                 } else {
                     TraversalAction::DoChildren(location)
@@ -1243,6 +1301,11 @@ impl<S: Surface> Window<S> {
             }
         }
     }
+
+    /// Get primary window surface.
+    fn surface(&self) -> Option<&WlSurface> {
+        self.surface.get_surface()
+    }
 }
 
 impl Window<PopupSurface> {
@@ -1288,50 +1351,53 @@ impl Window<CatacombLayerSurface> {
             None => return,
         };
 
-        let (mut size, margin, anchor, exclusive) = compositor::with_states(surface, |states| {
-            let state = states.cached_state.current::<LayerSurfaceCachedState>();
-            (state.size, state.margin, state.anchor, state.exclusive_zone)
+        let state = compositor::with_states(surface, |states| {
+            *states.cached_state.current::<LayerSurfaceCachedState>()
         })
         .unwrap_or_default();
         let output_size = output.size();
 
-        // Update exclusive zones.
-        let old_anchor = mem::replace(&mut self.surface.anchor, anchor);
-        let old_exclusive = mem::replace(&mut self.surface.exclusive_zone, exclusive);
-        output.exclusive.reset(old_anchor, old_exclusive);
-        output.exclusive.update(anchor, exclusive);
+        // Update keyboard interactivity.
+        self.deny_focus = state.keyboard_interactivity == KeyboardInteractivity::None;
 
-        let exclusive = match exclusive {
+        // Update exclusive zones.
+        let mut size = state.size;
+        let old_exclusive = mem::replace(&mut self.surface.exclusive_zone, state.exclusive_zone);
+        let old_anchor = mem::replace(&mut self.surface.anchor, state.anchor);
+        output.exclusive.reset(old_anchor, old_exclusive);
+        output.exclusive.update(state.anchor, state.exclusive_zone);
+
+        let exclusive = match state.exclusive_zone {
             ExclusiveZone::Neutral => output.exclusive,
             _ => ExclusiveSpace::default(),
         };
 
         // Window size.
-        if size.w == 0 && anchor.contains(Anchor::LEFT | Anchor::RIGHT) {
+        if size.w == 0 && state.anchor.contains(Anchor::LEFT | Anchor::RIGHT) {
             size.w = output_size.w - exclusive.left - exclusive.right;
-            if anchor.contains(Anchor::RIGHT) {
-                size.w -= margin.right;
+            if state.anchor.contains(Anchor::RIGHT) {
+                size.w -= state.margin.right;
             }
         }
-        if size.h == 0 && anchor.contains(Anchor::TOP | Anchor::BOTTOM) {
+        if size.h == 0 && state.anchor.contains(Anchor::TOP | Anchor::BOTTOM) {
             size.h = output_size.h - exclusive.top - exclusive.bottom;
-            if anchor.contains(Anchor::BOTTOM) {
-                size.h -= margin.bottom;
+            if state.anchor.contains(Anchor::BOTTOM) {
+                size.h -= state.margin.bottom;
             }
         }
 
         // Window location.
-        let x = if anchor.contains(Anchor::LEFT) {
-            margin.left + exclusive.left
-        } else if anchor.contains(Anchor::RIGHT) {
-            output_size.w - size.w - margin.right - exclusive.right
+        let x = if state.anchor.contains(Anchor::LEFT) {
+            state.margin.left + exclusive.left
+        } else if state.anchor.contains(Anchor::RIGHT) {
+            output_size.w - size.w - state.margin.right - exclusive.right
         } else {
             (output_size.w - size.w) / 2
         };
-        let y = if anchor.contains(Anchor::TOP) {
-            margin.top + exclusive.top
-        } else if anchor.contains(Anchor::BOTTOM) {
-            output_size.h - size.h - margin.bottom - exclusive.bottom
+        let y = if state.anchor.contains(Anchor::TOP) {
+            state.margin.top + exclusive.top
+        } else if state.anchor.contains(Anchor::BOTTOM) {
+            output_size.h - size.h - state.margin.bottom - exclusive.bottom
         } else {
             (output_size.h - size.h) / 2
         };
@@ -1355,5 +1421,17 @@ enum View {
 impl Default for View {
     fn default() -> Self {
         View::Workspace
+    }
+}
+
+/// Surface with offset from its window origin.
+pub struct OffsetSurface {
+    pub offset: Point<i32, Logical>,
+    pub surface: WlSurface,
+}
+
+impl OffsetSurface {
+    fn new(surface: WlSurface, offset: Point<i32, Logical>) -> Self {
+        Self { surface, offset }
     }
 }

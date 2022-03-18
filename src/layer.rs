@@ -1,6 +1,7 @@
 //! Layer shell windows.
 
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
+use smithay::utils::{Logical, Point};
 use smithay::wayland::shell::wlr_layer::Layer;
 
 use crate::output::Output;
@@ -80,6 +81,22 @@ impl Layers {
         for window in self.iter_mut() {
             window.request_frame(runtime);
         }
+    }
+
+    /// Foreground window at the specified position.
+    pub fn foreground_window_at(&self, position: Point<f64, Logical>) -> Option<&LayerWindow> {
+        self.overlay
+            .iter()
+            .find(|window| window.contains(position))
+            .or_else(|| self.top.iter().find(|window| window.contains(position)))
+    }
+
+    /// Background window at the specified position.
+    pub fn background_window_at(&self, position: Point<f64, Logical>) -> Option<&LayerWindow> {
+        self.bottom
+            .iter()
+            .find(|window| window.contains(position))
+            .or_else(|| self.background.iter().find(|window| window.contains(position)))
     }
 
     /// Apply all pending transactional updates.

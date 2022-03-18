@@ -5,18 +5,23 @@ use std::rc::Rc;
 use std::time::Duration;
 use std::{env, io};
 
+use server_decoration::server::org_kde_kwin_server_decoration_manager::Mode;
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{EventLoop, Interest, Mode as TriggerMode, PostAction};
+use smithay::reexports::wayland_protocols::misc::server_decoration;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Display;
 use smithay::utils::Rectangle;
+use smithay::wayland::input_method::{InputMethodHandle, InputMethodSeatTrait};
 use smithay::wayland::output::xdg;
 use smithay::wayland::seat::{KeyboardHandle, Seat, XkbConfig};
 use smithay::wayland::shell::legacy::decoration as kde_decoration;
 use smithay::wayland::shell::legacy::decoration::KdeDecorationRequest;
 use smithay::wayland::shell::xdg::decoration;
-use smithay::wayland::{data_device, shm};
-use wayland_protocols::misc::server_decoration::server::org_kde_kwin_server_decoration_manager::Mode;
+use smithay::wayland::text_input::{TextInputHandle, TextInputSeatTrait};
+use smithay::wayland::virtual_keyboard::VirtualKeyboardHandle;
+use smithay::wayland::{data_device, input_method, shm, text_input, SERIAL_COUNTER};
 
 use crate::drawing::Graphics;
 use crate::input::TouchState;
@@ -27,6 +32,9 @@ use crate::window::Windows;
 
 /// Shared compositor state.
 pub struct Catacomb<B> {
+    pub virtual_keyboard: VirtualKeyboardHandle,
+    pub input_method: InputMethodHandle,
+    pub text_input: TextInputHandle,
     pub keyboard: KeyboardHandle,
     pub touch_state: TouchState,
     pub seat_name: String,
@@ -102,6 +110,13 @@ impl<B: Backend + 'static> Catacomb<B> {
             .expect("adding keyboard");
         let touch = seat.add_touch();
 
+        // Initialize IME and virtual keyboard.
+        input_method::init_input_method_manager_global(&mut display);
+        text_input::init_text_input_manager_global(&mut display);
+        let input_method = seat.add_input_method(25, 200, XkbConfig::default());
+        let text_input = seat.add_text_input();
+        let virtual_keyboard = VirtualKeyboardHandle::new(&mut display, 200, 25);
+
         // Subscribe to device orientation changes.
         Accelerometer::new().subscribe(event_loop.handle(), |orientation, catacomb| {
             catacomb.handle_orientation(orientation);
@@ -115,6 +130,9 @@ impl<B: Backend + 'static> Catacomb<B> {
             output: Output::new_dummy(&mut display),
             display: Rc::new(RefCell::new(display)),
             windows: Windows::new(),
+            virtual_keyboard,
+            input_method,
+            text_input,
             seat_name,
             keyboard,
             backend,
@@ -137,7 +155,9 @@ impl<B: Backend + 'static> Catacomb<B> {
             },
         }
     }
+}
 
+impl<B> Catacomb<B> {
     /// Render the current compositor state.
     pub fn draw(&mut self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame) {
         // Render debug indicator showing current touch location.
@@ -148,7 +168,18 @@ impl<B: Backend + 'static> Catacomb<B> {
             touch_debug.draw_at(frame, &self.output, rect, 1.);
         }
 
+        if let Some(surface) = self.windows.focus_request() {
+            self.focus(surface.as_ref());
+        }
+
         self.windows.draw(renderer, frame, &mut self.graphics, &self.output);
+    }
+
+    /// Focus a new surface.
+    pub fn focus(&mut self, surface: Option<&WlSurface>) {
+        self.virtual_keyboard.set_focus(surface, SERIAL_COUNTER.next_serial());
+        self.keyboard.set_focus(surface, SERIAL_COUNTER.next_serial());
+        self.text_input.set_focus(surface, None);
     }
 }
 
