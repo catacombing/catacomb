@@ -36,6 +36,13 @@ const MAX_TAP_DISTANCE: f64 = 20.;
 /// Friction for velocity computation.
 const FRICTION: f64 = 0.1;
 
+/// Touch slot for pointer emulation.
+///
+/// The touch slot `None`, which is usually used for devices that do not support multitouch, does
+/// not work properly with some clients like GTK. To work around this we pick an arbitrary
+/// multitouch slot instead.
+const POINTER_TOUCH_SLOT: Option<u32> = Some(0);
+
 /// Touch input state.
 pub struct TouchState {
     pub position: Point<f64, Logical>,
@@ -240,7 +247,7 @@ impl<B: Backend> Catacomb<B> {
         match event {
             InputEvent::Keyboard { event, .. } => self.on_keyboard_input(event),
             InputEvent::PointerButton { event } if event.button() == Some(MouseButton::Left) => {
-                let slot = TouchSlot::default();
+                let slot = TouchSlot::from(POINTER_TOUCH_SLOT);
                 let position = self.touch_state.position;
                 if event.state() == ButtonState::Pressed {
                     self.on_touch_down(TouchEvent::new(TouchEventType::Down, slot, 0, position));
@@ -253,7 +260,7 @@ impl<B: Backend> Catacomb<B> {
                 self.touch_state.position = position;
 
                 if self.touch_state.slot.is_some() {
-                    let slot = TouchSlot::default();
+                    let slot = TouchSlot::from(POINTER_TOUCH_SLOT);
                     self.on_touch_motion(TouchEvent::new(TouchEventType::Down, slot, 0, position));
                 }
             },
