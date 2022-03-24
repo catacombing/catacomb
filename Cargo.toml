@@ -5,6 +5,6 @@ edition = "2021"
 rust-version = "1.58.0"
 
 [dependencies]
-smithay = { git = "https://github.com/chrisduerr/smithay", rev = "4a0880154779397ee628e3c5ab4c8a76c210dc7e", features = ["use_system_lib"] }
+smithay = { git = "https://github.com/chrisduerr/smithay", rev = "5129920247146d4d626f675f31603752700ef8e7", features = ["use_system_lib"] }
 calloop = "0.9.3"
 udev = "0.6.2"

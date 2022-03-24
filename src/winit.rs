@@ -40,7 +40,7 @@ pub fn run() {
         dmabuf::init_dmabuf_global(
             &mut egl_display.borrow_mut(),
             formats,
-            move |buffer, _| graphics.borrow_mut().renderer().import_dmabuf(buffer).is_ok(),
+            move |buffer, _| graphics.borrow_mut().renderer().import_dmabuf(buffer, None).is_ok(),
             None,
         );
     }
@@ -60,7 +60,7 @@ pub fn run() {
             .borrow_mut()
             .renderer()
             .render(output_size, Transform::Flipped180, |renderer, frame| {
-                let full_rect = Rectangle::from_loc_and_size((0, 0), (i32::MAX, i32::MAX));
+                let full_rect = Rectangle::from_loc_and_size((0., 0.), output_size.to_f64());
                 let _ = frame.clear([1., 0., 1., 1.], &[full_rect]);
                 catacomb.draw(renderer, frame);
             })

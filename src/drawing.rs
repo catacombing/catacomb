@@ -132,18 +132,19 @@ impl Texture {
         // Truncate source size based on window bounds.
         let src_size = (self.size + self.location).min(scaled_window_bounds);
         let src = Rectangle::from_loc_and_size((0, 0), src_size);
-        let src_physical = src.to_buffer(self.scale, self.transform, &self.size);
+        let src_buffer = src.to_buffer(self.scale, self.transform, &self.size);
 
         // Scale output size based on window scale.
         let location = window_bounds.loc + self.location.scale(window_scale);
         let dest_size = src_size.scale(window_scale).min(window_bounds.size);
         let dest = Rectangle::from_loc_and_size(location, dest_size);
+        let dest_physical = dest.to_f64().to_physical(output.scale());
 
         let _ = frame.render_texture_from_to(
             &self.texture,
-            src_physical,
-            dest.to_f64().to_physical(output.scale()),
-            &[src_physical],
+            src_buffer,
+            dest_physical,
+            &[dest_physical],
             self.transform,
             1.,
         );

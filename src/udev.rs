@@ -50,7 +50,9 @@ pub fn run() {
         |buffer, mut data| {
             let catacomb = data.get::<Catacomb<Udev>>().unwrap();
             let output_device = catacomb.backend.output_device.as_mut();
-            output_device.and_then(|device| device.renderer.import_dmabuf(buffer).ok()).is_some()
+            output_device
+                .and_then(|device| device.renderer.import_dmabuf(buffer, None).ok())
+                .is_some()
         },
         None,
     );
@@ -156,7 +158,7 @@ impl OutputDevice {
         let transform = catacomb.windows.orientation().transform();
         let output_size = catacomb.output.physical_resolution();
         self.renderer.render(output_size, transform, |renderer, frame| {
-            let full_rect = Rectangle::from_loc_and_size((0, 0), (i32::MAX, i32::MAX));
+            let full_rect = Rectangle::from_loc_and_size((0., 0.), output_size.to_f64());
             let _ = frame.clear([1., 0., 1., 1.], &[full_rect]);
             catacomb.draw(renderer, frame);
         })?;
