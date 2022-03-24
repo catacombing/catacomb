@@ -756,7 +756,7 @@ pub trait Surface {
                 .ok()
                 .flatten()
             })
-            .unwrap_or_default()
+            .unwrap_or_else(|| Rectangle::from_loc_and_size((0, 0), self.acked_size()))
     }
 }
 
