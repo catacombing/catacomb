@@ -1,3 +1,4 @@
+use std::cmp;
 use std::error::Error as StdError;
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
@@ -158,7 +159,9 @@ impl OutputDevice {
         let transform = catacomb.windows.orientation().transform();
         let output_size = catacomb.output.physical_resolution();
         self.renderer.render(output_size, transform, |renderer, frame| {
-            let full_rect = Rectangle::from_loc_and_size((0., 0.), output_size.to_f64());
+            let size = cmp::max(output_size.w, output_size.h) as f64;
+            let full_rect = Rectangle::from_loc_and_size((0., 0.), (size, size));
+
             let _ = frame.clear([1., 0., 1., 1.], &[full_rect]);
             catacomb.draw(renderer, frame);
         })?;
