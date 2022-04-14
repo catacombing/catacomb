@@ -495,6 +495,11 @@ impl Windows {
                     self.windows[index].borrow_mut().surface.send_close();
                     self.windows.remove(index);
                     self.refresh_visible(output);
+
+                    // Close overview after all windows were closed.
+                    if self.windows.is_empty() {
+                        self.set_view(View::Workspace);
+                    }
                 }
             },
             View::DragAndDrop(dnd) => {
@@ -517,7 +522,9 @@ impl Windows {
     /// Handle touch gestures.
     pub fn on_gesture(&mut self, output: &Output, gesture: Gesture) {
         match (gesture, self.view) {
-            (Gesture::Overview, _) => self.set_view(View::Overview(Overview::default())),
+            (Gesture::Overview, _) if !self.windows.is_empty() => {
+                self.set_view(View::Overview(Overview::default()));
+            },
             (Gesture::Home, View::Workspace) => {
                 self.set_secondary(output, None);
                 self.set_primary(output, None);
