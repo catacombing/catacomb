@@ -1,11 +1,12 @@
 //! Input event handling.
 
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use calloop::timer::{Timer, TimerHandle};
 use calloop::LoopHandle;
 use smithay::backend::input::{
-    ButtonState, Event, InputBackend, InputEvent, KeyboardKeyEvent, MouseButton,
+    ButtonState, Event, InputBackend, InputEvent, KeyState, KeyboardKeyEvent, MouseButton,
     PointerButtonEvent, PositionEvent, TouchEvent as _, TouchSlot,
 };
 use smithay::backend::winit::WinitEvent;
@@ -14,6 +15,7 @@ use smithay::wayland::seat::{keysyms, FilterResult, TouchHandle};
 use smithay::wayland::SERIAL_COUNTER;
 
 use crate::catacomb::{Backend, Catacomb};
+use crate::config::APP_DRAWER;
 use crate::orientation::Orientation;
 use crate::output::Output;
 use crate::window::OffsetSurface;
@@ -446,6 +448,13 @@ impl<B: Backend> Catacomb<B> {
                 keysym @ keysyms::KEY_XF86Switch_VT_1..=keysyms::KEY_XF86Switch_VT_12 => {
                     let vt = (keysym - keysyms::KEY_XF86Switch_VT_1 + 1) as i32;
                     self.backend.change_vt(vt);
+                },
+                keysyms::KEY_XF86PowerOff if state == KeyState::Pressed => {
+                    let _ = Command::new(APP_DRAWER)
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn();
                 },
                 _ => return FilterResult::Forward,
             }
