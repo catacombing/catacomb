@@ -136,15 +136,15 @@ impl Texture {
 
         // Scale output size based on window scale.
         let location = window_bounds.loc + self.location.scale(window_scale);
-        let dest_size = src_size.scale(window_scale).min(window_bounds.size);
-        let dest = Rectangle::from_loc_and_size(location, dest_size);
-        let dest_physical = dest.to_f64().to_physical(output.scale());
+        let dst_size = src_size.scale(window_scale).min(window_bounds.size);
+        let dst = Rectangle::from_loc_and_size(location, dst_size);
+        let dst_physical = dst.to_f64().to_physical(output.scale());
 
         let _ = frame.render_texture_from_to(
             &self.texture,
             src_buffer,
-            dest_physical,
-            &[dest_physical],
+            dst_physical,
+            &[Rectangle::from_loc_and_size((0., 0.), dst_physical.size)],
             self.transform,
             1.,
         );
