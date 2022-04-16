@@ -839,7 +839,7 @@ impl Surface for PopupSurface {
     }
 
     fn acked_size(&self) -> Size<i32, Logical> {
-        self.geometry().size
+        self.with_pending_state(|state| state.positioner.rect_size).unwrap_or_default()
     }
 }
 
