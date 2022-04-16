@@ -138,10 +138,6 @@ impl Overview {
         for (position, i) in neg_iter.chain(pos_iter) {
             let mut window = windows[i as usize].borrow_mut();
 
-            // Window scale.
-            let window_geometry = window.geometry();
-            let scale = (max_size.w as f64 / window_geometry.size.w as f64).min(1.);
-
             // Window boundaries.
             let mut bounds = Rectangle::from_loc_and_size(available.loc, max_size);
             bounds.loc.x += overview_x_position(
@@ -165,7 +161,7 @@ impl Overview {
             );
             decoration.draw_at(frame, output, decoration_bounds, 1.);
 
-            window.draw(renderer, frame, output, scale, bounds);
+            window.draw(renderer, frame, output, FG_OVERVIEW_PERCENTAGE, bounds);
         }
     }
 
