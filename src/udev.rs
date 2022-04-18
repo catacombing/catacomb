@@ -1,4 +1,3 @@
-use std::cmp;
 use std::error::Error as StdError;
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
@@ -11,11 +10,11 @@ use smithay::backend::egl::context::EGLContext;
 use smithay::backend::egl::display::EGLDisplay;
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::gles2::Gles2Renderer;
-use smithay::backend::renderer::{Bind, Frame, ImportDma, ImportEgl, Renderer};
+use smithay::backend::renderer::{Bind, ImportDma, ImportEgl, Renderer};
 use smithay::backend::session::auto::AutoSession;
 use smithay::backend::session::{Session, Signal};
+use smithay::backend::udev;
 use smithay::backend::udev::{UdevBackend, UdevEvent};
-use smithay::backend::{udev, SwapBuffersError};
 use smithay::reexports::calloop::{Dispatcher, EventLoop, LoopHandle, RegistrationToken};
 use smithay::reexports::drm::control::connector::State as ConnectorState;
 use smithay::reexports::drm::control::Device;
@@ -24,11 +23,10 @@ use smithay::reexports::nix::fcntl::OFlag;
 use smithay::reexports::nix::sys::stat::dev_t as DeviceId;
 use smithay::reexports::wayland_server::protocol::wl_output::Subpixel;
 use smithay::utils::signaling::{Linkable, SignalToken, Signaler};
-use smithay::utils::Rectangle;
 use smithay::wayland::dmabuf;
 use smithay::wayland::output::{Mode, PhysicalProperties};
 
-use crate::catacomb::{Backend, Catacomb};
+use crate::catacomb::{Backend, Catacomb, Render};
 use crate::output::Output;
 
 pub fn run() {
@@ -129,47 +127,6 @@ impl Backend for Udev {
 
     fn change_vt(&mut self, vt: i32) {
         let _ = self.session.change_vt(vt);
-    }
-}
-
-/// Target device for rendering.
-struct OutputDevice {
-    gbm_surface: GbmBufferedSurface<GbmDevice<RawFd>, RawFd>,
-    gbm: GbmDevice<RawFd>,
-    renderer: Gles2Renderer,
-    id: DeviceId,
-
-    _restart_token: SignalToken,
-    token: RegistrationToken,
-}
-
-impl OutputDevice {
-    fn render(&mut self, catacomb: &mut Catacomb<Udev>) -> Result<(), SwapBuffersError> {
-        // Mark the current frame as submitted.
-        self.gbm_surface.frame_submitted()?;
-
-        // Bind the next buffer to render into.
-        let (dmabuf, _age) = self.gbm_surface.next_buffer()?;
-        self.renderer.bind(dmabuf)?;
-
-        // Update transaction before rendering to update device orientation.
-        catacomb.windows.update_transaction();
-
-        // Draw the current frame into the buffer.
-        let transform = catacomb.windows.orientation().transform();
-        let output_size = catacomb.output.physical_resolution();
-        self.renderer.render(output_size, transform, |renderer, frame| {
-            let size = cmp::max(output_size.w, output_size.h) as f64;
-            let full_rect = Rectangle::from_loc_and_size((0., 0.), (size, size));
-
-            let _ = frame.clear([1., 0., 1., 1.], &[full_rect]);
-            catacomb.draw(renderer, frame);
-        })?;
-
-        // Queue buffer for rendering.
-        self.gbm_surface.queue_buffer()?;
-
-        Ok(())
     }
 }
 
@@ -305,17 +262,43 @@ impl Catacomb<Udev> {
     /// Render a specific device.
     fn render(&mut self, device_id: DeviceId) {
         let mut device = self.backend.output_device.take();
-
         if let Some(device) = device.as_mut().filter(|device| device.id == device_id) {
-            let _ = device.render(self);
-
-            // Handle window liveliness changes.
-            self.windows.refresh(&mut self.output);
-
-            // Request new frames for visible windows.
-            self.windows.request_frames();
+            self.create_frame(device);
         }
-
         self.backend.output_device = device;
+    }
+}
+
+/// Target device for rendering.
+struct OutputDevice {
+    gbm_surface: GbmBufferedSurface<GbmDevice<RawFd>, RawFd>,
+    gbm: GbmDevice<RawFd>,
+    renderer: Gles2Renderer,
+    id: DeviceId,
+
+    _restart_token: SignalToken,
+    token: RegistrationToken,
+}
+
+impl Render for &mut OutputDevice {
+    fn render<B>(&mut self, catacomb: &mut Catacomb<B>) -> Result<(), Box<dyn StdError>> {
+        // Mark the current frame as submitted.
+        self.gbm_surface.frame_submitted()?;
+
+        // Bind the next buffer to render into.
+        let (dmabuf, _age) = self.gbm_surface.next_buffer()?;
+        self.renderer.bind(dmabuf)?;
+
+        // Draw the current frame into the buffer.
+        let transform = catacomb.windows.orientation().transform();
+        let output_size = catacomb.output.physical_resolution();
+        self.renderer.render(output_size, transform, |renderer, frame| {
+            catacomb.draw(renderer, frame)
+        })?;
+
+        // Queue buffer for rendering.
+        self.gbm_surface.queue_buffer()?;
+
+        Ok(())
     }
 }

@@ -1,12 +1,14 @@
 //! Catacomb compositor state.
 
 use std::cell::RefCell;
+use std::error::Error;
 use std::rc::Rc;
 use std::time::Duration;
-use std::{env, io};
+use std::{cmp, env, io};
 
 use server_decoration::server::org_kde_kwin_server_decoration_manager::Mode;
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
+use smithay::backend::renderer::Frame;
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{EventLoop, Interest, Mode as TriggerMode, PostAction};
 use smithay::reexports::wayland_protocols::misc::server_decoration;
@@ -158,8 +160,29 @@ impl<B: Backend + 'static> Catacomb<B> {
 }
 
 impl<B> Catacomb<B> {
-    /// Render the current compositor state.
+    /// Handle everything necessary to draw a single frame.
+    pub fn create_frame<R: Render>(&mut self, mut renderer: R) {
+        // Update transaction before rendering to update device orientation.
+        self.windows.update_transaction();
+
+        // Draw the content with the backend-specific renderer.
+        let _ = renderer.render(self);
+
+        // Handle window liveliness changes.
+        self.windows.refresh(&mut self.output);
+
+        // Request new frames for visible windows.
+        self.windows.request_frames();
+    }
+
+    /// Draw the current compositor state.
     pub fn draw(&mut self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame) {
+        // Clear the screen.
+        let output_size = self.output.physical_resolution();
+        let size = cmp::max(output_size.w, output_size.h) as f64;
+        let full_rect = Rectangle::from_loc_and_size((0., 0.), (size, size));
+        let _ = frame.clear([1., 0., 1., 1.], &[full_rect]);
+
         // Render debug indicator showing current touch location.
         if self.touch_debug {
             let loc = self.touch_state.position.to_i32_round();
@@ -183,7 +206,13 @@ impl<B> Catacomb<B> {
     }
 }
 
+/// Backend capabilities.
 pub trait Backend {
     fn seat_name(&self) -> String;
     fn change_vt(&mut self, _vt: i32) {}
+}
+
+/// Abstraction over backend-specific rendering.
+pub trait Render {
+    fn render<B>(&mut self, catacomb: &mut Catacomb<B>) -> Result<(), Box<dyn Error>>;
 }

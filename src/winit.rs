@@ -1,15 +1,16 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
+use std::error::Error;
 
-use smithay::backend::renderer::{Frame, ImportDma, ImportEgl, Renderer, TextureFilter};
-use smithay::backend::winit;
+use smithay::backend::renderer::{ImportDma, ImportEgl, Renderer, TextureFilter};
+use smithay::backend::winit::{self, WinitGraphicsBackend};
 use smithay::reexports::calloop::EventLoop;
-use smithay::utils::{Rectangle, Transform};
+use smithay::utils::Transform;
 use smithay::wayland::dmabuf;
 use smithay::wayland::output::Mode;
 
-use crate::catacomb::{Backend, Catacomb};
+use crate::catacomb::{Backend, Catacomb, Render};
 
 struct Winit;
 
@@ -52,26 +53,7 @@ pub fn run() {
             break;
         }
 
-        catacomb.windows.update_transaction();
-
-        let logical_size = catacomb.output.resolution().to_f64();
-        let output_size = logical_size.to_physical(catacomb.output.scale()).to_i32_round();
-        graphics
-            .borrow_mut()
-            .renderer()
-            .render(output_size, Transform::Flipped180, |renderer, frame| {
-                let full_rect = Rectangle::from_loc_and_size((0., 0.), output_size.to_f64());
-                let _ = frame.clear([1., 0., 1., 1.], &[full_rect]);
-                catacomb.draw(renderer, frame);
-            })
-            .expect("render");
-        graphics.borrow_mut().submit(None, 1.0).expect("submit");
-
-        // Handle window liveliness changes.
-        catacomb.windows.refresh(&mut catacomb.output);
-
-        // Request new frames for visible windows.
-        catacomb.windows.request_frames();
+        catacomb.create_frame(&mut *graphics.borrow_mut());
 
         // NOTE: The timeout picked here is 5ms to allow for up to 200 FPS. Increasing it would
         // reduce the framerate, while decreasing it would mean that most of the vblank interval is
@@ -82,5 +64,19 @@ pub fn run() {
         }
 
         display.borrow_mut().flush_clients(&mut catacomb);
+    }
+}
+
+impl Render for &mut WinitGraphicsBackend {
+    fn render<B>(&mut self, catacomb: &mut Catacomb<B>) -> Result<(), Box<dyn Error>> {
+        let logical_size = catacomb.output.resolution().to_f64();
+        let output_size = logical_size.to_physical(catacomb.output.scale()).to_i32_round();
+        self.renderer()
+            .render(output_size, Transform::Flipped180, |renderer, frame| {
+                catacomb.draw(renderer, frame)
+            })
+            .expect("render");
+        self.submit(None, 1.0).expect("submit");
+        Ok(())
     }
 }
