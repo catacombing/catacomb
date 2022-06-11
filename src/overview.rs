@@ -159,9 +159,9 @@ impl Overview {
                 (bounds.loc.x - border_width, bounds.loc.y - title_height),
                 decoration.size(),
             );
-            decoration.draw_at(frame, output, decoration_bounds, 1.);
+            decoration.draw_at(frame, output, decoration_bounds, 1., None);
 
-            window.draw(renderer, frame, output, FG_OVERVIEW_PERCENTAGE, bounds);
+            window.draw(renderer, frame, output, FG_OVERVIEW_PERCENTAGE, bounds, None);
         }
     }
 
@@ -175,6 +175,12 @@ impl Overview {
     pub fn overdrag_limited(&self, window_count: usize) -> bool {
         let min_offset = -(window_count as f64) + 1.;
         self.x_offset <= min_offset - OVERDRAG_LIMIT || self.x_offset >= OVERDRAG_LIMIT
+    }
+
+    /// Check if overview animations are active.
+    pub fn animating_drag(&self, window_count: usize) -> bool {
+        let min_offset = -(window_count as f64) + 1.;
+        self.x_offset > 0. || self.x_offset < min_offset || self.y_offset != 0.
     }
 }
 
@@ -235,11 +241,11 @@ impl DragAndDrop {
             (bounds.loc.x - border_width, bounds.loc.y - title_height),
             decoration.size(),
         );
-        decoration.draw_at(frame, output, decoration_bounds, 1.);
+        decoration.draw_at(frame, output, decoration_bounds, 1., None);
 
         // Render the window being drag-and-dropped.
         let mut window = windows[self.window_index].borrow_mut();
-        window.draw(renderer, frame, output, FG_OVERVIEW_PERCENTAGE, bounds);
+        window.draw(renderer, frame, output, FG_OVERVIEW_PERCENTAGE, bounds, None);
 
         // Set custom OpenGL blending function.
         let _ = renderer.with_context(|_, gl| unsafe {
@@ -253,9 +259,9 @@ impl DragAndDrop {
         let scale = cmp::max(available.size.w, available.size.h) as f64;
         for bounds in [primary_bounds, secondary_bounds] {
             if bounds.to_f64().contains(self.touch_position) {
-                graphics.active_drop_target(renderer).draw_at(frame, output, bounds, scale);
+                graphics.active_drop_target(renderer).draw_at(frame, output, bounds, scale, None);
             } else {
-                graphics.drop_target(renderer).draw_at(frame, output, bounds, scale);
+                graphics.drop_target(renderer).draw_at(frame, output, bounds, scale, None);
             }
         }
 

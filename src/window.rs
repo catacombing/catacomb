@@ -12,9 +12,9 @@ use smithay::backend::renderer::{self, BufferType, ImportAll};
 use smithay::reexports::wayland_protocols::unstable::xdg_decoration;
 use smithay::reexports::wayland_protocols::xdg_shell::server::xdg_toplevel::State;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Logical, Point, Rectangle, Size};
+use smithay::utils::{Logical, Physical, Point, Rectangle, Size};
 use smithay::wayland::compositor::{
-    self, Damage, SubsurfaceCachedState, SurfaceAttributes, SurfaceData, TraversalAction,
+    self, SubsurfaceCachedState, SurfaceAttributes, SurfaceData, TraversalAction,
 };
 use smithay::wayland::shell::wlr_layer::{
     Anchor, ExclusiveZone, KeyboardInteractivity, Layer, LayerSurface, LayerSurfaceAttributes,
@@ -26,6 +26,7 @@ use smithay::wayland::shell::xdg::{
 };
 use xdg_decoration::v1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 
+use crate::catacomb::Damage;
 use crate::drawing::{Graphics, SurfaceBuffer, Texture};
 use crate::input::{Gesture, TouchState, HOLD_DURATION};
 use crate::layer::Layers;
@@ -62,12 +63,16 @@ pub struct Windows {
     /// This is used to keep rendering at the previous orientation when a device was rotated and
     /// there is an active transaction pending waiting for clients to submit new buffers.
     orientation: Orientation,
+
+    /// Compositor damage beyond window-internal changes.
+    fully_damaged: bool,
 }
 
 impl Windows {
     pub fn new() -> Self {
         Self {
             start_time: Instant::now(),
+            fully_damaged: Default::default(),
             orphan_popups: Default::default(),
             transaction: Default::default(),
             orientation: Default::default(),
@@ -194,23 +199,32 @@ impl Windows {
         frame: &mut Gles2Frame,
         graphics: &mut Graphics,
         output: &Output,
+        damage: &[Rectangle<f64, Physical>],
     ) {
-        self.layers.draw_background(renderer, frame, output);
+        // Reset damage.
+        self.fully_damaged = false;
+
+        self.layers.draw_background(renderer, frame, output, damage);
 
         match self.view {
             View::Workspace => {
-                self.with_visible(|window| window.draw(renderer, frame, output, 1., None));
+                self.with_visible(|window| window.draw(renderer, frame, output, 1., None, damage));
             },
             View::DragAndDrop(ref dnd) => {
-                self.with_visible(|window| window.draw(renderer, frame, output, 1., None));
+                self.with_visible(|window| window.draw(renderer, frame, output, 1., None, damage));
                 dnd.draw(renderer, frame, output, &self.windows, graphics);
             },
             View::Overview(ref mut overview) => {
                 overview.draw(renderer, frame, output, &self.windows, graphics);
+
+                // Stage immediate redraw while overview animations are active.
+                if overview.animating_drag(self.windows.len()) {
+                    self.fully_damaged = true;
+                }
             },
         }
 
-        self.layers.draw_foreground(renderer, frame, output);
+        self.layers.draw_foreground(renderer, frame, output, damage);
     }
 
     /// Request new frames for all visible windows.
@@ -251,6 +265,7 @@ impl Windows {
                 let index = overview.focused_index(self.windows.len());
                 let dnd = DragAndDrop::new(overview.last_drag_point, overview.x_offset, index);
                 self.view = View::DragAndDrop(dnd);
+                self.fully_damaged = true;
             }
         }
     }
@@ -354,6 +369,7 @@ impl Windows {
         self.orientation = transaction.orientation;
         self.secondary = transaction.secondary;
         self.primary = transaction.primary;
+        self.fully_damaged = true;
     }
 
     /// Resize all windows to their expected size.
@@ -386,6 +402,34 @@ impl Windows {
     /// Get the current rendering orientation.
     pub fn orientation(&self) -> Orientation {
         self.orientation
+    }
+
+    /// Check if any window was damaged since the last redraw.
+    pub fn damaged(&mut self) -> bool {
+        self.fully_damaged
+            || (self.view == View::Workspace
+                && (self.primary.upgrade().map_or(false, |window| window.borrow().damaged())
+                    || self.secondary.upgrade().map_or(false, |window| window.borrow().damaged())
+                    || self.layers.iter().any(|window| window.damaged())))
+    }
+
+    /// Check if a full redraw is required.
+    pub fn fully_damaged(&self) -> bool {
+        self.fully_damaged || self.view != View::Workspace
+    }
+
+    /// Window damage since last redraw.
+    ///
+    /// This function collects the damage for every window, without taking global damage into
+    /// account. To avoid unnecessary work, [`Windows::fully_damaged`] should be called first.
+    pub fn window_damage(&self, damage: &mut Damage) {
+        let primary_damage = self.primary.upgrade().and_then(|window| window.borrow().damage());
+        let secondary_damage = self.secondary.upgrade().and_then(|window| window.borrow().damage());
+        let layer_damage = self.layers.iter().filter_map(|window| window.damage());
+
+        for window_damage in layer_damage.chain(primary_damage).chain(secondary_damage) {
+            damage.push(window_damage);
+        }
     }
 
     /// Handle start of touch input.
@@ -451,6 +495,10 @@ impl Windows {
 
                 let delta = point - mem::replace(&mut dnd.touch_position, point);
                 dnd.window_position += delta;
+
+                // Redraw when the D&D window is moved.
+                self.fully_damaged = true;
+
                 return;
             },
             _ => return,
@@ -478,6 +526,9 @@ impl Windows {
 
         overview.last_overdrag_step = None;
         overview.hold_start = None;
+
+        // Redraw when cycling through the overview.
+        self.fully_damaged = true;
     }
 
     /// Handle touch drag release.
@@ -935,6 +986,9 @@ pub struct Window<S = ToplevelSurface> {
 
     /// Popup windows.
     popups: Vec<Window<PopupSurface>>,
+
+    /// Pending window damage.
+    damage: Option<Rectangle<f64, Physical>>,
 }
 
 impl<S: Surface> Window<S> {
@@ -951,6 +1005,7 @@ impl<S: Surface> Window<S> {
             rectangle: Default::default(),
             visible: Default::default(),
             popups: Default::default(),
+            damage: Default::default(),
         }
     }
 
@@ -987,13 +1042,14 @@ impl<S: Surface> Window<S> {
     /// Render this window's buffers.
     ///
     /// If no location is specified, the textures cached location will be used.
-    pub fn draw(
+    pub fn draw<'a>(
         &mut self,
         renderer: &mut Gles2Renderer,
         frame: &mut Gles2Frame,
         output: &Output,
         scale: f64,
         bounds: impl Into<Option<Rectangle<i32, Logical>>>,
+        damage: impl Into<Option<&'a [Rectangle<f64, Physical>]>>,
     ) {
         // Skip updating windows during transactions.
         if self.transaction.is_none() && self.buffers_pending {
@@ -1001,16 +1057,39 @@ impl<S: Surface> Window<S> {
         }
 
         let bounds = bounds.into().unwrap_or_else(|| self.bounds());
+        let physical_bounds = bounds.to_f64().to_physical(output.scale());
 
-        for texture in &self.texture_cache.textures {
-            texture.draw_at(frame, output, bounds, scale);
+        // Treat no damage information as full damage.
+        let full_damage = [physical_bounds];
+        let damage = damage.into().unwrap_or(&full_damage);
+
+        // Calculate damage overlapping this window.
+        let mut window_damage = None;
+        for damage in damage.iter().filter_map(|damage| damage.intersection(physical_bounds)) {
+            window_damage = Some(match window_damage {
+                Some(window_damage) => damage.merge(window_damage),
+                None => damage,
+            });
+        }
+
+        // Skip rendering without damage.
+        let window_damage = match window_damage {
+            Some(window_damage) => window_damage,
+            None => return,
+        };
+
+        // Clear window damage.
+        self.damage = None;
+
+        for texture in &mut self.texture_cache.textures {
+            texture.draw_at(frame, output, bounds, scale, window_damage);
         }
 
         // Draw popup tree.
         for popup in &mut self.popups {
-            let loc = popup.rectangle.loc + bounds.loc;
+            let loc = bounds.loc + popup.rectangle.loc;
             let popup_bounds = Rectangle::from_loc_and_size(loc, (i32::MAX, i32::MAX));
-            popup.draw(renderer, frame, output, scale, popup_bounds);
+            popup.draw(renderer, frame, output, scale, popup_bounds, damage);
         }
     }
 
@@ -1058,26 +1137,16 @@ impl<S: Surface> Window<S> {
                     return TraversalAction::DoChildren(location);
                 }
 
-                // Import and cache the buffer.
+                // Retrieve and clear damage.
+                let damage = data.damage.buffer();
 
                 let buffer = match &data.buffer {
                     Some(buffer) => buffer,
                     None => return TraversalAction::SkipChildren,
                 };
 
-                let attributes = surface_data.cached_state.current::<SurfaceAttributes>();
-                let damage: Vec<_> = attributes
-                    .damage
-                    .iter()
-                    .map(|damage| match damage {
-                        Damage::Buffer(rect) => *rect,
-                        Damage::Surface(rect) => {
-                            rect.to_buffer(data.scale, data.transform, &data.size)
-                        },
-                    })
-                    .collect();
-
-                match renderer.import_buffer(buffer, Some(surface_data), &damage) {
+                // Import and cache the buffer.
+                let action = match renderer.import_buffer(buffer, Some(surface_data), damage) {
                     Some(Ok(texture)) => {
                         // Release SHM buffers after import.
                         if let Some(BufferType::Shm) = renderer::buffer_type(buffer) {
@@ -1097,7 +1166,12 @@ impl<S: Surface> Window<S> {
 
                         TraversalAction::SkipChildren
                     },
-                }
+                };
+
+                // Ensure damage is cleared after import.
+                data.damage.clear_buffer();
+
+                action
             },
             |_, _, _| (),
             |_, _, _| true,
@@ -1141,7 +1215,7 @@ impl<S: Surface> Window<S> {
     }
 
     /// Execute a function for all surfaces of this window.
-    fn with_surfaces<F: FnMut(&WlSurface, &SurfaceData)>(&mut self, mut fun: F) {
+    fn with_surfaces<F: FnMut(&WlSurface, &SurfaceData)>(&self, mut fun: F) {
         let wl_surface = match self.surface.get_surface() {
             Some(surface) => surface,
             None => return,
@@ -1187,16 +1261,39 @@ impl<S: Surface> Window<S> {
         // Handle surface buffer changes.
         compositor::with_surface_tree_upward(
             surface,
-            (),
-            |_, data, _| {
-                let mut attributes = data.cached_state.current::<SurfaceAttributes>();
-                if let Some(assignment) = attributes.buffer.take() {
-                    data.data_map.insert_if_missing(|| RefCell::new(SurfaceBuffer::new()));
-                    let buffer = data.data_map.get::<RefCell<SurfaceBuffer>>().unwrap();
-                    buffer.borrow_mut().update_buffer(&attributes, assignment);
-                    self.buffers_pending = true;
+            self.bounds().loc,
+            |_, data, location| {
+                // Compute absolute surface location.
+                let mut location = *location;
+                if data.role == Some("subsurface") {
+                    let current = data.cached_state.current::<SubsurfaceCachedState>();
+                    location += current.location;
                 }
-                TraversalAction::DoChildren(())
+
+                // Retrieve new buffer updates.
+                let mut attributes = data.cached_state.current::<SurfaceAttributes>();
+                let assignment = match attributes.buffer.take() {
+                    Some(assignment) => assignment,
+                    None => return TraversalAction::DoChildren(location),
+                };
+
+                // Store pending buffer updates.
+                data.data_map.insert_if_missing(|| RefCell::new(SurfaceBuffer::new()));
+                let mut buffer =
+                    data.data_map.get::<RefCell<SurfaceBuffer>>().unwrap().borrow_mut();
+                buffer.update_buffer(&mut attributes, assignment, output.scale());
+                self.buffers_pending = true;
+
+                // Update window damage.
+                for mut damage in buffer.damage.drain_physical() {
+                    damage.loc += location.to_f64().to_physical(output.scale());
+                    self.damage = Some(match self.damage {
+                        Some(window_damage) => window_damage.merge(damage),
+                        None => damage,
+                    });
+                }
+
+                TraversalAction::DoChildren(location)
             },
             |_, _, _| (),
             |_, _, _| true,
@@ -1312,6 +1409,16 @@ impl<S: Surface> Window<S> {
     /// Get primary window surface.
     fn surface(&self) -> Option<&WlSurface> {
         self.surface.get_surface()
+    }
+
+    /// Check if this window requires a redraw.
+    fn damaged(&self) -> bool {
+        self.transaction.is_none() && self.damage.is_some()
+    }
+
+    /// Get pending window damage.
+    fn damage(&self) -> Option<Rectangle<f64, Physical>> {
+        self.damage.filter(|_| self.transaction.is_none())
     }
 }
 

@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::error::Error;
 use std::rc::Rc;
 use std::time::Duration;
-use std::{cmp, env, io};
+use std::{env, io, mem};
 
 use server_decoration::server::org_kde_kwin_server_decoration_manager::Mode;
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
@@ -14,7 +14,7 @@ use smithay::reexports::calloop::{EventLoop, Interest, Mode as TriggerMode, Post
 use smithay::reexports::wayland_protocols::misc::server_decoration;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Display;
-use smithay::utils::Rectangle;
+use smithay::utils::{Physical, Rectangle};
 use smithay::wayland::input_method::{InputMethodHandle, InputMethodSeatTrait};
 use smithay::wayland::output::xdg;
 use smithay::wayland::seat::{KeyboardHandle, Seat, XkbConfig};
@@ -25,7 +25,7 @@ use smithay::wayland::text_input::{TextInputHandle, TextInputSeatTrait};
 use smithay::wayland::virtual_keyboard::VirtualKeyboardHandle;
 use smithay::wayland::{data_device, input_method, shm, text_input, SERIAL_COUNTER};
 
-use crate::drawing::Graphics;
+use crate::drawing::{Graphics, MAX_DAMAGE_AGE};
 use crate::input::TouchState;
 use crate::orientation::{Accelerometer, AccelerometerSource};
 use crate::output::Output;
@@ -47,6 +47,7 @@ pub struct Catacomb<B> {
 
     graphics: Graphics,
     touch_debug: bool,
+    damage: Damage,
 
     // NOTE: Must be last field to ensure it's dropped after any global.
     pub display: Rc<RefCell<Display>>,
@@ -141,6 +142,7 @@ impl<B: Backend + 'static> Catacomb<B> {
             touch_debug: Default::default(),
             terminated: Default::default(),
             graphics: Default::default(),
+            damage: Default::default(),
         }
     }
 
@@ -165,8 +167,17 @@ impl<B> Catacomb<B> {
         // Update transaction before rendering to update device orientation.
         self.windows.update_transaction();
 
-        // Draw the content with the backend-specific renderer.
-        let _ = renderer.render(self);
+        // Update surface focus.
+        if let Some(surface) = self.windows.focus_request() {
+            self.focus(surface.as_ref());
+        }
+
+        // Redraw only when there is damage present.
+        if self.windows.damaged() || self.touch_debug {
+            let _ = renderer.render(self, Catacomb::draw);
+        } else {
+            renderer.reschedule();
+        }
 
         // Handle window liveliness changes.
         self.windows.refresh(&mut self.output);
@@ -176,26 +187,34 @@ impl<B> Catacomb<B> {
     }
 
     /// Draw the current compositor state.
-    pub fn draw(&mut self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame) {
+    pub fn draw(&mut self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame, buffer_age: u8) {
+        // Collect pending damage.
+        let max_age = MAX_DAMAGE_AGE as u8;
+        let damage = if buffer_age == 0
+            || buffer_age > max_age
+            || self.windows.fully_damaged()
+            || self.touch_debug
+        {
+            let output_size = self.output.size().to_f64().to_physical(self.output.scale());
+            self.damage.push(Rectangle::from_loc_and_size((0., 0.), output_size));
+            self.damage.take_since(1)
+        } else {
+            self.windows.window_damage(&mut self.damage);
+            self.damage.take_since(buffer_age)
+        };
+
         // Clear the screen.
-        let output_size = self.output.physical_resolution();
-        let size = cmp::max(output_size.w, output_size.h) as f64;
-        let full_rect = Rectangle::from_loc_and_size((0., 0.), (size, size));
-        let _ = frame.clear([1., 0., 1., 1.], &[full_rect]);
+        let _ = frame.clear([1., 0., 1., 1.], damage);
 
         // Render debug indicator showing current touch location.
         if self.touch_debug {
             let loc = self.touch_state.position.to_i32_round();
             let touch_debug = self.graphics.touch_debug(renderer);
             let rect = Rectangle::from_loc_and_size(loc, (i32::MAX, i32::MAX));
-            touch_debug.draw_at(frame, &self.output, rect, 1.);
+            touch_debug.draw_at(frame, &self.output, rect, 1., None);
         }
 
-        if let Some(surface) = self.windows.focus_request() {
-            self.focus(surface.as_ref());
-        }
-
-        self.windows.draw(renderer, frame, &mut self.graphics, &self.output);
+        self.windows.draw(renderer, frame, &mut self.graphics, &self.output, damage);
     }
 
     /// Focus a new surface.
@@ -214,5 +233,74 @@ pub trait Backend {
 
 /// Abstraction over backend-specific rendering.
 pub trait Render {
-    fn render<B>(&mut self, catacomb: &mut Catacomb<B>) -> Result<(), Box<dyn Error>>;
+    /// Render the frame, using the provided drawing function.
+    fn render<B, F>(
+        &mut self,
+        catacomb: &mut Catacomb<B>,
+        draw_fun: F,
+    ) -> Result<(), Box<dyn Error>>
+    where
+        F: FnOnce(&mut Catacomb<B>, &mut Gles2Renderer, &mut Gles2Frame, u8);
+
+    /// Re-schedule the rendering.
+    ///
+    /// Re-rendering at a later point will be requested when the current frame completed without
+    /// any damage present.
+    fn reschedule(&mut self) {}
+}
+
+#[derive(Default, Debug)]
+pub struct Damage {
+    /// Combined damage history for all tracked buffer ages.
+    damage: Vec<Rectangle<f64, Physical>>,
+
+    /// Tracked damage rectangles per buffer age.
+    ///
+    /// This must be one bigger than [`MAX_DAMAGE_AGE`], since the last slot is reserved for
+    /// pending damage for the next frame.
+    rects: [usize; MAX_DAMAGE_AGE + 1],
+
+    /// Buffer for storing current damage.
+    ///
+    /// This is used to deduplicate the damage rectangles to prevent excessive draw calls.
+    current: Vec<Rectangle<f64, Physical>>,
+}
+
+impl Damage {
+    /// Add pending damage for the next frame.
+    pub fn push(&mut self, damage: Rectangle<f64, Physical>) {
+        self.rects[self.rects.len() - 1] += 1;
+        self.damage.push(damage);
+    }
+
+    /// Calculate damage history since buffer age.
+    ///
+    /// This will also clear the pending damage, pushing it into history and preparing the storage
+    /// for new damage.
+    fn take_since(&mut self, buffer_age: u8) -> &[Rectangle<f64, Physical>] {
+        // Move pending damage into history.
+
+        let oldest_rects = mem::take(&mut self.rects[self.rects.len() - 2]);
+        let new_rects = self.rects[self.rects.len() - 1];
+        self.rects.rotate_right(1);
+
+        self.damage.rotate_right(new_rects);
+        self.damage.truncate(self.damage.len() - oldest_rects);
+
+        // Compute rects relevant for current buffer age.
+        let rects = self.rects.iter().take(buffer_age as usize).sum();
+
+        // Optimize damage rectangle count.
+        self.current.clear();
+        for damage in &self.damage[..rects] {
+            // Combine overlapping rects.
+            let overlap = self.current.iter_mut().find(|staged| staged.overlaps(*damage));
+            match overlap {
+                Some(overlap) => *overlap = overlap.merge(*damage),
+                None => self.current.push(*damage),
+            }
+        }
+
+        self.current.as_slice()
+    }
 }

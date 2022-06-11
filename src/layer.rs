@@ -1,7 +1,7 @@
 //! Layer shell windows.
 
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
-use smithay::utils::{Logical, Point};
+use smithay::utils::{Logical, Physical, Point, Rectangle};
 use smithay::wayland::shell::wlr_layer::Layer;
 
 use crate::output::Output;
@@ -50,13 +50,14 @@ impl Layers {
         renderer: &mut Gles2Renderer,
         frame: &mut Gles2Frame,
         output: &Output,
+        damage: &[Rectangle<f64, Physical>],
     ) {
         for window in &mut self.background {
-            window.draw(renderer, frame, output, 1., None);
+            window.draw(renderer, frame, output, 1., None, damage);
         }
 
         for window in &mut self.bottom {
-            window.draw(renderer, frame, output, 1., None);
+            window.draw(renderer, frame, output, 1., None, damage);
         }
     }
 
@@ -66,13 +67,14 @@ impl Layers {
         renderer: &mut Gles2Renderer,
         frame: &mut Gles2Frame,
         output: &Output,
+        damage: &[Rectangle<f64, Physical>],
     ) {
         for window in &mut self.top {
-            window.draw(renderer, frame, output, 1., None);
+            window.draw(renderer, frame, output, 1., None, damage);
         }
 
         for window in &mut self.overlay {
-            window.draw(renderer, frame, output, 1., None);
+            window.draw(renderer, frame, output, 1., None, damage);
         }
     }
 
