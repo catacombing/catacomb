@@ -56,9 +56,9 @@ pub fn run() {
 
         catacomb.create_frame(&mut *graphics.borrow_mut());
 
-        // NOTE: The timeout picked here is 5ms to allow for up to 200 FPS. Increasing it would
-        // reduce the framerate, while decreasing it would mean that most of the vblank interval is
-        // spent not doing anything, rather than handling events.
+        // NOTE: The timeout picked here is 5ms to allow for up to 200 FPS. Increasing
+        // it would reduce the framerate, while decreasing it would mean that most of
+        // the vblank interval is spent not doing anything, rather than handling events.
         if event_loop.dispatch(Some(Duration::from_millis(5)), &mut catacomb).is_err() {
             eprintln!("event loop error");
             break;

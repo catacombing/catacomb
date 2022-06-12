@@ -60,8 +60,9 @@ pub struct Windows {
 
     /// Orientation used for the window's current rendered state.
     ///
-    /// This is used to keep rendering at the previous orientation when a device was rotated and
-    /// there is an active transaction pending waiting for clients to submit new buffers.
+    /// This is used to keep rendering at the previous orientation when a device
+    /// was rotated and there is an active transaction pending waiting for
+    /// clients to submit new buffers.
     orientation: Orientation,
 
     /// Compositor damage beyond window-internal changes.
@@ -165,11 +166,13 @@ impl Windows {
 
     /// Handle orphan popup surface commits.
     ///
-    /// After the first surface commit, every popup should have a parent set. This function puts it
-    /// at the correct location in the window tree below its parent.
+    /// After the first surface commit, every popup should have a parent set.
+    /// This function puts it at the correct location in the window tree
+    /// below its parent.
     ///
-    /// Popups will be dismissed if a surface commit is made for them without any parent set. They
-    /// will also be dismissed if the parent is not currently visible.
+    /// Popups will be dismissed if a surface commit is made for them without
+    /// any parent set. They will also be dismissed if the parent is not
+    /// currently visible.
     pub fn orphan_surface_commit(&mut self, root_surface: &WlSurface) -> Option<()> {
         let mut orphans = self.orphan_popups.iter();
         let index = orphans.position(|popup| popup.surface() == Some(root_surface))?;
@@ -272,8 +275,8 @@ impl Windows {
 
     /// Check for focus change requests.
     ///
-    /// If `Some` is returned, the focus should be changed. A value of `Some(None)` indicates that
-    /// the focus should be cleared.
+    /// If `Some` is returned, the focus should be changed. A value of
+    /// `Some(None)` indicates that the focus should be cleared.
     pub fn focus_request(&mut self) -> Option<Option<WlSurface>> {
         let new_focus = match &mut self.view {
             View::Overview(_) | View::DragAndDrop(_) => None,
@@ -420,8 +423,9 @@ impl Windows {
 
     /// Window damage since last redraw.
     ///
-    /// This function collects the damage for every window, without taking global damage into
-    /// account. To avoid unnecessary work, [`Windows::fully_damaged`] should be called first.
+    /// This function collects the damage for every window, without taking
+    /// global damage into account. To avoid unnecessary work,
+    /// [`Windows::fully_damaged`] should be called first.
     pub fn window_damage(&self, damage: &mut Damage) {
         let primary_damage = self.primary.upgrade().and_then(|window| window.borrow().damage());
         let secondary_damage = self.secondary.upgrade().and_then(|window| window.borrow().damage());
@@ -589,8 +593,9 @@ impl Windows {
 
     /// Check which surface is at a specific touch point.
     ///
-    /// If the window at the touch location accepts keyboard input, this function will also change
-    /// focus to the root window associated with the touch surface.
+    /// If the window at the touch location accepts keyboard input, this
+    /// function will also change focus to the root window associated with
+    /// the touch surface.
     pub fn touch_surface_at(&mut self, position: Point<f64, Logical>) -> Option<OffsetSurface> {
         // Prevent window interaction in Overview/DnD.
         match self.view {
@@ -1232,8 +1237,8 @@ impl<S: Surface> Window<S> {
 
     /// Create a new transaction, or access the active one.
     ///
-    /// Takes in a transaction as parameter to ensure the window will not get stuck in the frozen
-    /// state indefinitely.
+    /// Takes in a transaction as parameter to ensure the window will not get
+    /// stuck in the frozen state indefinitely.
     fn start_transaction(&mut self, _transaction: &Transaction) -> &mut WindowTransaction {
         self.transaction.get_or_insert(WindowTransaction::new(self))
     }
@@ -1355,8 +1360,8 @@ impl<S: Surface> Window<S> {
 
     /// Add popup at the correct position in the popup tree.
     ///
-    /// This function will return the popup when no matching parent surface could be found in the
-    /// popup tree.
+    /// This function will return the popup when no matching parent surface
+    /// could be found in the popup tree.
     fn add_popup(
         &mut self,
         mut popup: Window<PopupSurface>,

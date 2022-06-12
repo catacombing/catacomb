@@ -40,9 +40,9 @@ const FRICTION: f64 = 0.1;
 
 /// Touch slot for pointer emulation.
 ///
-/// The touch slot `None`, which is usually used for devices that do not support multitouch, does
-/// not work properly with some clients like GTK. To work around this we pick an arbitrary
-/// multitouch slot instead.
+/// The touch slot `None`, which is usually used for devices that do not support
+/// multitouch, does not work properly with some clients like GTK. To work
+/// around this we pick an arbitrary multitouch slot instead.
 const POINTER_TOUCH_SLOT: Option<u32> = Some(0);
 
 /// Touch input state.
@@ -371,8 +371,9 @@ impl<B: Backend> Catacomb<B> {
 
     /// Update the touch position.
     ///
-    /// NOTE: This should be called after adding new timeouts to allow clearing them instead of
-    /// creating a loop which continuously triggers these actions.
+    /// NOTE: This should be called after adding new timeouts to allow clearing
+    /// them instead of creating a loop which continuously triggers these
+    /// actions.
     fn update_position(&mut self, position: Point<f64, Logical>) {
         let overview_active = self.windows.overview_active();
         match self.touch_state.action(&self.output, overview_active) {
@@ -409,8 +410,8 @@ impl<B: Backend> Catacomb<B> {
     fn on_velocity_tick(&mut self) {
         // Update velocity and new position.
         //
-        // The animations are designed for 60FPS, but should still behave properly for other
-        // refresh rates.
+        // The animations are designed for 60FPS, but should still behave properly for
+        // other refresh rates.
         let velocity = &mut self.touch_state.velocity;
         let position = &mut self.touch_state.position;
         let animation_speed = self.output.frame_interval() as f64 / 16.;

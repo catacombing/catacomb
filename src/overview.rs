@@ -13,16 +13,19 @@ use crate::geometry::Vector;
 use crate::output::Output;
 use crate::window::Window;
 
-/// Percentage of output width reserved for the main window in the application overview.
+/// Percentage of output width reserved for the main window in the application
+/// overview.
 pub const FG_OVERVIEW_PERCENTAGE: f64 = 0.75;
 
-/// Percentage of remaining space reserved for background windows in the application overview.
+/// Percentage of remaining space reserved for background windows in the
+/// application overview.
 const BG_OVERVIEW_PERCENTAGE: f64 = 0.5;
 
 /// Percentage of the screen for the drop highlight areas.
 const DRAG_AND_DROP_PERCENTAGE: f64 = 0.3;
 
-/// Percentage of the output height a window can be moved before closing it in the overview.
+/// Percentage of the output height a window can be moved before closing it in
+/// the overview.
 const OVERVIEW_CLOSE_DISTANCE: f64 = 0.25;
 
 /// Animation speed for the return from close, lower means faster.
@@ -117,9 +120,10 @@ impl Overview {
 
         // Create an iterator over all windows in the overview.
         //
-        // We start by going over all negative index windows from lowest to highest index and then
-        // proceed from highest to lowest index with the positive windows. This ensures that outer
-        // windows are rendered below the ones toward the center.
+        // We start by going over all negative index windows from lowest to highest
+        // index and then proceed from highest to lowest index with the positive
+        // windows. This ensures that outer windows are rendered below the ones
+        // toward the center.
         let min_inc = self.x_offset.round() as i32;
         let max_exc = window_count + self.x_offset.round() as i32;
         let neg_iter = (min_inc..0).zip(0..window_count);
@@ -306,7 +310,8 @@ pub enum Direction {
     Vertical,
 }
 
-/// Calculate the X coordinate of a window in the application overview based on its position.
+/// Calculate the X coordinate of a window in the application overview based on
+/// its position.
 fn overview_x_position(
     fg_percentage: f64,
     bg_percentage: f64,

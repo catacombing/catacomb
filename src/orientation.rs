@@ -85,15 +85,15 @@ impl SensorAccelerometer {
         let mut z = udev_attribute::<i32>(&device, "in_accel_z_raw")? as f32;
         let scale: f32 = udev_attribute(&device, "in_accel_scale")?;
 
-        // Apply scale to get to m/s², chen convert 1G ~= 256 for the algorithm to work properly.
+        // Apply scale to get to m/s², then convert 1G ~= 256 for the algorithm to work.
         x = x * scale * 256. / 9.81;
         y = y * scale * 256. / 9.81;
         z = z * scale * 256. / 9.81;
 
         // Compute angle to landscape/portrait mode.
         //
-        // This will return 90° for landscape/portrait when the modes are fully active and
-        // transition to -90° for the inverse.
+        // This will return 90° for landscape/portrait when the modes are fully active
+        // and transition to -90° for the inverse.
         let radians_to_degrees = 180. / f32::consts::PI;
         let portrait = (x.atan2((y * y + z * z).sqrt()) * radians_to_degrees).round();
         let landscape = (y.atan2((x * x + z * z).sqrt()) * radians_to_degrees).round();
@@ -150,8 +150,8 @@ impl AccelerometerSource for SensorAccelerometer {
 
 /// Fake accelerometer device.
 ///
-/// This will always return [`Orientation::Portrait`] and is used for devices which do not have an
-/// accelerometer.
+/// This will always return [`Orientation::Portrait`] and is used for devices
+/// which do not have an accelerometer.
 pub struct DummyAccelerometer;
 
 impl AccelerometerSource for DummyAccelerometer {

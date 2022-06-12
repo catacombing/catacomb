@@ -32,10 +32,12 @@ const TITLE_RGBA: [u8; 4] = [64, 64, 64, 255];
 /// Decoration border color in the overview.
 const BORDER_RGBA: [u8; 4] = [32, 32, 32, 255];
 
-/// Height of the window decoration title in the application overview with a DPR of 1.
+/// Height of the window decoration title in the application overview with a DPR
+/// of 1.
 const OVERVIEW_TITLE_HEIGHT: i32 = 30;
 
-/// Width of the window decoration border in the application overview with a DPR of 1.
+/// Width of the window decoration border in the application overview with a DPR
+/// of 1.
 const OVERVIEW_BORDER_WIDTH: i32 = 1;
 
 /// Size of the debug touch rectangle.
@@ -117,9 +119,10 @@ impl Texture {
 
     /// Render the texture at the specified location.
     ///
-    /// Using the `window_bounds` and `window_scale` parameters, it is possible to scale the
-    /// texture and truncate it to be within the specified window bounds. The scaling will always
-    /// take part **before** the truncation.
+    /// Using the `window_bounds` and `window_scale` parameters, it is possible
+    /// to scale the texture and truncate it to be within the specified
+    /// window bounds. The scaling will always take part **before** the
+    /// truncation.
     pub fn draw_at(
         &mut self,
         frame: &mut Gles2Frame,
@@ -184,7 +187,8 @@ pub struct Graphics {
 }
 
 impl Graphics {
-    /// Get the window decoration texture corresponding to the active output size.
+    /// Get the window decoration texture corresponding to the active output
+    /// size.
     pub fn decoration(&mut self, renderer: &mut Gles2Renderer, output: &Output) -> &mut Texture {
         let expected_size = Self::decoration_size(output);
         if self.decoration.as_ref().map(|decoration| decoration.size) != Some(expected_size) {

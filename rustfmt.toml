@@ -13,4 +13,3 @@ use_try_shorthand = true
 newline_style = "Unix"
 format_strings = true
 wrap_comments = true
-comment_width = 100

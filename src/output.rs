@@ -110,7 +110,8 @@ impl Output {
 
     /// Output device resolution.
     ///
-    /// This represents the size of the display before applying any transformations.
+    /// This represents the size of the display before applying any
+    /// transformations.
     pub fn resolution(&self) -> Size<i32, Logical> {
         self.mode.size.to_f64().to_logical(self.scale).to_i32_round()
     }

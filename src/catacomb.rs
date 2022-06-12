@@ -244,8 +244,8 @@ pub trait Render {
 
     /// Re-schedule the rendering.
     ///
-    /// Re-rendering at a later point will be requested when the current frame completed without
-    /// any damage present.
+    /// Re-rendering at a later point will be requested when the current frame
+    /// completed without any damage present.
     fn reschedule(&mut self) {}
 }
 
@@ -256,13 +256,14 @@ pub struct Damage {
 
     /// Tracked damage rectangles per buffer age.
     ///
-    /// This must be one bigger than [`MAX_DAMAGE_AGE`], since the last slot is reserved for
-    /// pending damage for the next frame.
+    /// This must be one bigger than [`MAX_DAMAGE_AGE`], since the last slot is
+    /// reserved for pending damage for the next frame.
     rects: [usize; MAX_DAMAGE_AGE + 1],
 
     /// Buffer for storing current damage.
     ///
-    /// This is used to deduplicate the damage rectangles to prevent excessive draw calls.
+    /// This is used to deduplicate the damage rectangles to prevent excessive
+    /// draw calls.
     current: Vec<Rectangle<f64, Physical>>,
 }
 
@@ -275,8 +276,8 @@ impl Damage {
 
     /// Calculate damage history since buffer age.
     ///
-    /// This will also clear the pending damage, pushing it into history and preparing the storage
-    /// for new damage.
+    /// This will also clear the pending damage, pushing it into history and
+    /// preparing the storage for new damage.
     fn take_since(&mut self, buffer_age: u8) -> &[Rectangle<f64, Physical>] {
         // Move pending damage into history.
 
