@@ -45,6 +45,7 @@ pub struct Catacomb<B> {
     pub output: Output,
     pub backend: B,
 
+    last_focus: Option<WlSurface>,
     graphics: Graphics,
     touch_debug: bool,
     damage: Damage,
@@ -140,6 +141,7 @@ impl<B: Backend + 'static> Catacomb<B> {
             keyboard,
             backend,
             touch_debug: Default::default(),
+            last_focus: Default::default(),
             terminated: Default::default(),
             graphics: Default::default(),
             damage: Default::default(),
@@ -168,8 +170,10 @@ impl<B> Catacomb<B> {
         self.windows.update_transaction();
 
         // Update surface focus.
-        if let Some(surface) = self.windows.focus_request() {
-            self.focus(surface.as_ref());
+        let focus = self.windows.focus();
+        if focus != self.last_focus {
+            self.last_focus = focus.clone();
+            self.focus(focus.as_ref());
         }
 
         // Redraw only when there is damage present.
