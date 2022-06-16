@@ -611,7 +611,7 @@ impl Windows {
 
         // Search for topmost clicked surface.
 
-        for window in self.layers.foreground_window_at(position) {
+        if let Some(window) = self.layers.foreground_window_at(position) {
             if !window.deny_focus {
                 self.focus.layer = window.surface.surface().cloned();
             }
@@ -626,7 +626,7 @@ impl Windows {
             }
         }
 
-        for window in self.layers.background_window_at(position) {
+        if let Some(window) = self.layers.background_window_at(position) {
             if !window.deny_focus {
                 self.focus.layer = window.surface.surface().cloned();
             }
