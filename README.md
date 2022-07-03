@@ -1,4 +1,4 @@
-# Catacomb - A Wayland Phone Compositor
+# Catacomb - A Wayland Mobile Compositor
 
 ## About
 
