@@ -1,8 +1,12 @@
 [package]
 name = "catacomb"
 version = "0.1.0"
-edition = "2021"
+description = "A Wayland Phone Compositor"
+authors = ["Christian Duerr <contact@christianduerr.com>"]
+homepage = "https://github.com/chrisduerr/catacomb"
 rust-version = "1.59.0"
+license = "GPL-3.0"
+edition = "2021"
 
 [dependencies]
 smithay = { git = "https://github.com/chrisduerr/smithay", rev = "5129920247146d4d626f675f31603752700ef8e7", features = ["use_system_lib"] }
