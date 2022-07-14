@@ -12,6 +12,7 @@ mod overview;
 mod shell;
 mod udev;
 mod window;
+#[cfg(feature = "winit")]
 mod winit;
 
 fn main() {
@@ -21,6 +22,7 @@ fn main() {
     if env::var_os("DISPLAY").is_none() && env::var_os("WAYLAND_DISPLAY").is_none() {
         udev::run();
     } else {
+        #[cfg(feature = "winit")]
         winit::run();
     }
 }

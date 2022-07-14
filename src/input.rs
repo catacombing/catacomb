@@ -9,6 +9,7 @@ use smithay::backend::input::{
     ButtonState, Event, InputBackend, InputEvent, KeyState, KeyboardKeyEvent, MouseButton,
     PointerButtonEvent, PositionEvent, TouchEvent as _, TouchSlot,
 };
+#[cfg(feature = "winit")]
 use smithay::backend::winit::WinitEvent;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::seat::{keysyms, FilterResult, TouchHandle};
@@ -232,6 +233,7 @@ impl<B: Backend> Catacomb<B> {
     }
 
     /// Process winit-specific input events.
+    #[cfg(feature = "winit")]
     pub fn handle_winit_input(&mut self, event: WinitEvent) {
         match event {
             // Toggle between portrait/landscape based on window size.

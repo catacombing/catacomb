@@ -319,6 +319,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "errno"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f639046355ee4f37944e44f60642c6f3a7efa3cf6b78c78a0d989a8ce6c396a1"
+dependencies = [
+ "errno-dragonfly",
+ "libc",
+ "winapi",
+]
+
+[[package]]
+name = "errno-dragonfly"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa68f1b12764fab894d2755d2518754e71b4fd80ecfb822714a1206c2aab39bf"
+dependencies = [
+ "cc",
+ "libc",
+]
+
+[[package]]
 name = "fastrand"
 version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -371,16 +392,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gethostname"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4addc164932852d066774c405dbbdb7914742d2b39e39e1a7ca949c856d054d1"
-dependencies = [
- "libc",
- "winapi",
-]
-
-[[package]]
 name = "getrandom"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -403,26 +414,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "hashbrown"
-version = "0.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab5ef0d4909ef3724cc8cce6ccc8572c5c817592e9285f5464f8e86f8bd3726e"
-
-[[package]]
 name = "ident_case"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
-
-[[package]]
-name = "indexmap"
-version = "1.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "282a6247722caba404c065016bbfa522806e51714c34f5dfc3e4a3a46fcb4223"
-dependencies = [
- "autocfg",
- "hashbrown",
-]
 
 [[package]]
 name = "input"
@@ -508,6 +503,24 @@ dependencies = [
  "cfg-if 1.0.0",
  "winapi",
 ]
+
+[[package]]
+name = "libseat"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "55ad314f75263a2135fb09bf96af96eb573582a4a36f6ef9bfdb5f7cec7686fc"
+dependencies = [
+ "cc",
+ "errno",
+ "libseat-sys",
+ "slog",
+]
+
+[[package]]
+name = "libseat-sys"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b72fcf823d256aa619f93c81bc192e6dfbf051835990e28238cd14ad81136397"
 
 [[package]]
 name = "libudev-sys"
@@ -934,11 +947,11 @@ dependencies = [
  "drm-fourcc",
  "gbm",
  "gl_generator",
- "indexmap",
  "input",
  "lazy_static",
  "libc",
  "libloading",
+ "libseat",
  "nix",
  "once_cell",
  "pkg-config",
@@ -956,7 +969,6 @@ dependencies = [
  "wayland-server",
  "wayland-sys",
  "winit",
- "x11rb",
  "xkbcommon",
 ]
 
@@ -1253,15 +1265,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
 
 [[package]]
-name = "winapi-wsapoll"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44c17110f57155602a80dca10be03852116403c9ff3cd25b079d666f2aa3df6e"
-dependencies = [
- "winapi",
-]
-
-[[package]]
 name = "winapi-x86_64-pc-windows-gnu"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1309,18 +1312,6 @@ dependencies = [
  "lazy_static",
  "libc",
  "pkg-config",
-]
-
-[[package]]
-name = "x11rb"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e99be55648b3ae2a52342f9a870c0e138709a3493261ce9b469afe6e4df6d8a"
-dependencies = [
- "gethostname",
- "nix",
- "winapi",
- "winapi-wsapoll",
 ]
 
 [[package]]
