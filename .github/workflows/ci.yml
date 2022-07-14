@@ -13,10 +13,13 @@ jobs:
       - name: Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install libudev-dev libdbus-1-dev libsystemd-dev libxkbcommon-dev libinput-dev
+          sudo apt-get install libudev-dev libdbus-1-dev libsystemd-dev \
+            libxkbcommon-dev libinput-dev libwayland-dev
       - uses: actions/checkout@v2
       - name: Stable
         run: cargo test
+      - name: Stable no-features
+        run: cargo build --no-default-features
       - name: Oldstable
         run: |
           oldstable=$(cat Cargo.toml | grep "rust-version" | sed 's/.*"\(.*\)".*/\1/')

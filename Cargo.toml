@@ -8,8 +8,30 @@ rust-version = "1.59.0"
 license = "GPL-3.0"
 edition = "2021"
 
+[dependencies.smithay]
+git = "https://github.com/chrisduerr/smithay" 
+rev = "5129920247146d4d626f675f31603752700ef8e7"
+default-features = false
+features = [
+    "use_system_lib",
+    "backend_drm",
+    "backend_gbm",
+    "backend_libinput",
+    "backend_udev",
+    "backend_session",
+    "renderer_gl",
+    "renderer_multi",
+    "slog-stdlog"
+]
+
+
 [dependencies]
-smithay = { git = "https://github.com/chrisduerr/smithay", rev = "5129920247146d4d626f675f31603752700ef8e7", features = ["use_system_lib"] }
 calloop = "0.9.3"
 libc = "0.2.123"
 udev = "0.6.2"
+
+[features]
+default = [ "winit", "systemd" ]
+winit = ["smithay/backend_winit"]
+libseat = ["smithay/backend_session_libseat"]
+systemd = ["smithay/backend_session_logind"]
