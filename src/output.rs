@@ -142,6 +142,7 @@ impl Output {
     }
 
     /// Resize the output.
+    #[cfg(feature = "winit")]
     pub fn resize(&mut self, size: Size<i32, Physical>) {
         self.mode.size = size;
     }
