@@ -1,7 +1,8 @@
 //! Extension's to Smithay's geometry module.
 
+use std::error::Error;
 use std::str::FromStr;
-use std::{cmp, error, fmt, ops};
+use std::{cmp, fmt, ops};
 
 use smithay::utils::{Point, Size};
 
@@ -23,10 +24,10 @@ impl fmt::Display for FromVecError {
     }
 }
 
-impl error::Error for FromVecError {}
+impl Error for FromVecError {}
 
 impl<T: Copy> TryFrom<Vec<T>> for Matrix3x3<T> {
-    type Error = Box<dyn error::Error>;
+    type Error = Box<dyn Error>;
 
     fn try_from(storage: Vec<T>) -> Result<Self, Self::Error> {
         if storage.len() != 9 {
@@ -37,13 +38,13 @@ impl<T: Copy> TryFrom<Vec<T>> for Matrix3x3<T> {
     }
 }
 
-impl ops::Mul<&Matrix3x3<f32>> for Vector3D<f32> {
+impl ops::Mul<Vector3D<f32>> for &Matrix3x3<f32> {
     type Output = Vector3D<f32>;
 
-    fn mul(self, rhs: &Matrix3x3<f32>) -> Self::Output {
-        let x = rhs.storage[0] * self.x + rhs.storage[3] * self.y + rhs.storage[6] * self.z;
-        let y = rhs.storage[1] * self.x + rhs.storage[4] * self.y + rhs.storage[7] * self.z;
-        let z = rhs.storage[2] * self.x + rhs.storage[5] * self.y + rhs.storage[8] * self.z;
+    fn mul(self, rhs: Vector3D<f32>) -> Self::Output {
+        let x = self.storage[0] * rhs.x + self.storage[1] * rhs.y + self.storage[2] * rhs.z;
+        let y = self.storage[3] * rhs.x + self.storage[4] * rhs.y + self.storage[5] * rhs.z;
+        let z = self.storage[6] * rhs.x + self.storage[7] * rhs.y + self.storage[8] * rhs.z;
         Self::Output { x, y, z }
     }
 }
@@ -51,9 +52,9 @@ impl ops::Mul<&Matrix3x3<f32>> for Vector3D<f32> {
 // The accepted formats is is 0, 0, 0; 0, 0, 0; 0, 0, 0.
 impl<T: FromStr + Copy> FromStr for Matrix3x3<T>
 where
-    <T as FromStr>::Err: std::error::Error + 'static,
+    <T as FromStr>::Err: Error + 'static,
 {
-    type Err = Box<dyn error::Error>;
+    type Err = Box<dyn Error>;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let rows = s

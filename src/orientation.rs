@@ -95,7 +95,7 @@ impl SensorAccelerometer {
         let z = udev_attribute::<i32>(&device, "in_accel_z_raw")? as f32;
 
         // Apply acceleration matrix.
-        let accel_point = Vector3D::new(x, y, z) * &self.accel_mount_matrix;
+        let accel_point = &self.accel_mount_matrix * Vector3D::new(x, y, z);
 
         let scale = udev_attribute::<f32>(&device, "in_accel_scale")? as f64;
 
@@ -107,7 +107,7 @@ impl SensorAccelerometer {
         // This will return the angle between the orientation axis and the position. So
         // for example when the portrait_angle is zero it means that device is
         // vertical, however to determine whether it's upside down or vise-versa
-        // we must look at the angle to landspace.
+        // we must look at the angle to landscape.
         let radians_to_degrees = 180. / f32::consts::PI;
         let portrait_angle = (x.atan2((y * y + z * z).sqrt()) * radians_to_degrees).round();
         let landscape_angle = (y.atan2((x * x + z * z).sqrt()) * radians_to_degrees).round();
