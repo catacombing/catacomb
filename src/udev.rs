@@ -85,8 +85,8 @@ pub fn run() {
     // Continously dispatch event loop.
     let display = catacomb.display.clone();
     loop {
-        if event_loop.dispatch(Some(Duration::from_millis(10)), &mut catacomb).is_err() {
-            eprintln!("event loop error");
+        if let Err(error) = event_loop.dispatch(None, &mut catacomb) {
+            eprintln!("Event loop error: {}", error);
             break;
         }
         display.borrow_mut().flush_clients(&mut catacomb);
