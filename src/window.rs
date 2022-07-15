@@ -71,7 +71,8 @@ impl Windows {
     pub fn new() -> Self {
         Self {
             start_time: Instant::now(),
-            fully_damaged: Default::default(),
+            // By default everything is fully damaged.
+            fully_damaged: true,
             orphan_popups: Default::default(),
             transaction: Default::default(),
             orientation: Default::default(),
