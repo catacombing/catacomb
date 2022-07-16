@@ -2,7 +2,7 @@
 
 use std::error::Error;
 use std::str::FromStr;
-use std::{cmp, fmt, ops};
+use std::{cmp, ops};
 
 use smithay::utils::{Point, Size};
 
@@ -11,27 +11,17 @@ pub struct Matrix3x3<T: Copy> {
     storage: Vec<T>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct FromVecError(usize, usize);
-
-impl fmt::Display for FromVecError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Mismatched size when createing object from vector, expected {} got {}",
-            self.0, self.1
-        )
-    }
-}
-
-impl Error for FromVecError {}
-
 impl<T: Copy> TryFrom<Vec<T>> for Matrix3x3<T> {
     type Error = Box<dyn Error>;
 
     fn try_from(storage: Vec<T>) -> Result<Self, Self::Error> {
         if storage.len() != 9 {
-            Err(Box::new(FromVecError(9, storage.len())))
+            let error = format!(
+                "Mismatched size when createing Matrix3x3 from Vec, expected {} got {}",
+                9,
+                storage.len()
+            );
+            Err(error.into())
         } else {
             Ok(Self { storage })
         }
@@ -72,13 +62,13 @@ where
 
 /// A point in the 3 dimensional space.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Vector3D<T: Copy> {
+pub struct Vector3D<T> {
     pub x: T,
     pub y: T,
     pub z: T,
 }
 
-impl<T: Copy> Vector3D<T> {
+impl<T> Vector3D<T> {
     #[inline]
     pub fn new(x: T, y: T, z: T) -> Self {
         Self { x, y, z }
@@ -176,24 +166,12 @@ mod test {
             Matrix3x3::<i32>::from_str(matrix).unwrap().storage
         );
 
+        let error =
+            String::from("Mismatched size when createing Matrix3x3 from Vec, expected 9 got 3");
         let matrix = "1, 0, 0, 0, 1, 0, 0, 0, 1";
-        assert_eq!(
-            &FromVecError(9, 3),
-            Matrix3x3::<i32>::from_str(matrix)
-                .err()
-                .unwrap()
-                .downcast_ref::<FromVecError>()
-                .unwrap()
-        );
+        assert_eq!(&error, &Matrix3x3::<i32>::from_str(matrix).err().unwrap().to_string());
 
         let matrix = "1; 0; 0; 0; 1; 0; 0; 0; 1;";
-        assert_eq!(
-            &FromVecError(9, 3),
-            Matrix3x3::<i32>::from_str(matrix)
-                .err()
-                .unwrap()
-                .downcast_ref::<FromVecError>()
-                .unwrap()
-        );
+        assert_eq!(&error, &Matrix3x3::<i32>::from_str(matrix).err().unwrap().to_string());
     }
 }
