@@ -17,8 +17,7 @@ impl<T: Copy> TryFrom<Vec<T>> for Matrix3x3<T> {
     fn try_from(storage: Vec<T>) -> Result<Self, Self::Error> {
         if storage.len() != 9 {
             let error = format!(
-                "Mismatched size when createing Matrix3x3 from Vec, expected {} got {}",
-                9,
+                "Mismatched size when creating Matrix3x3 from Vec, expected length 9, got {}",
                 storage.len()
             );
             Err(error.into())
@@ -39,7 +38,7 @@ impl ops::Mul<Vector3D<f32>> for &Matrix3x3<f32> {
     }
 }
 
-// The accepted formats is is 0, 0, 0; 0, 0, 0; 0, 0, 0.
+// The expected format is "0, 0, 0; 0, 0, 0; 0, 0, 0".
 impl<T: FromStr + Copy> FromStr for Matrix3x3<T>
 where
     <T as FromStr>::Err: Error + 'static,
@@ -166,12 +165,10 @@ mod test {
             Matrix3x3::<i32>::from_str(matrix).unwrap().storage
         );
 
-        let error =
-            String::from("Mismatched size when createing Matrix3x3 from Vec, expected 9 got 3");
         let matrix = "1, 0, 0, 0, 1, 0, 0, 0, 1";
-        assert_eq!(&error, &Matrix3x3::<i32>::from_str(matrix).err().unwrap().to_string());
+        assert!(Matrix3x3::<i32>::from_str(matrix).is_err());
 
         let matrix = "1; 0; 0; 0; 1; 0; 0; 0; 1;";
-        assert_eq!(&error, &Matrix3x3::<i32>::from_str(matrix).err().unwrap().to_string());
+        assert!(Matrix3x3::<i32>::from_str(matrix).is_err());
     }
 }
