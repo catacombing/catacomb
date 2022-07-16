@@ -106,8 +106,8 @@ impl SensorAccelerometer {
         //
         // This will return the angle between the orientation axis and the
         // position. So for example when the portrait_angle is zero it means
-        // that device is vertical, however to determine whether it's upside
-        // down or vice-versa we must look at the angle to landscape.
+        // that the device is vertical, however to determine whether it's
+        // upside down or not we must look at the angle to landscape.
         let radians_to_degrees = 180. / f32::consts::PI;
         let portrait_angle = (x.atan2((y * y + z * z).sqrt()) * radians_to_degrees).round();
         let landscape_angle = (y.atan2((x * x + z * z).sqrt()) * radians_to_degrees).round();
