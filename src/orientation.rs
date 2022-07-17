@@ -11,6 +11,7 @@ use smithay::utils::Transform;
 use udev::{Device, Enumerator};
 
 use crate::catacomb::Catacomb;
+use crate::geometry::{Matrix3x3, Vector, Vector3D};
 
 /// Orientation change poll rate.
 const POLL_RATE: Duration = Duration::from_millis(500);
@@ -59,6 +60,7 @@ impl AccelerometerSource for Accelerometer {
 pub struct SensorAccelerometer {
     syspath: PathBuf,
     last: Option<Orientation>,
+    accel_mount_matrix: Matrix3x3<f32>,
 }
 
 impl SensorAccelerometer {
@@ -69,8 +71,15 @@ impl SensorAccelerometer {
         enumerator.match_subsystem("iio").ok()?;
 
         let mut devices = enumerator.scan_devices().ok()?;
-        let accel = devices.find(|device| device.attribute_value("in_accel_x_raw").is_some());
-        accel.map(|accel| Self { syspath: accel.syspath().to_path_buf(), last: None })
+        let accel = devices.find(|device| device.attribute_value("in_accel_x_raw").is_some())?;
+
+        // Read the mount_matrix values.
+        let accel_mount_matrix = udev_attribute::<Matrix3x3<f32>>(&accel, "in_mount_matrix")
+            .or_else(|| udev_attribute::<Matrix3x3<f32>>(&accel, "in_accel_mount_matrix"))?;
+
+        let syspath = accel.syspath().to_path_buf();
+
+        Some(Self { syspath, last: None, accel_mount_matrix })
     }
 
     /// Check device orientation.
@@ -80,42 +89,50 @@ impl SensorAccelerometer {
     fn orientation(&self) -> Option<Orientation> {
         // Read data from sensor.
         let device = Device::from_syspath(&self.syspath).ok()?;
-        let mut x = udev_attribute::<i32>(&device, "in_accel_x_raw")? as f32;
-        let mut y = udev_attribute::<i32>(&device, "in_accel_y_raw")? as f32;
-        let mut z = udev_attribute::<i32>(&device, "in_accel_z_raw")? as f32;
-        let scale: f32 = udev_attribute(&device, "in_accel_scale")?;
+
+        let x = udev_attribute::<i32>(&device, "in_accel_x_raw")? as f32;
+        let y = udev_attribute::<i32>(&device, "in_accel_y_raw")? as f32;
+        let z = udev_attribute::<i32>(&device, "in_accel_z_raw")? as f32;
+
+        // Apply acceleration matrix.
+        let accel_point = &self.accel_mount_matrix * Vector3D::new(x, y, z);
+
+        let scale = udev_attribute::<f32>(&device, "in_accel_scale")? as f64;
 
         // Apply scale to get to m/s², then convert 1G ~= 256 for the algorithm to work.
-        x = x * scale * 256. / 9.81;
-        y = y * scale * 256. / 9.81;
-        z = z * scale * 256. / 9.81;
+        let Vector3D { x, y, z } = accel_point.scale(scale * 256. / 9.81);
 
         // Compute angle to landscape/portrait mode.
         //
-        // This will return 90° for landscape/portrait when the modes are fully active
-        // and transition to -90° for the inverse.
+        // This will return the angle between the orientation axis and the
+        // position. So for example when the portrait_angle is zero it means
+        // that the device is vertical, however to determine whether it's
+        // upside down or not we must look at the angle to landscape.
         let radians_to_degrees = 180. / f32::consts::PI;
-        let portrait = (x.atan2((y * y + z * z).sqrt()) * radians_to_degrees).round();
-        let landscape = (y.atan2((x * x + z * z).sqrt()) * radians_to_degrees).round();
-        let portrait_abs = portrait.abs();
-        let landscape_abs = landscape.abs();
+        let portrait_angle = (x.atan2((y * y + z * z).sqrt()) * radians_to_degrees).round();
+        let landscape_angle = (y.atan2((x * x + z * z).sqrt()) * radians_to_degrees).round();
+
+        let portrait_angle_abs = portrait_angle.abs();
+        let landscape_angle_abs = landscape_angle.abs();
 
         // Deadzone to avoid flickering between orientation.
-        if portrait_abs + DEADZONE > THRESHOLD && landscape_abs + DEADZONE > THRESHOLD {
+        if portrait_angle_abs + DEADZONE > THRESHOLD && landscape_angle_abs + DEADZONE > THRESHOLD {
             return None;
         }
 
-        let orientation = if portrait_abs > THRESHOLD {
-            if portrait > 0. {
-                Orientation::Portrait
-            } else {
-                Orientation::InversePortrait
-            }
-        } else if landscape_abs > THRESHOLD {
-            if landscape > 0. {
+        // Check if we're far enough from portrait axis to pick landscape mode.
+        let orientation = if portrait_angle_abs > THRESHOLD {
+            if portrait_angle > 0. {
                 Orientation::InverseLandscape
             } else {
                 Orientation::Landscape
+            }
+        // Ditto for landspace axis.
+        } else if landscape_angle_abs > THRESHOLD {
+            if landscape_angle > 0. {
+                Orientation::InversePortrait
+            } else {
+                Orientation::Portrait
             }
         } else {
             // No orientation is present when parallel to the ground.
