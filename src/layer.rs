@@ -20,8 +20,7 @@ pub struct Layers {
 
 impl Layers {
     /// Add a new layer shell window.
-    pub fn add(&mut self, layer: Layer, surface: CatacombLayerSurface) {
-        let window = Window::new(surface);
+    pub fn add(&mut self, layer: Layer, window: LayerWindow) {
         match layer {
             Layer::Background => self.background.push(window),
             Layer::Bottom => self.bottom.push(window),

@@ -46,7 +46,7 @@ pub fn init<B: 'static>(display: &mut Display) {
         |event, mut data| match event {
             LayerShellRequest::NewLayerSurface { surface, layer, .. } => {
                 let catacomb = data.get::<Catacomb<B>>().unwrap();
-                catacomb.windows.add_layer(layer, surface);
+                catacomb.windows.add_layer(layer, surface, &catacomb.output);
             },
             LayerShellRequest::AckConfigure { .. } => (),
         },

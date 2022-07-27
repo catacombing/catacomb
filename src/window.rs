@@ -93,8 +93,15 @@ impl Windows {
     }
 
     /// Add a new layer shell window.
-    pub fn add_layer(&mut self, layer: Layer, surface: impl Into<CatacombLayerSurface>) {
-        self.layers.add(layer, surface.into());
+    pub fn add_layer(
+        &mut self,
+        layer: Layer,
+        surface: impl Into<CatacombLayerSurface>,
+        output: &Output,
+    ) {
+        let mut window = Window::new(surface.into());
+        window.enter(output);
+        self.layers.add(layer, window);
     }
 
     /// Add a new popup window.
