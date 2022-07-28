@@ -27,6 +27,7 @@ features = [
 
 [dependencies]
 calloop = "0.9.3"
+dirs = "4.0.0"
 libc = "0.2.123"
 udev = "0.6.2"
 

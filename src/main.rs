@@ -2,6 +2,7 @@ use std::env;
 
 mod catacomb;
 mod config;
+mod daemon;
 mod drawing;
 mod geometry;
 mod input;
