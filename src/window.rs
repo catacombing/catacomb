@@ -623,7 +623,10 @@ impl Windows {
             if !window.deny_focus {
                 self.focus.layer = window.surface.surface().cloned();
             }
-            return window.surface_at(position);
+            return window.surface_at(position).map(|mut surface| {
+                surface.is_layer = true;
+                surface
+            });
         }
 
         for window in self.primary.upgrade().iter().chain(&self.secondary.upgrade()) {
@@ -638,7 +641,10 @@ impl Windows {
             if !window.deny_focus {
                 self.focus.layer = window.surface.surface().cloned();
             }
-            return window.surface_at(position);
+            return window.surface_at(position).map(|mut surface| {
+                surface.is_layer = true;
+                surface
+            });
         }
 
         // Unfocus when touching outside of window bounds.
@@ -1586,11 +1592,12 @@ impl Default for View {
 pub struct OffsetSurface {
     pub offset: Point<i32, Logical>,
     pub surface: WlSurface,
+    pub is_layer: bool,
 }
 
 impl OffsetSurface {
     fn new(surface: WlSurface, offset: Point<i32, Logical>) -> Self {
-        Self { surface, offset }
+        Self { surface, offset, is_layer: false }
     }
 }
 

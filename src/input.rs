@@ -312,7 +312,10 @@ impl<B: Backend> Catacomb<B> {
         let surface = self.windows.touch_surface_at(event.position);
 
         // Notify client.
-        if let Some(OffsetSurface { surface, offset }) = surface {
+        let mut layer_touched = false;
+        if let Some(OffsetSurface { surface, offset, is_layer }) = surface {
+            layer_touched = is_layer;
+
             let serial = SERIAL_COUNTER.next_serial();
             self.touch_state.touch.down(serial, time, &surface, offset, slot, position);
         }
@@ -325,6 +328,11 @@ impl<B: Backend> Catacomb<B> {
 
         // Initialize the touch state.
         self.touch_state.start(&self.output, position);
+
+        // Inhibit gestures started above layer shell surfaces.
+        if layer_touched {
+            self.touch_state.start.gesture = None;
+        }
 
         // Only send touch start if there's no gesture in progress.
         if self.touch_state.start.gesture.is_none() {
