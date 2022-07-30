@@ -29,8 +29,11 @@ use crate::drawing::{Graphics, MAX_DAMAGE_AGE};
 use crate::input::TouchState;
 use crate::orientation::{Accelerometer, AccelerometerSource};
 use crate::output::Output;
-use crate::shell;
 use crate::window::Windows;
+use crate::{daemon, shell};
+
+/// The script to run after compositor start.
+const POST_START_SCRIPT: &str = "post_start.sh";
 
 /// Shared compositor state.
 pub struct Catacomb<B> {
@@ -128,6 +131,13 @@ impl<B: Backend + 'static> Catacomb<B> {
 
         // XDG output protocol.
         xdg::init_xdg_output_manager(&mut display, None);
+
+        // Run user startup script.
+        if let Some(mut script_path) = dirs::config_dir() {
+            script_path.push("catacomb");
+            script_path.push(POST_START_SCRIPT);
+            let _ = daemon::spawn(script_path.as_os_str(), []);
+        }
 
         Self {
             touch_state: TouchState::new(event_loop.handle(), touch),
