@@ -24,7 +24,7 @@ const DEADZONE: f32 = 5.;
 
 pub trait AccelerometerSource {
     /// Subscribe to orientation change events.
-    fn subscribe<'a, F: 'a, B>(self, loop_handle: LoopHandle<'a, Catacomb<B>>, fun: F)
+    fn subscribe<'a, F: 'a, B>(self, loop_handle: &LoopHandle<'a, Catacomb<B>>, fun: F)
     where
         F: FnMut(Orientation, &mut Catacomb<B>);
 }
@@ -45,7 +45,7 @@ impl Accelerometer {
 }
 
 impl AccelerometerSource for Accelerometer {
-    fn subscribe<'a, F: 'a, B>(self, loop_handle: LoopHandle<'a, Catacomb<B>>, fun: F)
+    fn subscribe<'a, F: 'a, B>(self, loop_handle: &LoopHandle<'a, Catacomb<B>>, fun: F)
     where
         F: FnMut(Orientation, &mut Catacomb<B>),
     {
@@ -144,7 +144,7 @@ impl SensorAccelerometer {
 }
 
 impl AccelerometerSource for SensorAccelerometer {
-    fn subscribe<'a, F: 'a, B>(mut self, loop_handle: LoopHandle<'a, Catacomb<B>>, mut fun: F)
+    fn subscribe<'a, F: 'a, B>(mut self, loop_handle: &LoopHandle<'a, Catacomb<B>>, mut fun: F)
     where
         F: FnMut(Orientation, &mut Catacomb<B>),
     {
@@ -172,7 +172,7 @@ impl AccelerometerSource for SensorAccelerometer {
 pub struct DummyAccelerometer;
 
 impl AccelerometerSource for DummyAccelerometer {
-    fn subscribe<'a, F: 'a, B>(self, loop_handle: LoopHandle<'a, Catacomb<B>>, mut fun: F)
+    fn subscribe<'a, F: 'a, B>(self, loop_handle: &LoopHandle<'a, Catacomb<B>>, mut fun: F)
     where
         F: FnMut(Orientation, &mut Catacomb<B>),
     {

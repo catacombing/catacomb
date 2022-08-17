@@ -6,11 +6,12 @@ use std::rc::Rc;
 use std::time::Duration;
 use std::{env, io, mem};
 
+use calloop::LoopHandle;
 use server_decoration::server::org_kde_kwin_server_decoration_manager::Mode;
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
 use smithay::backend::renderer::Frame;
 use smithay::reexports::calloop::generic::Generic;
-use smithay::reexports::calloop::{EventLoop, Interest, Mode as TriggerMode, PostAction};
+use smithay::reexports::calloop::{Interest, Mode as TriggerMode, PostAction};
 use smithay::reexports::wayland_protocols::misc::server_decoration;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Display;
@@ -26,7 +27,7 @@ use smithay::wayland::virtual_keyboard::VirtualKeyboardHandle;
 use smithay::wayland::{data_device, input_method, shm, text_input, SERIAL_COUNTER};
 
 use crate::drawing::{Graphics, MAX_DAMAGE_AGE};
-use crate::input::TouchState;
+use crate::input::{PhysicalButtonState, TouchState};
 use crate::orientation::{Accelerometer, AccelerometerSource};
 use crate::output::Output;
 use crate::window::Windows;
@@ -37,7 +38,9 @@ const POST_START_SCRIPT: &str = "post_start.sh";
 
 /// Shared compositor state.
 pub struct Catacomb<B> {
+    pub loop_handle: LoopHandle<'static, Self>,
     pub virtual_keyboard: VirtualKeyboardHandle,
+    pub button_state: PhysicalButtonState,
     pub input_method: InputMethodHandle,
     pub text_input: TextInputHandle,
     pub keyboard: KeyboardHandle,
@@ -59,7 +62,7 @@ pub struct Catacomb<B> {
 
 impl<B: Backend + 'static> Catacomb<B> {
     /// Initialize the compositor.
-    pub fn new(event_loop: &mut EventLoop<Self>, backend: B) -> Self {
+    pub fn new(loop_handle: LoopHandle<'static, Self>, backend: B) -> Self {
         let mut display = Display::new();
 
         // Create our Wayland socket.
@@ -72,8 +75,7 @@ impl<B: Backend + 'static> Catacomb<B> {
         println!("Wayland socket: {socket_name}");
 
         // Subscribe to Wayland socket events.
-        event_loop
-            .handle()
+        loop_handle
             .insert_source(
                 Generic::from_fd(display.get_poll_fd(), Interest::READ, TriggerMode::Level),
                 |_, _, catacomb| catacomb.handle_socket_readiness(),
@@ -125,7 +127,7 @@ impl<B: Backend + 'static> Catacomb<B> {
         let virtual_keyboard = VirtualKeyboardHandle::new(&mut display, 200, 25);
 
         // Subscribe to device orientation changes.
-        Accelerometer::new().subscribe(event_loop.handle(), |orientation, catacomb| {
+        Accelerometer::new().subscribe(&loop_handle, |orientation, catacomb| {
             catacomb.handle_orientation(orientation);
         });
 
@@ -140,16 +142,18 @@ impl<B: Backend + 'static> Catacomb<B> {
         }
 
         Self {
-            touch_state: TouchState::new(event_loop.handle(), touch),
+            touch_state: TouchState::new(&loop_handle, touch),
             output: Output::new_dummy(&mut display),
             display: Rc::new(RefCell::new(display)),
             windows: Windows::new(),
             virtual_keyboard,
             input_method,
+            loop_handle,
             text_input,
             seat_name,
             keyboard,
             backend,
+            button_state: Default::default(),
             touch_debug: Default::default(),
             last_focus: Default::default(),
             terminated: Default::default(),

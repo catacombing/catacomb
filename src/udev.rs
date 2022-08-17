@@ -33,7 +33,7 @@ use crate::output::Output;
 pub fn run() {
     let mut event_loop = EventLoop::try_new().expect("event loop");
     let udev = Udev::new(event_loop.handle());
-    let mut catacomb = Catacomb::new(&mut event_loop, udev);
+    let mut catacomb = Catacomb::new(event_loop.handle(), udev);
 
     // Create backend and add presently connected devices.
     let backend = UdevBackend::new(&catacomb.seat_name, None).expect("init udev");

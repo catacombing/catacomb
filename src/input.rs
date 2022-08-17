@@ -24,6 +24,9 @@ use crate::window::OffsetSurface;
 /// Time before a tap is considered a hold.
 pub const HOLD_DURATION: Duration = Duration::from_secs(1);
 
+/// Time before button press is considered a hold.
+const BUTTON_HOLD_DURATION: Duration = Duration::from_millis(500);
+
 /// Accepted overview gesture deviation in pixels at scale 1.
 const OVERVIEW_GESTURE_ACCURACY: f64 = 60.;
 
@@ -59,7 +62,7 @@ pub struct TouchState {
 }
 
 impl TouchState {
-    pub fn new<B: Backend>(loop_handle: LoopHandle<'_, Catacomb<B>>, touch: TouchHandle) -> Self {
+    pub fn new<B: Backend>(loop_handle: &LoopHandle<'_, Catacomb<B>>, touch: TouchHandle) -> Self {
         let timer = Timer::new().expect("create input timer");
         let timer_handle = timer.handle();
         loop_handle
@@ -223,6 +226,20 @@ enum TouchEventType {
     Down,
     Up,
     Motion,
+}
+
+/// Hardware button state.
+#[derive(Default)]
+pub struct PhysicalButtonState {
+    power: Option<usize>,
+    next_id: usize,
+}
+
+impl PhysicalButtonState {
+    fn next_id(&mut self) -> usize {
+        self.next_id += 1;
+        self.next_id
+    }
 }
 
 impl<B: Backend> Catacomb<B> {
@@ -455,17 +472,38 @@ impl<B: Backend> Catacomb<B> {
         let state = event.state();
 
         self.keyboard.input(keycode, state, serial, time, |_modifiers, keysym| {
-            match keysym.modified_sym() {
-                keysym @ keysyms::KEY_XF86Switch_VT_1..=keysyms::KEY_XF86Switch_VT_12 => {
+            match (keysym.modified_sym(), state) {
+                (keysym @ keysyms::KEY_XF86Switch_VT_1..=keysyms::KEY_XF86Switch_VT_12, _) => {
                     let vt = (keysym - keysyms::KEY_XF86Switch_VT_1 + 1) as i32;
                     self.backend.change_vt(vt);
                 },
-                keysyms::KEY_XF86PowerOff if state == KeyState::Pressed => {
-                    let _ = Command::new(APP_DRAWER)
-                        .stdin(Stdio::null())
-                        .stdout(Stdio::null())
-                        .stderr(Stdio::null())
-                        .spawn();
+                (keysyms::KEY_XF86PowerOff, KeyState::Pressed) => {
+                    let id = self.button_state.next_id();
+                    self.button_state.power = Some(id);
+
+                    // Stage timer until hold deadline.
+                    let timer = Timer::new().expect("create power button timer");
+                    timer.handle().add_timeout(BUTTON_HOLD_DURATION, id);
+
+                    // Open drawer if button is still held after timeout.
+                    self.loop_handle
+                        .insert_source(timer, |id, _, catacomb| {
+                            // Ignore timer if button was released.
+                            if catacomb.button_state.power != Some(id) {
+                                return;
+                            }
+
+                            // Open drawer.
+                            let _ = Command::new(APP_DRAWER)
+                                .stdin(Stdio::null())
+                                .stdout(Stdio::null())
+                                .stderr(Stdio::null())
+                                .spawn();
+                        })
+                        .expect("insert power button timer");
+                },
+                (keysyms::KEY_XF86PowerOff, KeyState::Released) => {
+                    self.button_state.power = None;
                 },
                 _ => return FilterResult::Forward,
             }

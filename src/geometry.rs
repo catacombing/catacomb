@@ -60,7 +60,7 @@ where
 }
 
 /// A point in the 3 dimensional space.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Vector3D<T> {
     pub x: T,
     pub y: T,

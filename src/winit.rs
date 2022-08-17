@@ -28,7 +28,7 @@ pub fn run() {
     let _ = graphics.borrow_mut().renderer().downscale_filter(TextureFilter::Linear);
 
     let mut event_loop = EventLoop::try_new().expect("event loop");
-    let mut catacomb = Catacomb::new(&mut event_loop, Winit);
+    let mut catacomb = Catacomb::new(event_loop.handle(), Winit);
 
     // Set the output size.
     let mode = Mode { size: graphics.borrow().window_size().physical_size, refresh: 200_000 };
