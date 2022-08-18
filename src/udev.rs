@@ -18,6 +18,9 @@ use smithay::backend::udev::{UdevBackend, UdevEvent};
 use smithay::reexports::calloop::timer::{Timer, TimerHandle};
 use smithay::reexports::calloop::{Dispatcher, EventLoop, LoopHandle, RegistrationToken};
 use smithay::reexports::drm::control::connector::State as ConnectorState;
+use smithay::reexports::drm::control::property::{
+    Handle as PropertyHandle, Value as PropertyValue,
+};
 use smithay::reexports::drm::control::Device;
 use smithay::reexports::input::Libinput;
 use smithay::reexports::nix::fcntl::OFlag;
@@ -134,6 +137,12 @@ impl Backend for Udev {
     fn change_vt(&mut self, vt: i32) {
         let _ = self.session.change_vt(vt);
     }
+
+    fn set_sleep(&mut self, sleep: bool) {
+        if let Some(output_device) = &mut self.output_device {
+            output_device.set_enabled(!sleep);
+        }
+    }
 }
 
 impl Catacomb<Udev> {
@@ -175,12 +184,13 @@ impl Catacomb<Udev> {
                 DrmEvent::Error(error) => eprintln!("DRM error: {}", error),
             };
         });
-        let token = self.backend.handle.register_dispatcher(dispatcher)?;
+        let token = self.backend.handle.register_dispatcher(dispatcher.clone())?;
 
         self.backend.output_device = Some(OutputDevice {
             frame_interval: Duration::from_millis(self.output.frame_interval()),
             timer: self.backend.render_timer.clone(),
             _restart_token: restart_token,
+            drm: dispatcher,
             id: device_id,
             gbm_surface,
             renderer,
@@ -280,6 +290,7 @@ impl Catacomb<Udev> {
 /// Target device for rendering.
 struct OutputDevice {
     gbm_surface: GbmBufferedSurface<GbmDevice<RawFd>, RawFd>,
+    drm: Dispatcher<'static, DrmDevice<i32>, Catacomb<Udev>>,
     timer: TimerHandle<DeviceId>,
     gbm: GbmDevice<RawFd>,
     renderer: Gles2Renderer,
@@ -288,6 +299,39 @@ struct OutputDevice {
     _restart_token: SignalToken,
     frame_interval: Duration,
     token: RegistrationToken,
+}
+
+impl OutputDevice {
+    /// Get DRM property handle.
+    pub fn get_drm_property(&self, name: &str) -> Option<PropertyHandle> {
+        let crtc = self.gbm_surface.crtc();
+        let drm = self.drm.as_source_ref();
+
+        // Get all available properties.
+        let properties = drm.get_properties(crtc).ok()?;
+        let (property_handles, _) = properties.as_props_and_values();
+
+        // Find property matching the requested name.
+        property_handles.iter().find_map(|handle| {
+            let property_info = drm.get_property(*handle).ok()?;
+            let property_name = property_info.name().to_str().ok()?;
+
+            (property_name == name).then(|| *handle)
+        })
+    }
+
+    fn set_enabled(&mut self, enabled: bool) {
+        let property = match self.get_drm_property("ACTIVE") {
+            Some(property) => property,
+            None => return,
+        };
+
+        let crtc = self.gbm_surface.crtc();
+        let drm = self.drm.as_source_ref();
+
+        let value = PropertyValue::Boolean(enabled);
+        let _ = drm.set_property(crtc, property, value.into());
+    }
 }
 
 impl Render for &mut OutputDevice {

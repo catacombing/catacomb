@@ -493,6 +493,9 @@ impl<B: Backend> Catacomb<B> {
                                 return;
                             }
 
+                            // Reset button state.
+                            catacomb.button_state.power = None;
+
                             // Open drawer.
                             let _ = Command::new(APP_DRAWER)
                                 .stdin(Stdio::null())
@@ -503,7 +506,11 @@ impl<B: Backend> Catacomb<B> {
                         .expect("insert power button timer");
                 },
                 (keysyms::KEY_XF86PowerOff, KeyState::Released) => {
-                    self.button_state.power = None;
+                    // Turn off screen on short press.
+                    if self.button_state.power.take().is_some() {
+                        self.sleeping = !self.sleeping;
+                        self.backend.set_sleep(self.sleeping);
+                    }
                 },
                 _ => return FilterResult::Forward,
             }

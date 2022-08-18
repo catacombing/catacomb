@@ -48,6 +48,7 @@ pub struct Catacomb<B> {
     pub seat_name: String,
     pub terminated: bool,
     pub windows: Windows,
+    pub sleeping: bool,
     pub output: Output,
     pub backend: B,
 
@@ -141,23 +142,26 @@ impl<B: Backend + 'static> Catacomb<B> {
             let _ = daemon::spawn(script_path.as_os_str(), []);
         }
 
+        let touch_state = TouchState::new(&loop_handle, touch);
+
         Self {
-            touch_state: TouchState::new(&loop_handle, touch),
-            output: Output::new_dummy(&mut display),
-            display: Rc::new(RefCell::new(display)),
-            windows: Windows::new(),
             virtual_keyboard,
             input_method,
             loop_handle,
+            touch_state,
             text_input,
             seat_name,
             keyboard,
             backend,
+            output: Output::new_dummy(&mut display),
+            display: Rc::new(RefCell::new(display)),
+            windows: Windows::new(),
             button_state: Default::default(),
             touch_debug: Default::default(),
             last_focus: Default::default(),
             terminated: Default::default(),
             graphics: Default::default(),
+            sleeping: Default::default(),
             damage: Default::default(),
         }
     }
@@ -245,8 +249,14 @@ impl<B> Catacomb<B> {
 
 /// Backend capabilities.
 pub trait Backend {
+    /// Get Wayland seat name.
     fn seat_name(&self) -> String;
+
+    /// Change Unix TTY.
     fn change_vt(&mut self, _vt: i32) {}
+
+    /// Set power saving state.
+    fn set_sleep(&mut self, _sleep: bool) {}
 }
 
 /// Abstraction over backend-specific rendering.

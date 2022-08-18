@@ -9,7 +9,7 @@ license = "GPL-3.0"
 edition = "2021"
 
 [dependencies.smithay]
-git = "https://github.com/chrisduerr/smithay" 
+git = "https://github.com/chrisduerr/smithay"
 rev = "5129920247146d4d626f675f31603752700ef8e7"
 default-features = false
 features = [
