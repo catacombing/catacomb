@@ -4,8 +4,9 @@ use std::cell::RefCell;
 use std::error::Error;
 use std::rc::Rc;
 use std::time::Duration;
-use std::{env, io, mem};
+use std::{env, fs, io, mem};
 
+use calloop::timer::{Timer, TimerHandle};
 use calloop::LoopHandle;
 use server_decoration::server::org_kde_kwin_server_decoration_manager::Mode;
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
@@ -42,6 +43,7 @@ pub struct Catacomb<B> {
     pub virtual_keyboard: VirtualKeyboardHandle,
     pub button_state: PhysicalButtonState,
     pub input_method: InputMethodHandle,
+    pub suspend_timer: TimerHandle<()>,
     pub text_input: TextInputHandle,
     pub keyboard: KeyboardHandle,
     pub touch_state: TouchState,
@@ -135,6 +137,11 @@ impl<B: Backend + 'static> Catacomb<B> {
         // XDG output protocol.
         xdg::init_xdg_output_manager(&mut display, None);
 
+        // Setup timer for auto-suspend.
+        let timer = Timer::new().expect("create suspend timer");
+        let suspend_timer = timer.handle();
+        loop_handle.insert_source(timer, |_, _, _| suspend()).expect("insert suspend timer");
+
         // Run user startup script.
         if let Some(mut script_path) = dirs::config_dir() {
             script_path.push("catacomb");
@@ -146,6 +153,7 @@ impl<B: Backend + 'static> Catacomb<B> {
 
         Self {
             virtual_keyboard,
+            suspend_timer,
             input_method,
             loop_handle,
             touch_state,
@@ -331,5 +339,12 @@ impl Damage {
         }
 
         self.current.as_slice()
+    }
+}
+
+/// Suspend to RAM.
+fn suspend() {
+    if let Err(err) = fs::write("/sys/power/state", "mem") {
+        eprintln!("Failed suspending to RAM: {}", err);
     }
 }

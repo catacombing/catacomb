@@ -42,6 +42,9 @@ const MAX_TAP_DISTANCE: f64 = 20.;
 /// Friction for velocity computation.
 const FRICTION: f64 = 0.1;
 
+/// Duration until suspend when screen is turned off.
+const SUSPEND_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Touch slot for pointer emulation.
 ///
 /// The touch slot `None`, which is usually used for devices that do not support
@@ -506,10 +509,17 @@ impl<B: Backend> Catacomb<B> {
                         .expect("insert power button timer");
                 },
                 (keysyms::KEY_XF86PowerOff, KeyState::Released) => {
-                    // Turn off screen on short press.
+                    // Toggle screen DPMS status on short press.
                     if self.button_state.power.take().is_some() {
                         self.sleeping = !self.sleeping;
                         self.backend.set_sleep(self.sleeping);
+
+                        // Timeout after prolonged inactivity.
+                        if self.sleeping {
+                            self.suspend_timer.add_timeout(SUSPEND_TIMEOUT, ());
+                        } else {
+                            self.suspend_timer.cancel_all_timeouts();
+                        }
                     }
                 },
                 _ => return FilterResult::Forward,
