@@ -141,6 +141,9 @@ impl Backend for Udev {
     fn set_sleep(&mut self, sleep: bool) {
         if let Some(output_device) = &mut self.output_device {
             output_device.set_enabled(!sleep);
+
+            // Request immediate redraw, so vblanks start coming in again.
+            output_device.timer.add_timeout(Duration::ZERO, output_device.id);
         }
     }
 }
