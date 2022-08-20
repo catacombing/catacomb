@@ -34,7 +34,7 @@ const BORDER_RGBA: [u8; 4] = [32, 32, 32, 255];
 
 /// Height of the window decoration title in the application overview with a DPR
 /// of 1.
-const OVERVIEW_TITLE_HEIGHT: i32 = 30;
+const OVERVIEW_TITLE_HEIGHT: i32 = 15;
 
 /// Width of the window decoration border in the application overview with a DPR
 /// of 1.
@@ -129,7 +129,7 @@ impl Texture {
         output: &Output,
         window_bounds: Rectangle<i32, Logical>,
         window_scale: f64,
-        damage: impl Into<Option<Rectangle<f64, Physical>>>,
+        damage: impl Into<Option<Rectangle<i32, Physical>>>,
     ) {
         // Skip textures completely outside of the window bounds.
         let scaled_window_bounds = window_bounds.size.scale(1. / window_scale).max((1, 1));
@@ -146,10 +146,10 @@ impl Texture {
         let location = window_bounds.loc + self.location.scale(window_scale);
         let dst_size = src_size.scale(window_scale).min(window_bounds.size);
         let dst = Rectangle::from_loc_and_size(location, dst_size);
-        let dst_physical = dst.to_f64().to_physical(output.scale());
+        let dst_physical = dst.to_physical(output.scale());
 
         // Calculate surface damage.
-        let full_damage = Rectangle::from_loc_and_size((0., 0.), dst_physical.size);
+        let full_damage = Rectangle::from_loc_and_size((0, 0), dst_physical.size);
         let surface_damage = match damage.into() {
             Some(mut damage) => {
                 damage.loc -= dst_physical.loc;
@@ -162,7 +162,7 @@ impl Texture {
         if let Some(surface_damage) = surface_damage {
             let _ = frame.render_texture_from_to(
                 &self.texture,
-                src_buffer,
+                src_buffer.to_f64(),
                 dst_physical,
                 &[surface_damage],
                 self.transform,
@@ -222,20 +222,20 @@ impl Graphics {
     }
 
     /// Decoration title bar height.
-    pub fn title_height(output: &Output) -> i32 {
-        (OVERVIEW_TITLE_HEIGHT as f64 / output.scale()).round() as i32
+    pub fn title_height() -> i32 {
+        OVERVIEW_TITLE_HEIGHT
     }
 
     /// Decoration border width.
-    pub fn border_width(output: &Output) -> i32 {
-        (OVERVIEW_BORDER_WIDTH as f64 / output.scale()).round() as i32
+    pub fn border_width() -> i32 {
+        OVERVIEW_BORDER_WIDTH
     }
 
     /// Create overview window decoration.
     fn create_decoration(renderer: &mut Gles2Renderer, output: &Output) -> Texture {
         let size = Self::decoration_size(output);
-        let title_height = Self::title_height(output) as usize;
-        let border_width = Self::border_width(output) as usize;
+        let title_height = Self::title_height() as usize;
+        let border_width = Self::border_width() as usize;
 
         let width = size.w as usize;
         let height = size.h as usize;
@@ -281,8 +281,8 @@ impl Graphics {
 
     /// Total window decoration size.
     fn decoration_size(output: &Output) -> Size<i32, Logical> {
-        let title_height = Self::title_height(output);
-        let border_width = Self::border_width(output);
+        let title_height = Self::title_height();
+        let border_width = Self::border_width();
 
         let window_size = output.available().size.scale(FG_OVERVIEW_PERCENTAGE);
         let width = window_size.w + border_width * 2;
@@ -325,10 +325,10 @@ impl SurfaceBuffer {
         &mut self,
         attributes: &mut SurfaceAttributes,
         assignment: BufferAssignment,
-        output_scale: f64,
+        output_scale: i32,
     ) {
         match assignment {
-            BufferAssignment::NewBuffer { buffer, .. } => {
+            BufferAssignment::NewBuffer(buffer) => {
                 self.size = renderer::buffer_dimensions(&buffer)
                     .unwrap_or_default()
                     .to_logical(self.scale, self.transform);
@@ -347,7 +347,7 @@ impl SurfaceBuffer {
     }
 
     /// Add new surface damage.
-    fn add_damage(&mut self, output_scale: f64, damage: SurfaceDamage) {
+    fn add_damage(&mut self, output_scale: i32, damage: SurfaceDamage) {
         let (buffer, logical) = match damage {
             SurfaceDamage::Buffer(buffer) => {
                 let buffer_size = self.size.to_buffer(self.scale, self.transform);
@@ -359,7 +359,7 @@ impl SurfaceBuffer {
                 (buffer, logical)
             },
         };
-        self.damage.physical.push(logical.to_f64().to_physical(output_scale));
+        self.damage.physical.push(logical.to_physical(output_scale));
         self.damage.buffer.push(buffer);
     }
 }
@@ -385,7 +385,7 @@ impl Deref for Buffer {
 #[derive(Default)]
 pub struct Damage {
     buffer: Vec<Rectangle<i32, BufferSpace>>,
-    physical: Vec<Rectangle<f64, Physical>>,
+    physical: Vec<Rectangle<i32, Physical>>,
 }
 
 impl Damage {
@@ -400,7 +400,7 @@ impl Damage {
     }
 
     /// Drain all pending physical damage.
-    pub fn drain_physical(&mut self) -> Drain<'_, Rectangle<f64, Physical>> {
+    pub fn drain_physical(&mut self) -> Drain<'_, Rectangle<i32, Physical>> {
         self.physical.drain(..)
     }
 }

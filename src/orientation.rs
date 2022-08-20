@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use calloop::timer::Timer;
-use calloop::LoopHandle;
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+use smithay::reexports::calloop::LoopHandle;
 use smithay::utils::Transform;
 use udev::{Device, Enumerator};
 
@@ -148,10 +148,8 @@ impl AccelerometerSource for SensorAccelerometer {
     where
         F: FnMut(Orientation, &mut Catacomb<B>),
     {
-        let timer = Timer::new().expect("create orientation timer");
-        timer.handle().add_timeout(Duration::ZERO, ());
         loop_handle
-            .insert_source(timer, move |_, handle, catacomb| {
+            .insert_source(Timer::immediate(), move |_, _, catacomb| {
                 let fallback = self.last.unwrap_or(Orientation::Portrait);
                 let orientation = self.orientation().unwrap_or(fallback);
                 if Some(orientation) != self.last {
@@ -159,7 +157,7 @@ impl AccelerometerSource for SensorAccelerometer {
                     fun(orientation, catacomb);
                 }
 
-                handle.add_timeout(POLL_RATE, ());
+                TimeoutAction::ToDuration(POLL_RATE)
             })
             .expect("insert orientation timer");
     }
@@ -176,10 +174,11 @@ impl AccelerometerSource for DummyAccelerometer {
     where
         F: FnMut(Orientation, &mut Catacomb<B>),
     {
-        let timer = Timer::new().expect("create dummy orientation timer");
-        timer.handle().add_timeout(Duration::ZERO, ());
         loop_handle
-            .insert_source(timer, move |_, _, catacomb| fun(Orientation::Portrait, catacomb))
+            .insert_source(Timer::immediate(), move |_, _, catacomb| {
+                fun(Orientation::Portrait, catacomb);
+                TimeoutAction::Drop
+            })
             .expect("insert dummy orientation timer");
     }
 }

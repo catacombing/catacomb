@@ -1,54 +1,52 @@
 //! Output region handling.
 
-use std::ops::Deref;
+use std::time::Duration;
 
-use smithay::reexports::wayland_server::protocol::wl_output::{Subpixel, WlOutput};
-use smithay::reexports::wayland_server::{Display, Global};
+use smithay::reexports::wayland_server::backend::GlobalId;
+use smithay::reexports::wayland_server::protocol::wl_output::Subpixel;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::utils::{Logical, Physical, Rectangle, Size, Transform};
-use smithay::wayland::output::{Mode, Output as SmithayOutput, PhysicalProperties};
+use smithay::wayland::output::{Mode, Output as SmithayOutput, PhysicalProperties, Scale};
 use smithay::wayland::shell::wlr_layer::{Anchor, ExclusiveZone};
 
+use crate::catacomb::Catacomb;
 use crate::orientation::Orientation;
 
 /// Use a fixed output scale.
-const SCALE: f64 = 2.;
+const SCALE: i32 = 2;
 
 /// Wayland output, typically a screen.
 pub struct Output {
     /// Layer shell reserved space.
     pub exclusive: ExclusiveSpace,
 
-    global: Option<Global<WlOutput>>,
+    global: Option<GlobalId>,
     orientation: Orientation,
+    display: DisplayHandle,
     output: SmithayOutput,
     transform: Transform,
-    scale: f64,
+    scale: i32,
     mode: Mode,
 }
 
-impl Drop for Output {
-    fn drop(&mut self) {
-        if let Some(global) = self.global.take() {
-            global.destroy();
-        }
-    }
-}
-
 impl Output {
-    pub fn new(
-        display: &mut Display,
+    pub fn new<B: 'static>(
+        display: &DisplayHandle,
         name: impl Into<String>,
         mode: Mode,
         properties: PhysicalProperties,
     ) -> Self {
-        let (output, global) = SmithayOutput::new(display, name.into(), properties, None);
+        let output = SmithayOutput::new(name.into(), properties, None);
+        let global = Some(output.create_global::<Catacomb<B>>(display));
         let scale = SCALE;
 
         let mut output = Self {
-            global: Some(global),
+            global,
             output,
             scale,
             mode,
+            display: display.clone(),
             orientation: Default::default(),
             transform: Default::default(),
             exclusive: Default::default(),
@@ -61,9 +59,9 @@ impl Output {
     }
 
     /// Create a new dummy output.
-    pub fn new_dummy(display: &mut Display) -> Self {
+    pub fn new_dummy<B: 'static>(display: &DisplayHandle) -> Self {
         let mode = Mode { size: (0, 0).into(), refresh: 0 };
-        Output::new(display, "dummy-0", mode, PhysicalProperties {
+        Output::new::<B>(display, "dummy-0", mode, PhysicalProperties {
             subpixel: Subpixel::Unknown,
             model: "dummy-0".into(),
             make: "dummy-0".into(),
@@ -71,11 +69,21 @@ impl Output {
         })
     }
 
+    // TODO: Remove when nuking winit.
+    //
+    /// Destroy this output's gobal.
+    pub fn destroy<B: 'static>(mut self) {
+        if let Some(global) = self.global.take() {
+            self.display.remove_global::<Catacomb<B>>(global);
+        }
+    }
+
     /// Update the output's active mode.
     #[inline]
     pub fn set_mode(&mut self, mode: Mode) {
+        let scale = Some(Scale::Integer(self.scale));
         let transform = Some(self.transform.into());
-        self.output.change_current_state(Some(mode), transform, Some(self.scale as i32), None);
+        self.output.change_current_state(Some(mode), transform, scale, None);
         self.output.set_preferred(mode);
         self.mode = mode;
     }
@@ -113,7 +121,7 @@ impl Output {
     /// This represents the size of the display before applying any
     /// transformations.
     pub fn resolution(&self) -> Size<i32, Logical> {
-        self.mode.size.to_f64().to_logical(self.scale).to_i32_round()
+        self.mode.size.to_logical(self.scale)
     }
 
     /// Output device resolution in physical coordinates.
@@ -148,8 +156,8 @@ impl Output {
     }
 
     /// Duration between frames in milliseconds.
-    pub fn frame_interval(&self) -> u64 {
-        1_000_000 / self.mode.refresh as u64
+    pub fn frame_interval(&self) -> Duration {
+        Duration::from_millis(1_000_000 / self.mode.refresh as u64)
     }
 
     /// Update the device orientation.
@@ -167,16 +175,18 @@ impl Output {
     }
 
     /// Output scale.
-    pub fn scale(&self) -> f64 {
+    pub fn scale(&self) -> i32 {
         self.scale
     }
-}
 
-impl Deref for Output {
-    type Target = SmithayOutput;
+    /// Add the given surface to the display.
+    pub fn enter(&self, surface: &WlSurface) {
+        self.output.enter(&self.display, surface);
+    }
 
-    fn deref(&self) -> &Self::Target {
-        &self.output
+    /// Remove the given surface from the display.
+    pub fn leave(&self, surface: &WlSurface) {
+        self.output.leave(&self.display, surface);
     }
 }
 

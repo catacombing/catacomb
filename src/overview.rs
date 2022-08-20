@@ -135,8 +135,8 @@ impl Overview {
 
         // Window decoration.
         let decoration = graphics.decoration(renderer, output);
-        let border_width = Graphics::border_width(output);
-        let title_height = Graphics::title_height(output);
+        let border_width = Graphics::border_width();
+        let title_height = Graphics::title_height();
 
         // Render each window at the desired location in the overview.
         for (position, i) in neg_iter.chain(pos_iter) {
@@ -221,8 +221,8 @@ impl DragAndDrop {
         graphics: &mut Graphics,
     ) {
         let available = output.available();
-        let border_width = Graphics::border_width(output);
-        let title_height = Graphics::title_height(output);
+        let border_width = Graphics::border_width();
+        let title_height = Graphics::title_height();
 
         // Calculate window bounds.
         let max_size = available.size.scale(FG_OVERVIEW_PERCENTAGE);

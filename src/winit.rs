@@ -3,17 +3,28 @@ use std::error::Error;
 use std::rc::Rc;
 use std::time::Duration;
 
+use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
 use smithay::backend::renderer::{ImportDma, ImportEgl, Renderer, TextureFilter};
 use smithay::backend::winit::{self, WinitGraphicsBackend};
+use smithay::delegate_dmabuf;
 use smithay::reexports::calloop::EventLoop;
-use smithay::utils::Transform;
-use smithay::wayland::dmabuf;
+use smithay::reexports::wayland_server::DisplayHandle;
+use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportError};
 use smithay::wayland::output::Mode;
 
 use crate::catacomb::{Backend, Catacomb, Render};
 
-struct Winit;
+struct Winit {
+    graphics: Rc<RefCell<WinitGraphicsBackend>>,
+    dmabuf_state: DmabufState,
+}
+
+impl Winit {
+    fn new(graphics: &Rc<RefCell<WinitGraphicsBackend>>) -> Self {
+        Self { dmabuf_state: DmabufState::new(), graphics: graphics.clone() }
+    }
+}
 
 impl Backend for Winit {
     fn seat_name(&self) -> String {
@@ -27,27 +38,25 @@ pub fn run() {
     graphics.borrow_mut().bind().expect("binding renderer");
     let _ = graphics.borrow_mut().renderer().downscale_filter(TextureFilter::Linear);
 
+    let winit = Winit::new(&graphics);
+
     let mut event_loop = EventLoop::try_new().expect("event loop");
-    let mut catacomb = Catacomb::new(event_loop.handle(), Winit);
+    let mut catacomb = Catacomb::new(event_loop.handle(), winit);
 
     // Set the output size.
     let mode = Mode { size: graphics.borrow().window_size().physical_size, refresh: 200_000 };
     catacomb.output.set_mode(mode);
 
     // Setup hardware acceleration.
-    let egl_display = catacomb.display.clone();
-    if graphics.borrow_mut().renderer().bind_wl_display(&egl_display.borrow()).is_ok() {
+    if graphics.borrow_mut().renderer().bind_wl_display(&catacomb.display_handle).is_ok() {
         let formats: Vec<_> = graphics.borrow_mut().renderer().dmabuf_formats().cloned().collect();
-        let graphics = graphics.clone();
-        dmabuf::init_dmabuf_global(
-            &mut egl_display.borrow_mut(),
+        catacomb.backend.dmabuf_state.create_global::<Catacomb<Winit>, _>(
+            &catacomb.display_handle,
             formats,
-            move |buffer, _| graphics.borrow_mut().renderer().import_dmabuf(buffer, None).is_ok(),
             None,
         );
     }
 
-    let display = catacomb.display.clone();
     loop {
         if input.dispatch_new_events(|event| catacomb.handle_winit_input(event)).is_err() {
             eprintln!("input error");
@@ -64,7 +73,7 @@ pub fn run() {
             break;
         }
 
-        display.borrow_mut().flush_clients(&mut catacomb);
+        catacomb.display.borrow_mut().flush_clients().expect("flushing clients");
     }
 }
 
@@ -77,15 +86,38 @@ impl Render for &mut WinitGraphicsBackend {
     where
         F: FnOnce(&mut Catacomb<B>, &mut Gles2Renderer, &mut Gles2Frame, u8),
     {
-        let logical_size = catacomb.output.resolution().to_f64();
-        let output_size = logical_size.to_physical(catacomb.output.scale()).to_i32_round();
+        let transform = catacomb.windows.orientation().transform();
+        let logical_size = catacomb.output.resolution();
+        let output_size = logical_size.to_physical(catacomb.output.scale());
         let buffer_age = self.buffer_age().unwrap_or(0) as u8;
         self.renderer()
-            .render(output_size, Transform::Flipped180, |renderer, frame| {
+            .render(output_size, transform, |renderer, frame| {
                 draw_fun(catacomb, renderer, frame, buffer_age);
             })
             .expect("render");
-        self.submit(None, 1.0).expect("submit");
+        self.submit(None).expect("submit");
         Ok(())
     }
 }
+
+impl DmabufHandler for Catacomb<Winit> {
+    fn dmabuf_state(&mut self) -> &mut DmabufState {
+        &mut self.backend.dmabuf_state
+    }
+
+    fn dmabuf_imported(
+        &mut self,
+        _display: &DisplayHandle,
+        _global: &DmabufGlobal,
+        buffer: Dmabuf,
+    ) -> Result<(), ImportError> {
+        self.backend
+            .graphics
+            .borrow_mut()
+            .renderer()
+            .import_dmabuf(&buffer, None)
+            .map_err(|_| ImportError::Failed)?;
+        Ok(())
+    }
+}
+delegate_dmabuf!(Catacomb<Winit>);

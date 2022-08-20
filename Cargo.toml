@@ -10,7 +10,7 @@ edition = "2021"
 
 [dependencies.smithay]
 git = "https://github.com/chrisduerr/smithay"
-rev = "5129920247146d4d626f675f31603752700ef8e7"
+rev = "71ced9062941bcef1c6867d0c749bc26f186cbe3"
 default-features = false
 features = [
     "use_system_lib",
@@ -26,9 +26,8 @@ features = [
 
 
 [dependencies]
-calloop = "0.9.3"
-dirs = "4.0.0"
 libc = "0.2.123"
+dirs = "4.0.0"
 udev = "0.6.2"
 
 [features]

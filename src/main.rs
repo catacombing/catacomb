@@ -10,7 +10,6 @@ mod layer;
 mod orientation;
 mod output;
 mod overview;
-mod shell;
 mod udev;
 mod window;
 #[cfg(feature = "winit")]

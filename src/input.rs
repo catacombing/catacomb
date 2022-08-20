@@ -1,16 +1,17 @@
 //! Input event handling.
 
+use std::fs;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use calloop::timer::{Timer, TimerHandle};
-use calloop::LoopHandle;
 use smithay::backend::input::{
-    ButtonState, Event, InputBackend, InputEvent, KeyState, KeyboardKeyEvent, MouseButton,
-    PointerButtonEvent, PositionEvent, TouchEvent as _, TouchSlot,
+    AbsolutePositionEvent, ButtonState, Event, InputBackend, InputEvent, KeyState,
+    KeyboardKeyEvent, MouseButton, PointerButtonEvent, TouchEvent as _, TouchSlot,
 };
 #[cfg(feature = "winit")]
 use smithay::backend::winit::WinitEvent;
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
 use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::seat::{keysyms, FilterResult, TouchHandle};
 use smithay::wayland::SERIAL_COUNTER;
@@ -53,28 +54,25 @@ const SUSPEND_TIMEOUT: Duration = Duration::from_secs(30);
 const POINTER_TOUCH_SLOT: Option<u32> = Some(0);
 
 /// Touch input state.
-pub struct TouchState {
+pub struct TouchState<B: 'static> {
     pub position: Point<f64, Logical>,
-    slot: Option<TouchSlot>,
+
+    event_loop: LoopHandle<'static, Catacomb<B>>,
+    velocity_timer: Option<RegistrationToken>,
     velocity: Point<f64, Logical>,
     events: Vec<TouchEvent>,
-    timer: TimerHandle<()>,
+    slot: Option<TouchSlot>,
     touch: TouchHandle,
     start: TouchStart,
     is_drag: bool,
 }
 
-impl TouchState {
-    pub fn new<B: Backend>(loop_handle: &LoopHandle<'_, Catacomb<B>>, touch: TouchHandle) -> Self {
-        let timer = Timer::new().expect("create input timer");
-        let timer_handle = timer.handle();
-        loop_handle
-            .insert_source(timer, |_, _, catacomb| catacomb.on_velocity_tick())
-            .expect("insert input timer");
-
+impl<B> TouchState<B> {
+    pub fn new(event_loop: LoopHandle<'static, Catacomb<B>>, touch: TouchHandle) -> Self {
         Self {
-            timer: timer_handle,
+            event_loop,
             touch,
+            velocity_timer: Default::default(),
             position: Default::default(),
             velocity: Default::default(),
             is_drag: Default::default(),
@@ -86,15 +84,17 @@ impl TouchState {
 
     /// Stop all touch velocity.
     pub fn cancel_velocity(&mut self) {
+        if let Some(velocity_timer) = self.velocity_timer.take() {
+            self.event_loop.remove(velocity_timer);
+        }
         self.velocity = Default::default();
-        self.timer.cancel_all_timeouts();
     }
 
     /// Start a new touch session.
     fn start(&mut self, output: &Output, position: Point<f64, Logical>) {
+        self.cancel_velocity();
+
         self.start = TouchStart::new(output, position);
-        self.velocity = Default::default();
-        self.timer.cancel_all_timeouts();
         self.position = position;
         self.is_drag = false;
     }
@@ -185,12 +185,12 @@ impl Gesture {
         let output_size = output.size().to_f64();
         match self {
             Gesture::Overview => {
-                let accuracy = OVERVIEW_GESTURE_ACCURACY / output.scale();
+                let accuracy = OVERVIEW_GESTURE_ACCURACY / output.scale() as f64;
                 let loc = (output_size.w - accuracy, output_size.h - accuracy);
                 Rectangle::from_loc_and_size(loc, output_size)
             },
             Gesture::Home => {
-                let accuracy = HOME_GESTURE_ACCURACY / output.scale();
+                let accuracy = HOME_GESTURE_ACCURACY / output.scale() as f64;
                 let loc = (output_size.w * HOME_WIDTH_PERCENTAGE, output_size.h - accuracy);
                 let size = (output_size.w - 2. * loc.0, output_size.h);
                 Rectangle::from_loc_and_size(loc, size)
@@ -430,41 +430,56 @@ impl<B: Backend> Catacomb<B> {
         }
 
         self.windows.on_gesture(&self.output, gesture);
-        self.touch_state.timer.cancel_all_timeouts();
+        self.touch_state.cancel_velocity();
 
         // Notify client.
         self.touch_state.touch.cancel();
     }
 
     /// Process a single velocity tick.
-    fn on_velocity_tick(&mut self) {
+    fn on_velocity_tick(&mut self) -> TimeoutAction {
         // Update velocity and new position.
         //
         // The animations are designed for 60FPS, but should still behave properly for
         // other refresh rates.
         let velocity = &mut self.touch_state.velocity;
         let position = &mut self.touch_state.position;
-        let animation_speed = self.output.frame_interval() as f64 / 16.;
+        let animation_speed = self.output.frame_interval().as_millis() as f64 / 16.;
         velocity.x -= velocity.x.signum()
             * (velocity.x.abs() * FRICTION * animation_speed + 1.).min(velocity.x.abs());
         velocity.y -= velocity.y.signum()
             * (velocity.y.abs() * FRICTION * animation_speed + 1.).min(velocity.y.abs());
         *position += *velocity * animation_speed;
 
-        // Request another callback.
-        self.add_velocity_timeout();
-
         // Generate motion events.
         self.update_position(self.touch_state.position);
+
+        // Schedule another velocity tick.
+        if self.touch_state.has_velocity() {
+            TimeoutAction::ToDuration(self.output.frame_interval())
+        } else {
+            TimeoutAction::Drop
+        }
     }
 
-    /// Request a new velocity timer callback.
-    fn add_velocity_timeout(&self) {
-        if self.touch_state.has_velocity() {
-            self.touch_state
-                .timer
-                .add_timeout(Duration::from_millis(self.output.frame_interval()), ());
+    /// Start the velocity timer.
+    fn add_velocity_timeout(&mut self) {
+        if !self.touch_state.has_velocity() {
+            return;
         }
+
+        // Remove old timers.
+        if let Some(velocity_timer) = self.touch_state.velocity_timer.take() {
+            self.event_loop.remove(velocity_timer);
+        }
+
+        // Stage new velocity timer.
+        let timer = Timer::from_duration(self.output.frame_interval());
+        let velocity_timer = self
+            .event_loop
+            .insert_source(timer, |_, _, catacomb| catacomb.on_velocity_tick())
+            .expect("insert velocity timer");
+        self.touch_state.velocity_timer = Some(velocity_timer);
     }
 
     /// Handle new keyboard input events.
@@ -474,7 +489,7 @@ impl<B: Backend> Catacomb<B> {
         let keycode = event.key_code();
         let state = event.state();
 
-        self.keyboard.input(keycode, state, serial, time, |_modifiers, keysym| {
+        self.keyboard.input(&self.display_handle, keycode, state, serial, time, |_mods, keysym| {
             match (keysym.modified_sym(), state) {
                 (keysym @ keysyms::KEY_XF86Switch_VT_1..=keysyms::KEY_XF86Switch_VT_12, _) => {
                     let vt = (keysym - keysyms::KEY_XF86Switch_VT_1 + 1) as i32;
@@ -484,16 +499,13 @@ impl<B: Backend> Catacomb<B> {
                     let id = self.button_state.next_id();
                     self.button_state.power = Some(id);
 
-                    // Stage timer until hold deadline.
-                    let timer = Timer::new().expect("create power button timer");
-                    timer.handle().add_timeout(BUTTON_HOLD_DURATION, id);
-
                     // Open drawer if button is still held after timeout.
-                    self.loop_handle
-                        .insert_source(timer, |id, _, catacomb| {
+                    let timer = Timer::from_duration(BUTTON_HOLD_DURATION);
+                    self.event_loop
+                        .insert_source(timer, move |_, _, catacomb| {
                             // Ignore timer if button was released.
                             if catacomb.button_state.power != Some(id) {
-                                return;
+                                return TimeoutAction::Drop;
                             }
 
                             // Reset button state.
@@ -505,6 +517,8 @@ impl<B: Backend> Catacomb<B> {
                                 .stdout(Stdio::null())
                                 .stderr(Stdio::null())
                                 .spawn();
+
+                            TimeoutAction::Drop
                         })
                         .expect("insert power button timer");
                 },
@@ -514,11 +528,22 @@ impl<B: Backend> Catacomb<B> {
                         self.sleeping = !self.sleeping;
                         self.backend.set_sleep(self.sleeping);
 
+                        // Remove timer on wakeup or if it was already staged.
+                        if let Some(suspend_timer) = self.suspend_timer.take() {
+                            self.event_loop.remove(suspend_timer);
+                        }
+
                         // Timeout after prolonged inactivity.
                         if self.sleeping {
-                            self.suspend_timer.add_timeout(SUSPEND_TIMEOUT, ());
-                        } else {
-                            self.suspend_timer.cancel_all_timeouts();
+                            let timer = Timer::from_duration(SUSPEND_TIMEOUT);
+                            self.suspend_timer = Some(
+                                self.event_loop
+                                    .insert_source(timer, |_, _, _| {
+                                        suspend();
+                                        TimeoutAction::Drop
+                                    })
+                                    .expect("insert suspend timer"),
+                            );
                         }
                     }
                 },
@@ -532,7 +557,7 @@ impl<B: Backend> Catacomb<B> {
     /// Apply an output transform to a point.
     fn transform_position<I, E>(&self, event: &E) -> Point<f64, Logical>
     where
-        E: PositionEvent<I>,
+        E: AbsolutePositionEvent<I>,
         I: InputBackend,
     {
         let screen_size = self.output.resolution();
@@ -548,5 +573,12 @@ impl<B: Backend> Catacomb<B> {
         };
 
         (x, y).into()
+    }
+}
+
+/// Suspend to RAM.
+fn suspend() {
+    if let Err(err) = fs::write("/sys/power/state", "mem") {
+        eprintln!("Failed suspending to RAM: {}", err);
     }
 }

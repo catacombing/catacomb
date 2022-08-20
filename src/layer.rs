@@ -49,7 +49,7 @@ impl Layers {
         renderer: &mut Gles2Renderer,
         frame: &mut Gles2Frame,
         output: &Output,
-        damage: &[Rectangle<f64, Physical>],
+        damage: &[Rectangle<i32, Physical>],
     ) {
         for window in &mut self.background {
             window.draw(renderer, frame, output, 1., None, damage);
@@ -66,7 +66,7 @@ impl Layers {
         renderer: &mut Gles2Renderer,
         frame: &mut Gles2Frame,
         output: &Output,
-        damage: &[Rectangle<f64, Physical>],
+        damage: &[Rectangle<i32, Physical>],
     ) {
         for window in &mut self.top {
             window.draw(renderer, frame, output, 1., None, damage);

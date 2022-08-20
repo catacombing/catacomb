@@ -7,10 +7,11 @@ use std::rc::{Rc, Weak};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
 use smithay::backend::renderer::{self, BufferType, ImportAll};
-use smithay::reexports::wayland_protocols::unstable::xdg_decoration;
-use smithay::reexports::wayland_protocols::xdg_shell::server::xdg_toplevel::State;
+use smithay::reexports::wayland_protocols::xdg::decoration as _decoration;
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Physical, Point, Rectangle, Size};
 use smithay::wayland::compositor::{
@@ -24,7 +25,6 @@ use smithay::wayland::shell::xdg::{
     PopupState, PopupSurface, SurfaceCachedState, ToplevelState, ToplevelSurface,
     XdgPopupSurfaceRoleAttributes, XdgToplevelSurfaceRoleAttributes,
 };
-use xdg_decoration::v1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 
 use crate::catacomb::Damage;
 use crate::drawing::{Graphics, SurfaceBuffer, Texture};
@@ -67,8 +67,8 @@ pub struct Windows {
     fully_damaged: bool,
 }
 
-impl Windows {
-    pub fn new() -> Self {
+impl Default for Windows {
+    fn default() -> Self {
         Self {
             start_time: Instant::now(),
             // By default everything is fully damaged.
@@ -84,7 +84,9 @@ impl Windows {
             view: Default::default(),
         }
     }
+}
 
+impl Windows {
     /// Add a new window.
     pub fn add(&mut self, surface: ToplevelSurface, output: &Output) {
         self.windows.push(Rc::new(RefCell::new(Window::new(surface))));
@@ -120,7 +122,7 @@ impl Windows {
         self.windows
             .iter_mut()
             .map(|window| window.borrow_mut())
-            .find(|window| window.surface().map_or(false, |surface| surface.eq(&wl_surface)))
+            .find(|window| window.surface().eq(&wl_surface))
     }
 
     /// Handle a surface commit for any window.
@@ -134,7 +136,7 @@ impl Windows {
         // Find a window matching the root surface.
         macro_rules! find_window {
             ($windows:expr) => {{
-                $windows.find(|window| window.surface() == Some(&root_surface))
+                $windows.find(|window| window.surface().eq(&root_surface))
             }};
         }
 
@@ -177,7 +179,7 @@ impl Windows {
     /// currently visible.
     pub fn orphan_surface_commit(&mut self, root_surface: &WlSurface) -> Option<()> {
         let mut orphans = self.orphan_popups.iter();
-        let index = orphans.position(|popup| popup.surface() == Some(root_surface))?;
+        let index = orphans.position(|popup| popup.surface() == root_surface)?;
         let mut popup = self.orphan_popups.swap_remove(index);
         let parent = popup.parent()?;
 
@@ -204,7 +206,7 @@ impl Windows {
         frame: &mut Gles2Frame,
         graphics: &mut Graphics,
         output: &Output,
-        damage: &[Rectangle<f64, Physical>],
+        damage: &[Rectangle<i32, Physical>],
     ) {
         // Reset damage.
         self.fully_damaged = false;
@@ -307,7 +309,7 @@ impl Windows {
             });
         }
 
-        surface.surface().cloned()
+        Some(surface.surface().clone())
     }
 
     /// Reap dead visible windows.
@@ -491,10 +493,10 @@ impl Windows {
     }
 
     /// Handle a touch drag.
-    pub fn on_drag(
+    pub fn on_drag<B>(
         &mut self,
         output: &Output,
-        touch_state: &mut TouchState,
+        touch_state: &mut TouchState<B>,
         mut point: Point<f64, Logical>,
     ) {
         let overview = match &mut self.view {
@@ -621,7 +623,7 @@ impl Windows {
 
         if let Some(window) = self.layers.foreground_window_at(position) {
             if !window.deny_focus {
-                self.focus.layer = window.surface.surface().cloned();
+                self.focus.layer = Some(window.surface.surface().clone());
             }
             return window.surface_at(position).map(|mut surface| {
                 surface.is_layer = true;
@@ -639,7 +641,7 @@ impl Windows {
 
         if let Some(window) = self.layers.background_window_at(position) {
             if !window.deny_focus {
-                self.focus.layer = window.surface.surface().cloned();
+                self.focus.layer = Some(window.surface.surface().clone());
             }
             return window.surface_at(position).map(|mut surface| {
                 surface.is_layer = true;
@@ -815,7 +817,7 @@ pub trait Surface {
     type State;
 
     /// Get underlying Wayland surface.
-    fn surface(&self) -> Option<&WlSurface>;
+    fn surface(&self) -> &WlSurface;
 
     /// Check if the window has been closed.
     fn alive(&self) -> bool;
@@ -834,23 +836,18 @@ pub trait Surface {
 
     /// Geometry of the window's visible bounds.
     fn geometry(&self) -> Rectangle<i32, Logical> {
-        self.surface()
-            .and_then(|surface| {
-                compositor::with_states(surface, |states| {
-                    states.cached_state.current::<SurfaceCachedState>().geometry
-                })
-                .ok()
-                .flatten()
-            })
-            .unwrap_or_else(|| Rectangle::from_loc_and_size((0, 0), self.acked_size()))
+        compositor::with_states(self.surface(), |states| {
+            states.cached_state.current::<SurfaceCachedState>().geometry
+        })
+        .unwrap_or_else(|| Rectangle::from_loc_and_size((0, 0), self.acked_size()))
     }
 }
 
 impl Surface for ToplevelSurface {
     type State = ToplevelState;
 
-    fn surface(&self) -> Option<&WlSurface> {
-        self.get_surface()
+    fn surface(&self) -> &WlSurface {
+        self.wl_surface()
     }
 
     fn alive(&self) -> bool {
@@ -862,11 +859,8 @@ impl Surface for ToplevelSurface {
     }
 
     fn set_state<F: FnMut(&mut Self::State)>(&self, f: F) {
-        let result = self.with_pending_state(f);
-
-        if result.is_ok() {
-            self.send_configure();
-        }
+        self.with_pending_state(f);
+        self.send_configure();
     }
 
     fn reconfigure(&self, size: Size<i32, Logical>) {
@@ -889,12 +883,7 @@ impl Surface for ToplevelSurface {
     }
 
     fn acked_size(&self) -> Size<i32, Logical> {
-        let surface = match self.get_surface() {
-            Some(surface) => surface,
-            None => return Size::default(),
-        };
-
-        compositor::with_states(surface, |states| {
+        compositor::with_states(self.surface(), |states| {
             let attributes = states
                 .data_map
                 .get::<Mutex<XdgToplevelSurfaceRoleAttributes>>()
@@ -902,8 +891,6 @@ impl Surface for ToplevelSurface {
 
             attributes.and_then(|attributes| attributes.current.size)
         })
-        .ok()
-        .flatten()
         .unwrap_or_default()
     }
 }
@@ -911,8 +898,8 @@ impl Surface for ToplevelSurface {
 impl Surface for PopupSurface {
     type State = PopupState;
 
-    fn surface(&self) -> Option<&WlSurface> {
-        self.get_surface()
+    fn surface(&self) -> &WlSurface {
+        self.wl_surface()
     }
 
     fn alive(&self) -> bool {
@@ -922,11 +909,8 @@ impl Surface for PopupSurface {
     fn send_close(&self) {}
 
     fn set_state<F: FnMut(&mut Self::State)>(&self, f: F) {
-        let result = self.with_pending_state(f);
-
-        if result.is_ok() {
-            let _ = self.send_configure();
-        }
+        self.with_pending_state(f);
+        let _ = self.send_configure();
     }
 
     fn reconfigure(&self, _size: Size<i32, Logical>) {
@@ -934,7 +918,7 @@ impl Surface for PopupSurface {
     }
 
     fn acked_size(&self) -> Size<i32, Logical> {
-        self.with_pending_state(|state| state.positioner.rect_size).unwrap_or_default()
+        self.with_pending_state(|state| state.positioner.rect_size)
     }
 }
 
@@ -954,8 +938,8 @@ impl From<LayerSurface> for CatacombLayerSurface {
 impl Surface for CatacombLayerSurface {
     type State = LayerSurfaceState;
 
-    fn surface(&self) -> Option<&WlSurface> {
-        self.surface.get_surface()
+    fn surface(&self) -> &WlSurface {
+        self.surface.wl_surface()
     }
 
     fn alive(&self) -> bool {
@@ -967,11 +951,8 @@ impl Surface for CatacombLayerSurface {
     }
 
     fn set_state<F: FnMut(&mut Self::State)>(&self, f: F) {
-        let result = self.surface.with_pending_state(f);
-
-        if result.is_ok() {
-            self.surface.send_configure();
-        }
+        self.surface.with_pending_state(f);
+        self.surface.send_configure();
     }
 
     fn reconfigure(&self, size: Size<i32, Logical>) {
@@ -981,12 +962,7 @@ impl Surface for CatacombLayerSurface {
     }
 
     fn acked_size(&self) -> Size<i32, Logical> {
-        let surface = match self.surface.get_surface() {
-            Some(surface) => surface,
-            None => return Size::default(),
-        };
-
-        compositor::with_states(surface, |states| {
+        compositor::with_states(self.surface(), |states| {
             let attributes = states
                 .data_map
                 .get::<Mutex<LayerSurfaceAttributes>>()
@@ -994,8 +970,6 @@ impl Surface for CatacombLayerSurface {
 
             attributes.and_then(|attributes| attributes.current.size)
         })
-        .ok()
-        .flatten()
         .unwrap_or_default()
     }
 
@@ -1038,7 +1012,7 @@ pub struct Window<S = ToplevelSurface> {
     popups: Vec<Window<PopupSurface>>,
 
     /// Pending window damage.
-    damage: Option<Rectangle<f64, Physical>>,
+    damage: Option<Rectangle<i32, Physical>>,
 }
 
 impl<S: Surface> Window<S> {
@@ -1099,7 +1073,7 @@ impl<S: Surface> Window<S> {
         output: &Output,
         scale: f64,
         bounds: impl Into<Option<Rectangle<i32, Logical>>>,
-        damage: impl Into<Option<&'a [Rectangle<f64, Physical>]>>,
+        damage: impl Into<Option<&'a [Rectangle<i32, Physical>]>>,
     ) {
         // Skip updating windows during transactions.
         if self.transaction.is_none() && self.buffers_pending {
@@ -1107,7 +1081,7 @@ impl<S: Surface> Window<S> {
         }
 
         let bounds = bounds.into().unwrap_or_else(|| self.bounds());
-        let physical_bounds = bounds.to_f64().to_physical(output.scale());
+        let physical_bounds = bounds.to_physical(output.scale());
 
         // Treat no damage information as full damage.
         let full_damage = [physical_bounds];
@@ -1154,18 +1128,12 @@ impl<S: Surface> Window<S> {
 
     /// Import the buffers of all surfaces into the renderer.
     fn import_buffers(&mut self, renderer: &mut Gles2Renderer) {
-        // Ensure there is a drawable surface present.
-        let wl_surface = match self.surface.surface() {
-            Some(surface) => surface,
-            None => return,
-        };
-
         let geometry = self.geometry();
         self.texture_cache.reset(geometry.size);
         self.buffers_pending = false;
 
         compositor::with_surface_tree_upward(
-            wl_surface,
+            self.surface.surface(),
             Point::from((0, 0)) - geometry.loc,
             |_, surface_data, location| {
                 let data = match surface_data.data_map.get::<RefCell<SurfaceBuffer>>() {
@@ -1266,13 +1234,8 @@ impl<S: Surface> Window<S> {
 
     /// Execute a function for all surfaces of this window.
     fn with_surfaces<F: FnMut(&WlSurface, &SurfaceData)>(&self, mut fun: F) {
-        let wl_surface = match self.surface.surface() {
-            Some(surface) => surface,
-            None => return,
-        };
-
         compositor::with_surface_tree_upward(
-            wl_surface,
+            self.surface.surface(),
             (),
             |_, _, _| TraversalAction::DoChildren(()),
             |surface, surface_data, _| fun(surface, surface_data),
@@ -1336,7 +1299,7 @@ impl<S: Surface> Window<S> {
 
                 // Update window damage.
                 for mut damage in buffer.damage.drain_physical() {
-                    damage.loc += location.to_f64().to_physical(output.scale());
+                    damage.loc += location.to_physical(output.scale());
                     self.damage = Some(match self.damage {
                         Some(window_damage) => window_damage.merge(damage),
                         None => damage,
@@ -1372,7 +1335,7 @@ impl<S: Surface> Window<S> {
 
         let result = RefCell::new(None);
         compositor::with_surface_tree_upward(
-            self.surface.surface()?,
+            self.surface.surface(),
             self.bounds().loc,
             |wl_surface, surface_data, location| {
                 let mut location = *location;
@@ -1412,7 +1375,7 @@ impl<S: Surface> Window<S> {
         mut popup: Window<PopupSurface>,
         parent: &WlSurface,
     ) -> Option<Window<PopupSurface>> {
-        if self.surface.surface() == Some(parent) {
+        if self.surface.surface() == parent {
             self.popups.push(popup);
             return None;
         }
@@ -1435,7 +1398,7 @@ impl<S: Surface> Window<S> {
         output: &Output,
     ) {
         for window in &mut self.popups {
-            if window.surface.get_surface() == Some(root_surface) {
+            if window.surface.surface() == root_surface {
                 window.surface_commit_common(surface, output);
                 window.rectangle.loc = window.position();
                 return;
@@ -1457,7 +1420,7 @@ impl<S: Surface> Window<S> {
     }
 
     /// Get primary window surface.
-    fn surface(&self) -> Option<&WlSurface> {
+    fn surface(&self) -> &WlSurface {
         self.surface.surface()
     }
 
@@ -1467,7 +1430,7 @@ impl<S: Surface> Window<S> {
     }
 
     /// Get pending window damage.
-    fn damage(&self) -> Option<Rectangle<f64, Physical>> {
+    fn damage(&self) -> Option<Rectangle<i32, Physical>> {
         self.damage.filter(|_| self.transaction.is_none())
     }
 }
@@ -1475,24 +1438,15 @@ impl<S: Surface> Window<S> {
 impl Window<PopupSurface> {
     /// Get the parent of this popup.
     fn parent(&self) -> Option<WlSurface> {
-        let surface = match self.surface.get_surface() {
-            Some(surface) => surface,
-            None => return None,
-        };
-
-        compositor::with_states(surface, |states| {
+        compositor::with_states(self.surface.surface(), |states| {
             let attributes = states.data_map.get::<Mutex<XdgPopupSurfaceRoleAttributes>>()?;
             attributes.lock().ok()?.parent.clone()
         })
-        .ok()
-        .flatten()
     }
 
     /// Get popup window offset from parent.
     fn position(&self) -> Point<i32, Logical> {
-        self.surface
-            .with_pending_state(|state| state.positioner.get_geometry().loc)
-            .unwrap_or_default()
+        self.surface.with_pending_state(|state| state.positioner.get_geometry().loc)
     }
 }
 
@@ -1504,32 +1458,34 @@ impl Window<CatacombLayerSurface> {
         output: &mut Output,
         transaction: &Transaction,
     ) {
+        self.update_layer_state(output);
         self.update_dimensions(output, transaction);
         self.surface_commit_common(surface, output);
     }
 
-    /// Recompute the window's size and location.
-    fn update_dimensions(&mut self, output: &mut Output, transaction: &Transaction) {
-        let surface = match self.surface.surface() {
-            Some(surface) => surface,
-            None => return,
-        };
-
-        let state = compositor::with_states(surface, |states| {
+    /// Update layer-specific shell properties.
+    fn update_layer_state(&mut self, output: &mut Output) {
+        let state = compositor::with_states(self.surface.surface(), |states| {
             *states.cached_state.current::<LayerSurfaceCachedState>()
-        })
-        .unwrap_or_default();
-        let output_size = output.size();
+        });
 
         // Update keyboard interactivity.
         self.deny_focus = state.keyboard_interactivity == KeyboardInteractivity::None;
 
         // Update exclusive zones.
-        let mut size = state.size;
         let old_exclusive = mem::replace(&mut self.surface.exclusive_zone, state.exclusive_zone);
         let old_anchor = mem::replace(&mut self.surface.anchor, state.anchor);
         output.exclusive.reset(old_anchor, old_exclusive);
         output.exclusive.update(state.anchor, state.exclusive_zone);
+    }
+
+    /// Recompute the window's size and location.
+    fn update_dimensions(&mut self, output: &mut Output, transaction: &Transaction) {
+        let state = compositor::with_states(self.surface.surface(), |states| {
+            *states.cached_state.current::<LayerSurfaceCachedState>()
+        });
+        let output_size = output.size();
+        let mut size = state.size;
 
         let exclusive = match state.exclusive_zone {
             ExclusiveZone::Neutral => output.exclusive,

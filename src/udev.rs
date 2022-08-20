@@ -1,4 +1,5 @@
 use std::error::Error as StdError;
+use std::mem;
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -15,7 +16,8 @@ use smithay::backend::session::auto::AutoSession;
 use smithay::backend::session::{Session, Signal};
 use smithay::backend::udev;
 use smithay::backend::udev::{UdevBackend, UdevEvent};
-use smithay::reexports::calloop::timer::{Timer, TimerHandle};
+use smithay::delegate_dmabuf;
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{Dispatcher, EventLoop, LoopHandle, RegistrationToken};
 use smithay::reexports::drm::control::connector::State as ConnectorState;
 use smithay::reexports::drm::control::property::{
@@ -26,8 +28,9 @@ use smithay::reexports::input::Libinput;
 use smithay::reexports::nix::fcntl::OFlag;
 use smithay::reexports::nix::sys::stat::dev_t as DeviceId;
 use smithay::reexports::wayland_server::protocol::wl_output::Subpixel;
+use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::utils::signaling::{Linkable, SignalToken, Signaler};
-use smithay::wayland::dmabuf;
+use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportError};
 use smithay::wayland::output::{Mode, PhysicalProperties};
 
 use crate::catacomb::{Backend, Catacomb, Render};
@@ -47,16 +50,9 @@ pub fn run() {
     // Setup hardware acceleration.
     let output_device = catacomb.backend.output_device.as_ref();
     let formats = output_device.map(|device| device.renderer.dmabuf_formats().cloned().collect());
-    dmabuf::init_dmabuf_global(
-        &mut catacomb.display.borrow_mut(),
+    catacomb.backend.dmabuf_state.create_global::<Catacomb<Udev>, _>(
+        &catacomb.display_handle,
         formats.unwrap_or_default(),
-        |buffer, mut data| {
-            let catacomb = data.get::<Catacomb<Udev>>().unwrap();
-            let output_device = catacomb.backend.output_device.as_mut();
-            output_device
-                .and_then(|device| device.renderer.import_dmabuf(buffer, None).ok())
-                .is_some()
-        },
         None,
     );
 
@@ -86,46 +82,40 @@ pub fn run() {
         .expect("insert udev source");
 
     // Continously dispatch event loop.
-    let display = catacomb.display.clone();
     loop {
         if let Err(error) = event_loop.dispatch(None, &mut catacomb) {
             eprintln!("Event loop error: {}", error);
             break;
         }
-        display.borrow_mut().flush_clients(&mut catacomb);
+        catacomb.display.borrow_mut().flush_clients().expect("flushing clients");
     }
 }
 
 /// Udev backend shared state.
 pub struct Udev {
-    handle: LoopHandle<'static, Catacomb<Udev>>,
+    event_loop: LoopHandle<'static, Catacomb<Udev>>,
     output_device: Option<OutputDevice>,
-    render_timer: TimerHandle<DeviceId>,
     signaler: Signaler<Signal>,
+    dmabuf_state: DmabufState,
     session: AutoSession,
     gpu: Option<PathBuf>,
 }
 
 impl Udev {
-    fn new(handle: LoopHandle<'static, Catacomb<Udev>>) -> Self {
+    fn new(event_loop: LoopHandle<'static, Catacomb<Udev>>) -> Self {
         // Initialize the VT session.
         let (session, notifier) = AutoSession::new(None).expect("init session");
         let signaler = notifier.signaler();
 
         // Register session with the event loop so objects can link to the signaler.
-        handle.insert_source(notifier, |_, _, _| {}).expect("insert notifier source");
+        event_loop.insert_source(notifier, |_, _, _| {}).expect("insert notifier source");
 
         // Find active GPUs for hardware acceleration.
         let gpu = udev::primary_gpu(session.seat()).ok().flatten();
 
-        // Create timer for internally-triggered redraws.
-        let render_timer = Timer::new().expect("setup render timer");
-        let timer_handle = render_timer.handle();
-        handle
-            .insert_source(render_timer, |device_id, _, catacomb| catacomb.render(device_id))
-            .expect("setting up render timer callback");
+        let dmabuf_state = DmabufState::new();
 
-        Self { handle, signaler, session, gpu, render_timer: timer_handle, output_device: None }
+        Self { dmabuf_state, signaler, session, event_loop, gpu, output_device: None }
     }
 }
 
@@ -143,8 +133,101 @@ impl Backend for Udev {
             output_device.set_enabled(!sleep);
 
             // Request immediate redraw, so vblanks start coming in again.
-            output_device.timer.add_timeout(Duration::ZERO, output_device.id);
+            output_device.schedule_redraw(Duration::ZERO);
         }
+    }
+}
+
+/// Target device for rendering.
+struct OutputDevice {
+    gbm_surface: GbmBufferedSurface<GbmDevice<RawFd>, RawFd>,
+    drm: Dispatcher<'static, DrmDevice<i32>, Catacomb<Udev>>,
+    event_loop: LoopHandle<'static, Catacomb<Udev>>,
+    renderer: Gles2Renderer,
+    gbm: GbmDevice<RawFd>,
+    id: DeviceId,
+
+    _restart_token: SignalToken,
+    frame_interval: Duration,
+    token: RegistrationToken,
+}
+
+impl OutputDevice {
+    /// Get DRM property handle.
+    pub fn get_drm_property(&self, name: &str) -> Option<PropertyHandle> {
+        let crtc = self.gbm_surface.crtc();
+        let drm = self.drm.as_source_ref();
+
+        // Get all available properties.
+        let properties = drm.get_properties(crtc).ok()?;
+        let (property_handles, _) = properties.as_props_and_values();
+
+        // Find property matching the requested name.
+        property_handles.iter().find_map(|handle| {
+            let property_info = drm.get_property(*handle).ok()?;
+            let property_name = property_info.name().to_str().ok()?;
+
+            (property_name == name).then(|| *handle)
+        })
+    }
+
+    /// Set output DPMS state.
+    fn set_enabled(&mut self, enabled: bool) {
+        let property = match self.get_drm_property("ACTIVE") {
+            Some(property) => property,
+            None => return,
+        };
+
+        let crtc = self.gbm_surface.crtc();
+        let drm = self.drm.as_source_ref();
+
+        let value = PropertyValue::Boolean(enabled);
+        let _ = drm.set_property(crtc, property, value.into());
+    }
+
+    /// Request a redraw once `duration` has passed.
+    fn schedule_redraw(&self, duration: Duration) {
+        let device_id = self.id;
+        self.event_loop
+            .insert_source(Timer::from_duration(duration), move |_, _, catacomb| {
+                catacomb.render(device_id);
+                TimeoutAction::Drop
+            })
+            .expect("insert render timer");
+    }
+}
+
+impl Render for &mut OutputDevice {
+    fn render<B, F>(
+        &mut self,
+        catacomb: &mut Catacomb<B>,
+        draw_fun: F,
+    ) -> Result<(), Box<dyn StdError>>
+    where
+        F: FnOnce(&mut Catacomb<B>, &mut Gles2Renderer, &mut Gles2Frame, u8),
+    {
+        // Mark the current frame as submitted.
+        self.gbm_surface.frame_submitted()?;
+
+        // Bind the next buffer to render into.
+        let (dmabuf, age) = self.gbm_surface.next_buffer()?;
+        self.renderer.bind(dmabuf)?;
+
+        // Draw the current frame into the buffer.
+        let transform = catacomb.windows.orientation().transform();
+        let output_size = catacomb.output.physical_resolution();
+        self.renderer.render(output_size, transform, |renderer, frame| {
+            draw_fun(catacomb, renderer, frame, age)
+        })?;
+
+        // Queue buffer for rendering.
+        self.gbm_surface.queue_buffer()?;
+
+        Ok(())
+    }
+
+    fn reschedule(&mut self) {
+        self.schedule_redraw(self.frame_interval);
     }
 }
 
@@ -163,7 +246,7 @@ impl Catacomb<Udev> {
 
         // Initialize GPU for EGL rendering.
         if Some(path) == self.backend.gpu {
-            let _ = renderer.bind_wl_display(&self.display.borrow());
+            let _ = renderer.bind_wl_display(&self.display_handle);
         }
 
         // Create the surface we will render to.
@@ -171,7 +254,7 @@ impl Catacomb<Udev> {
 
         // Redraw when VT is focused.
         let device_id = drm.device_id();
-        let handle = self.backend.handle.clone();
+        let handle = self.backend.event_loop.clone();
         let restart_token = self.backend.signaler.register(move |signal| match signal {
             Signal::ActivateSession | Signal::ActivateDevice { .. } => {
                 handle.insert_idle(move |catacomb| catacomb.render(device_id));
@@ -187,18 +270,18 @@ impl Catacomb<Udev> {
                 DrmEvent::Error(error) => eprintln!("DRM error: {}", error),
             };
         });
-        let token = self.backend.handle.register_dispatcher(dispatcher.clone())?;
+        let token = self.backend.event_loop.register_dispatcher(dispatcher.clone())?;
 
         self.backend.output_device = Some(OutputDevice {
-            frame_interval: Duration::from_millis(self.output.frame_interval()),
-            timer: self.backend.render_timer.clone(),
-            _restart_token: restart_token,
-            drm: dispatcher,
-            id: device_id,
             gbm_surface,
             renderer,
             token,
             gbm,
+            frame_interval: self.output.frame_interval(),
+            event_loop: self.backend.event_loop.clone(),
+            _restart_token: restart_token,
+            drm: dispatcher,
+            id: device_id,
         });
 
         // Kick-off rendering.
@@ -210,7 +293,7 @@ impl Catacomb<Udev> {
     fn remove_device(&mut self, device_id: DeviceId) {
         let output_device = self.backend.output_device.take();
         if let Some(mut output_device) = output_device.filter(|device| device.id == device_id) {
-            self.backend.handle.remove(output_device.token);
+            self.backend.event_loop.remove(output_device.token);
 
             // Disable hardware acceleration when the GPU is removed.
             if output_device.gbm.dev_path() == self.backend.gpu {
@@ -269,19 +352,21 @@ impl Catacomb<Udev> {
         let (physical_width, physical_height) = connector.size().unwrap_or((0, 0));
         let output_name = format!("{:?}", connector.interface());
 
-        let mut display = self.display.borrow_mut();
-        self.output = Output::new(&mut display, output_name, mode, PhysicalProperties {
-            size: (physical_width as i32, physical_height as i32).into(),
-            subpixel: Subpixel::Unknown,
-            model: "Generic DRM".into(),
-            make: "Catacomb".into(),
-        });
+        let output =
+            Output::new::<Udev>(&self.display_handle, output_name, mode, PhysicalProperties {
+                size: (physical_width as i32, physical_height as i32).into(),
+                subpixel: Subpixel::Unknown,
+                model: "Generic DRM".into(),
+                make: "Catacomb".into(),
+            });
+        mem::replace(&mut self.output, output).destroy::<Udev>();
 
         Some(surface)
     }
 
     /// Render a specific device.
     fn render(&mut self, device_id: DeviceId) {
+        // TODO: Remove winit backend to clean up this garbage.
         let mut device = self.backend.output_device.take();
         if let Some(device) = device.as_mut().filter(|device| device.id == device_id) {
             self.create_frame(device);
@@ -290,83 +375,24 @@ impl Catacomb<Udev> {
     }
 }
 
-/// Target device for rendering.
-struct OutputDevice {
-    gbm_surface: GbmBufferedSurface<GbmDevice<RawFd>, RawFd>,
-    drm: Dispatcher<'static, DrmDevice<i32>, Catacomb<Udev>>,
-    timer: TimerHandle<DeviceId>,
-    gbm: GbmDevice<RawFd>,
-    renderer: Gles2Renderer,
-    id: DeviceId,
-
-    _restart_token: SignalToken,
-    frame_interval: Duration,
-    token: RegistrationToken,
-}
-
-impl OutputDevice {
-    /// Get DRM property handle.
-    pub fn get_drm_property(&self, name: &str) -> Option<PropertyHandle> {
-        let crtc = self.gbm_surface.crtc();
-        let drm = self.drm.as_source_ref();
-
-        // Get all available properties.
-        let properties = drm.get_properties(crtc).ok()?;
-        let (property_handles, _) = properties.as_props_and_values();
-
-        // Find property matching the requested name.
-        property_handles.iter().find_map(|handle| {
-            let property_info = drm.get_property(*handle).ok()?;
-            let property_name = property_info.name().to_str().ok()?;
-
-            (property_name == name).then(|| *handle)
-        })
+impl DmabufHandler for Catacomb<Udev> {
+    fn dmabuf_state(&mut self) -> &mut DmabufState {
+        &mut self.backend.dmabuf_state
     }
 
-    fn set_enabled(&mut self, enabled: bool) {
-        let property = match self.get_drm_property("ACTIVE") {
-            Some(property) => property,
-            None => return,
+    fn dmabuf_imported(
+        &mut self,
+        _display: &DisplayHandle,
+        _global: &DmabufGlobal,
+        buffer: Dmabuf,
+    ) -> Result<(), ImportError> {
+        let output_device = match &mut self.backend.output_device {
+            Some(output_device) => output_device,
+            None => return Err(ImportError::Failed),
         };
 
-        let crtc = self.gbm_surface.crtc();
-        let drm = self.drm.as_source_ref();
-
-        let value = PropertyValue::Boolean(enabled);
-        let _ = drm.set_property(crtc, property, value.into());
-    }
-}
-
-impl Render for &mut OutputDevice {
-    fn render<B, F>(
-        &mut self,
-        catacomb: &mut Catacomb<B>,
-        draw_fun: F,
-    ) -> Result<(), Box<dyn StdError>>
-    where
-        F: FnOnce(&mut Catacomb<B>, &mut Gles2Renderer, &mut Gles2Frame, u8),
-    {
-        // Mark the current frame as submitted.
-        self.gbm_surface.frame_submitted()?;
-
-        // Bind the next buffer to render into.
-        let (dmabuf, age) = self.gbm_surface.next_buffer()?;
-        self.renderer.bind(dmabuf)?;
-
-        // Draw the current frame into the buffer.
-        let transform = catacomb.windows.orientation().transform();
-        let output_size = catacomb.output.physical_resolution();
-        self.renderer.render(output_size, transform, |renderer, frame| {
-            draw_fun(catacomb, renderer, frame, age)
-        })?;
-
-        // Queue buffer for rendering.
-        self.gbm_surface.queue_buffer()?;
-
+        output_device.renderer.import_dmabuf(&buffer, None).map_err(|_| ImportError::Failed)?;
         Ok(())
     }
-
-    fn reschedule(&mut self) {
-        self.timer.add_timeout(self.frame_interval, self.id);
-    }
 }
+delegate_dmabuf!(Catacomb<Udev>);
