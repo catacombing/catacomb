@@ -1,15 +1,14 @@
 //! Catacomb compositor state.
 
 use std::cell::RefCell;
-use std::error::Error;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::{env, io, mem};
 
 use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use _server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as ManagerMode;
-use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
-use smithay::backend::renderer::Frame;
+use smithay::backend::allocator::dmabuf::Dmabuf;
+use smithay::backend::renderer::ImportDma;
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{
     Interest, LoopHandle, Mode as TriggerMode, PostAction, RegistrationToken,
@@ -27,6 +26,7 @@ use smithay::wayland::compositor::{CompositorHandler, CompositorState};
 use smithay::wayland::data_device::{
     ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
 };
+use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportError};
 use smithay::wayland::input_method::{InputMethodManagerState, InputMethodSeat};
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::seat::{KeyboardHandle, Seat, SeatHandler, SeatState, XkbConfig};
@@ -44,50 +44,45 @@ use smithay::wayland::text_input::{TextInputHandle, TextInputManagerState};
 use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 use smithay::wayland::{compositor, data_device, Serial, SERIAL_COUNTER};
 use smithay::{
-    delegate_compositor, delegate_data_device, delegate_input_method_manager,
+    delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_input_method_manager,
     delegate_kde_decoration, delegate_layer_shell, delegate_output, delegate_seat, delegate_shm,
     delegate_text_input_manager, delegate_virtual_keyboard_manager, delegate_xdg_decoration,
     delegate_xdg_shell,
 };
 
-use crate::daemon;
-use crate::drawing::{Graphics, MAX_DAMAGE_AGE};
+use crate::drawing::MAX_DAMAGE_AGE;
 use crate::input::{PhysicalButtonState, TouchState};
 use crate::orientation::{Accelerometer, AccelerometerSource};
-use crate::output::Output;
-use crate::window::Windows;
+use crate::windows::Windows;
+use crate::{daemon, Udev};
 
 /// The script to run after compositor start.
 const POST_START_SCRIPT: &str = "post_start.sh";
 
 /// Shared compositor state.
-pub struct Catacomb<B: 'static> {
+pub struct Catacomb {
     pub suspend_timer: Option<RegistrationToken>,
     pub event_loop: LoopHandle<'static, Self>,
     pub button_state: PhysicalButtonState,
     pub display_handle: DisplayHandle,
-    pub touch_state: TouchState<B>,
     pub keyboard: KeyboardHandle,
+    pub touch_state: TouchState,
     pub seat_name: String,
     pub windows: Windows,
     pub sleeping: bool,
-    pub output: Output,
-    pub backend: B,
-
-    // pub virtual_keyboard: VirtualKeyboarHandle,
+    pub backend: Udev,
 
     // Smithay state.
-    pub kde_decoration_state: KdeDecorationState,
-    pub layer_shell_state: WlrLayerShellState,
-    pub data_device_state: DataDeviceState,
-    pub compositor_state: CompositorState,
-    pub xdg_shell_state: XdgShellState,
-    pub seat_state: SeatState<Self>,
-    pub shm_state: ShmState,
+    pub dmabuf_state: DmabufState,
+    kde_decoration_state: KdeDecorationState,
+    layer_shell_state: WlrLayerShellState,
+    data_device_state: DataDeviceState,
+    compositor_state: CompositorState,
+    xdg_shell_state: XdgShellState,
+    seat_state: SeatState<Self>,
+    shm_state: ShmState,
 
     last_focus: Option<WlSurface>,
-    graphics: Graphics,
-    touch_debug: bool,
     seat: Seat<Self>,
     damage: Damage,
 
@@ -95,9 +90,9 @@ pub struct Catacomb<B: 'static> {
     pub display: Rc<RefCell<Display<Self>>>,
 }
 
-impl<B: Backend + 'static> Catacomb<B> {
+impl Catacomb {
     /// Initialize the compositor.
-    pub fn new(event_loop: LoopHandle<'static, Self>, backend: B) -> Self {
+    pub fn new(event_loop: LoopHandle<'static, Self>, backend: Udev) -> Self {
         let mut display = Display::new().expect("Wayland display creation");
         let display_handle = display.handle();
 
@@ -133,6 +128,9 @@ impl<B: Backend + 'static> Catacomb<B> {
 
         // Advertise support for rendering from CPU-based shared memory buffers.
         let shm_state = ShmState::new::<Self, _>(&display_handle, Vec::new(), None);
+
+        // Advertise support for rendering GPU-based buffers.
+        let dmabuf_state = DmabufState::new();
 
         // XDG output protocol.
         OutputManagerState::new_with_xdg_output::<Self>(&display_handle);
@@ -180,8 +178,8 @@ impl<B: Backend + 'static> Catacomb<B> {
             let _ = daemon::spawn(script_path.as_os_str(), []);
         }
 
-        // Create dummy default output.
-        let output = Output::new_dummy::<B>(&display_handle);
+        // Create window manager.
+        let windows = Windows::new(&display_handle);
 
         Self {
             kde_decoration_state,
@@ -190,23 +188,21 @@ impl<B: Backend + 'static> Catacomb<B> {
             compositor_state,
             xdg_shell_state,
             display_handle,
+            dmabuf_state,
             touch_state,
             event_loop,
             seat_state,
             shm_state,
             seat_name,
             keyboard,
+            windows,
             backend,
-            output,
             seat,
             display: Rc::new(RefCell::new(display)),
             suspend_timer: Default::default(),
             button_state: Default::default(),
-            touch_debug: Default::default(),
             last_focus: Default::default(),
-            graphics: Default::default(),
             sleeping: Default::default(),
-            windows: Default::default(),
             damage: Default::default(),
         }
     }
@@ -220,9 +216,9 @@ impl<B: Backend + 'static> Catacomb<B> {
     }
 }
 
-impl<B> Catacomb<B> {
+impl Catacomb {
     /// Handle everything necessary to draw a single frame.
-    pub fn create_frame<R: Render>(&mut self, mut renderer: R) {
+    pub fn create_frame(&mut self) {
         // Update transaction before rendering to update device orientation.
         self.windows.update_transaction();
 
@@ -234,48 +230,17 @@ impl<B> Catacomb<B> {
         }
 
         // Redraw only when there is damage present.
-        if self.windows.damaged() || self.touch_debug {
-            let _ = renderer.render(self, Catacomb::draw);
+        if self.windows.damaged() {
+            self.backend.render(&mut self.windows, &mut self.damage);
         } else {
-            renderer.reschedule();
+            self.backend.schedule_redraw(self.windows.output.frame_interval());
         }
 
         // Handle window liveliness changes.
-        self.windows.refresh(&mut self.output);
+        self.windows.refresh();
 
         // Request new frames for visible windows.
         self.windows.request_frames();
-    }
-
-    /// Draw the current compositor state.
-    pub fn draw(&mut self, renderer: &mut Gles2Renderer, frame: &mut Gles2Frame, buffer_age: u8) {
-        // Collect pending damage.
-        let max_age = MAX_DAMAGE_AGE as u8;
-        let damage = if buffer_age == 0
-            || buffer_age > max_age
-            || self.windows.fully_damaged()
-            || self.touch_debug
-        {
-            let output_size = self.output.size().to_physical(self.output.scale());
-            self.damage.push(Rectangle::from_loc_and_size((0, 0), output_size));
-            self.damage.take_since(1)
-        } else {
-            self.windows.window_damage(&mut self.damage);
-            self.damage.take_since(buffer_age)
-        };
-
-        // Clear the screen.
-        let _ = frame.clear([1., 0., 1., 1.], damage);
-
-        // Render debug indicator showing current touch location.
-        if self.touch_debug {
-            let loc = self.touch_state.position.to_i32_round();
-            let touch_debug = self.graphics.touch_debug(renderer);
-            let rect = Rectangle::from_loc_and_size(loc, (i32::MAX, i32::MAX));
-            touch_debug.draw_at(frame, &self.output, rect, 1., None);
-        }
-
-        self.windows.draw(renderer, frame, &mut self.graphics, &self.output, damage);
     }
 
     /// Focus a new surface.
@@ -287,7 +252,7 @@ impl<B> Catacomb<B> {
     }
 }
 
-impl<B> CompositorHandler for Catacomb<B> {
+impl CompositorHandler for Catacomb {
     fn compositor_state(&mut self) -> &mut CompositorState {
         &mut self.compositor_state
     }
@@ -297,18 +262,47 @@ impl<B> CompositorHandler for Catacomb<B> {
             return;
         }
 
-        self.windows.surface_commit(surface, &mut self.output);
+        self.windows.surface_commit(surface);
     }
 }
-delegate_compositor!(@<B: 'static> Catacomb<B>);
+delegate_compositor!(Catacomb);
 
-impl<B> XdgShellHandler for Catacomb<B> {
+impl ShmHandler for Catacomb {
+    fn shm_state(&self) -> &ShmState {
+        &self.shm_state
+    }
+}
+delegate_shm!(Catacomb);
+
+impl DmabufHandler for Catacomb {
+    fn dmabuf_state(&mut self) -> &mut DmabufState {
+        &mut self.dmabuf_state
+    }
+
+    fn dmabuf_imported(
+        &mut self,
+        _display: &DisplayHandle,
+        _global: &DmabufGlobal,
+        buffer: Dmabuf,
+    ) -> Result<(), ImportError> {
+        let output_device = match &mut self.backend.output_device {
+            Some(output_device) => output_device,
+            None => return Err(ImportError::Failed),
+        };
+
+        output_device.renderer.import_dmabuf(&buffer, None).map_err(|_| ImportError::Failed)?;
+        Ok(())
+    }
+}
+delegate_dmabuf!(Catacomb);
+
+impl XdgShellHandler for Catacomb {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
         &mut self.xdg_shell_state
     }
 
     fn new_toplevel(&mut self, _display: &DisplayHandle, surface: ToplevelSurface) {
-        self.windows.add(surface, &self.output);
+        self.windows.add(surface);
     }
 
     fn ack_configure(
@@ -342,9 +336,9 @@ impl<B> XdgShellHandler for Catacomb<B> {
     ) {
     }
 }
-delegate_xdg_shell!(@<B: 'static> Catacomb<B>);
+delegate_xdg_shell!(Catacomb);
 
-impl<B> WlrLayerShellHandler for Catacomb<B> {
+impl WlrLayerShellHandler for Catacomb {
     fn shell_state(&mut self) -> &mut WlrLayerShellState {
         &mut self.layer_shell_state
     }
@@ -357,41 +351,34 @@ impl<B> WlrLayerShellHandler for Catacomb<B> {
         layer: Layer,
         _namespace: String,
     ) {
-        self.windows.add_layer(layer, surface, &self.output);
+        self.windows.add_layer(layer, surface);
     }
 }
-delegate_layer_shell!(@<B: 'static> Catacomb<B>);
+delegate_layer_shell!(Catacomb);
 
-impl<B> ShmHandler for Catacomb<B> {
-    fn shm_state(&self) -> &ShmState {
-        &self.shm_state
-    }
-}
-delegate_shm!(@<B: 'static> Catacomb<B>);
-
-impl<B> SeatHandler for Catacomb<B> {
-    fn seat_state(&mut self) -> &mut SeatState<Catacomb<B>> {
+impl SeatHandler for Catacomb {
+    fn seat_state(&mut self) -> &mut SeatState<Self> {
         &mut self.seat_state
     }
 }
-delegate_seat!(@<B: 'static> Catacomb<B>);
+delegate_seat!(Catacomb);
 
-delegate_virtual_keyboard_manager!(@<B: 'static> Catacomb<B>);
-delegate_input_method_manager!(@<B: 'static> Catacomb<B>);
-delegate_text_input_manager!(@<B: 'static> Catacomb<B>);
+delegate_virtual_keyboard_manager!(Catacomb);
+delegate_input_method_manager!(Catacomb);
+delegate_text_input_manager!(Catacomb);
 
-impl<B> DataDeviceHandler for Catacomb<B> {
+impl DataDeviceHandler for Catacomb {
     fn data_device_state(&self) -> &DataDeviceState {
         &self.data_device_state
     }
 }
-impl<B> ClientDndGrabHandler for Catacomb<B> {}
-impl<B> ServerDndGrabHandler for Catacomb<B> {}
-delegate_data_device!(@<B: 'static> Catacomb<B>);
+impl ClientDndGrabHandler for Catacomb {}
+impl ServerDndGrabHandler for Catacomb {}
+delegate_data_device!(Catacomb);
 
-delegate_output!(@<B: 'static> Catacomb<B>);
+delegate_output!(Catacomb);
 
-impl<B> XdgDecorationHandler for Catacomb<B> {
+impl XdgDecorationHandler for Catacomb {
     fn new_decoration(&mut self, _display: &DisplayHandle, toplevel: ToplevelSurface) {
         toplevel.with_pending_state(|state| {
             state.decoration_mode = Some(DecorationMode::ServerSide);
@@ -409,47 +396,17 @@ impl<B> XdgDecorationHandler for Catacomb<B> {
 
     fn unset_mode(&mut self, _display: &DisplayHandle, _toplevel: ToplevelSurface) {}
 }
-delegate_xdg_decoration!(@<B: 'static> Catacomb<B>);
+delegate_xdg_decoration!(Catacomb);
 
-impl<B> KdeDecorationHandler for Catacomb<B> {
+impl KdeDecorationHandler for Catacomb {
     fn kde_decoration_state(&self) -> &KdeDecorationState {
         &self.kde_decoration_state
     }
 }
-delegate_kde_decoration!(@<B: 'static> Catacomb<B>);
+delegate_kde_decoration!(Catacomb);
 
-impl<B> BufferHandler for Catacomb<B> {
+impl BufferHandler for Catacomb {
     fn buffer_destroyed(&mut self, _buffer: &WlBuffer) {}
-}
-
-/// Backend capabilities.
-pub trait Backend {
-    /// Get Wayland seat name.
-    fn seat_name(&self) -> String;
-
-    /// Change Unix TTY.
-    fn change_vt(&mut self, _vt: i32) {}
-
-    /// Set power saving state.
-    fn set_sleep(&mut self, _sleep: bool) {}
-}
-
-/// Abstraction over backend-specific rendering.
-pub trait Render {
-    /// Render the frame, using the provided drawing function.
-    fn render<B, F>(
-        &mut self,
-        catacomb: &mut Catacomb<B>,
-        draw_fun: F,
-    ) -> Result<(), Box<dyn Error>>
-    where
-        F: FnOnce(&mut Catacomb<B>, &mut Gles2Renderer, &mut Gles2Frame, u8);
-
-    /// Re-schedule the rendering.
-    ///
-    /// Re-rendering at a later point will be requested when the current frame
-    /// completed without any damage present.
-    fn reschedule(&mut self) {}
 }
 
 #[derive(Default, Debug)]
@@ -481,7 +438,7 @@ impl Damage {
     ///
     /// This will also clear the pending damage, pushing it into history and
     /// preparing the storage for new damage.
-    fn take_since(&mut self, buffer_age: u8) -> &[Rectangle<i32, Physical>] {
+    pub fn take_since(&mut self, buffer_age: u8) -> &[Rectangle<i32, Physical>] {
         // Move pending damage into history.
 
         let oldest_rects = mem::take(&mut self.rects[self.rects.len() - 2]);

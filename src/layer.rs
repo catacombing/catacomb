@@ -5,7 +5,8 @@ use smithay::utils::{Logical, Physical, Point, Rectangle};
 use smithay::wayland::shell::wlr_layer::Layer;
 
 use crate::output::Output;
-use crate::window::{CatacombLayerSurface, Window};
+use crate::windows::surface::CatacombLayerSurface;
+use crate::windows::window::Window;
 
 type LayerWindow = Window<CatacombLayerSurface>;
 

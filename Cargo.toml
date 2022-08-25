@@ -31,7 +31,6 @@ dirs = "4.0.0"
 udev = "0.6.2"
 
 [features]
-default = [ "winit", "systemd" ]
-winit = ["smithay/backend_winit"]
+default = ["systemd"]
 libseat = ["smithay/backend_session_libseat"]
 systemd = ["smithay/backend_session_logind"]

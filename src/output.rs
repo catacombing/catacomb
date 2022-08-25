@@ -17,6 +17,7 @@ use crate::orientation::Orientation;
 const SCALE: i32 = 2;
 
 /// Wayland output, typically a screen.
+#[derive(Debug)]
 pub struct Output {
     /// Layer shell reserved space.
     pub exclusive: ExclusiveSpace,
@@ -30,15 +31,24 @@ pub struct Output {
     mode: Mode,
 }
 
+impl Drop for Output {
+    fn drop(&mut self) {
+        // Destroy output's global, to remove it from clients.
+        if let Some(global) = self.global.take() {
+            self.display.remove_global::<Catacomb>(global);
+        }
+    }
+}
+
 impl Output {
-    pub fn new<B: 'static>(
+    pub fn new(
         display: &DisplayHandle,
         name: impl Into<String>,
         mode: Mode,
         properties: PhysicalProperties,
     ) -> Self {
         let output = SmithayOutput::new(name.into(), properties, None);
-        let global = Some(output.create_global::<Catacomb<B>>(display));
+        let global = Some(output.create_global::<Catacomb>(display));
         let scale = SCALE;
 
         let mut output = Self {
@@ -59,23 +69,14 @@ impl Output {
     }
 
     /// Create a new dummy output.
-    pub fn new_dummy<B: 'static>(display: &DisplayHandle) -> Self {
+    pub fn new_dummy(display: &DisplayHandle) -> Self {
         let mode = Mode { size: (0, 0).into(), refresh: 0 };
-        Output::new::<B>(display, "dummy-0", mode, PhysicalProperties {
+        Output::new(display, "dummy-0", mode, PhysicalProperties {
             subpixel: Subpixel::Unknown,
             model: "dummy-0".into(),
             make: "dummy-0".into(),
             size: (0, 0).into(),
         })
-    }
-
-    // TODO: Remove when nuking winit.
-    //
-    /// Destroy this output's gobal.
-    pub fn destroy<B: 'static>(mut self) {
-        if let Some(global) = self.global.take() {
-            self.display.remove_global::<Catacomb<B>>(global);
-        }
     }
 
     /// Update the output's active mode.

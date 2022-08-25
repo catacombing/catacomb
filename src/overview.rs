@@ -11,7 +11,7 @@ use smithay::utils::{Logical, Point, Rectangle, Size};
 use crate::drawing::Graphics;
 use crate::geometry::Vector;
 use crate::output::Output;
-use crate::window::Window;
+use crate::windows::window::Window;
 
 /// Percentage of output width reserved for the main window in the application
 /// overview.

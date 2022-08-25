@@ -16,11 +16,11 @@ use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::seat::{keysyms, FilterResult, TouchHandle};
 use smithay::wayland::SERIAL_COUNTER;
 
-use crate::catacomb::{Backend, Catacomb};
+use crate::catacomb::Catacomb;
 use crate::config::APP_DRAWER;
 use crate::orientation::Orientation;
 use crate::output::Output;
-use crate::window::OffsetSurface;
+use crate::windows::surface::OffsetSurface;
 
 /// Time before a tap is considered a hold.
 pub const HOLD_DURATION: Duration = Duration::from_secs(1);
@@ -54,10 +54,10 @@ const SUSPEND_TIMEOUT: Duration = Duration::from_secs(30);
 const POINTER_TOUCH_SLOT: Option<u32> = Some(0);
 
 /// Touch input state.
-pub struct TouchState<B: 'static> {
+pub struct TouchState {
     pub position: Point<f64, Logical>,
 
-    event_loop: LoopHandle<'static, Catacomb<B>>,
+    event_loop: LoopHandle<'static, Catacomb>,
     velocity_timer: Option<RegistrationToken>,
     velocity: Point<f64, Logical>,
     events: Vec<TouchEvent>,
@@ -67,8 +67,8 @@ pub struct TouchState<B: 'static> {
     is_drag: bool,
 }
 
-impl<B> TouchState<B> {
-    pub fn new(event_loop: LoopHandle<'static, Catacomb<B>>, touch: TouchHandle) -> Self {
+impl TouchState {
+    pub fn new(event_loop: LoopHandle<'static, Catacomb>, touch: TouchHandle) -> Self {
         Self {
             event_loop,
             touch,
@@ -245,25 +245,10 @@ impl PhysicalButtonState {
     }
 }
 
-impl<B: Backend> Catacomb<B> {
+impl Catacomb {
     /// Process device orientation changes.
     pub fn handle_orientation(&mut self, orientation: Orientation) {
-        self.output.set_orientation(orientation);
-        self.windows.update_orientation(&mut self.output);
-    }
-
-    /// Process winit-specific input events.
-    #[cfg(feature = "winit")]
-    pub fn handle_winit_input(&mut self, event: WinitEvent) {
-        match event {
-            // Toggle between portrait/landscape based on window size.
-            WinitEvent::Resized { size, .. } => {
-                self.output.resize(size);
-                self.windows.resize_all(&mut self.output);
-            },
-            WinitEvent::Input(event) => self.handle_input(event),
-            _ => (),
-        }
+        self.windows.update_orientation(orientation);
     }
 
     /// Process new input events.
@@ -347,7 +332,7 @@ impl<B: Backend> Catacomb<B> {
         self.touch_state.slot = Some(slot);
 
         // Initialize the touch state.
-        self.touch_state.start(&self.output, position);
+        self.touch_state.start(&self.windows.output, position);
 
         // Inhibit gestures started above layer shell surfaces.
         if layer_touched {
@@ -356,7 +341,7 @@ impl<B: Backend> Catacomb<B> {
 
         // Only send touch start if there's no gesture in progress.
         if self.touch_state.start.gesture.is_none() {
-            self.windows.on_touch_start(&self.output, position);
+            self.windows.on_touch_start(position);
         }
     }
 
@@ -373,9 +358,9 @@ impl<B: Backend> Catacomb<B> {
         self.touch_state.slot = None;
 
         let overview_active = self.windows.overview_active();
-        match self.touch_state.action(&self.output, overview_active) {
+        match self.touch_state.action(&self.windows.output, overview_active) {
             Some(TouchAction::Tap) => {
-                self.windows.on_tap(&self.output, self.touch_state.position);
+                self.windows.on_tap(self.touch_state.position);
             },
             Some(TouchAction::Drag | TouchAction::Gesture(_)) => {
                 self.add_velocity_timeout();
@@ -406,13 +391,13 @@ impl<B: Backend> Catacomb<B> {
     /// actions.
     fn update_position(&mut self, position: Point<f64, Logical>) {
         let overview_active = self.windows.overview_active();
-        match self.touch_state.action(&self.output, overview_active) {
+        match self.touch_state.action(&self.windows.output, overview_active) {
             Some(TouchAction::Drag) => {
-                self.windows.on_drag(&self.output, &mut self.touch_state, position);
+                self.windows.on_drag(&mut self.touch_state, position);
 
                 // Signal drag end once no more velocity is present.
                 if !self.touch_state.touching() && !self.touch_state.has_velocity() {
-                    self.windows.on_drag_release(&self.output);
+                    self.windows.on_drag_release();
                 }
             },
             Some(TouchAction::Gesture(gesture)) => self.on_gesture(gesture),
@@ -429,7 +414,7 @@ impl<B: Backend> Catacomb<B> {
             return;
         }
 
-        self.windows.on_gesture(&self.output, gesture);
+        self.windows.on_gesture(gesture);
         self.touch_state.cancel_velocity();
 
         // Notify client.
@@ -444,7 +429,7 @@ impl<B: Backend> Catacomb<B> {
         // other refresh rates.
         let velocity = &mut self.touch_state.velocity;
         let position = &mut self.touch_state.position;
-        let animation_speed = self.output.frame_interval().as_millis() as f64 / 16.;
+        let animation_speed = self.windows.output.frame_interval().as_millis() as f64 / 16.;
         velocity.x -= velocity.x.signum()
             * (velocity.x.abs() * FRICTION * animation_speed + 1.).min(velocity.x.abs());
         velocity.y -= velocity.y.signum()
@@ -456,7 +441,7 @@ impl<B: Backend> Catacomb<B> {
 
         // Schedule another velocity tick.
         if self.touch_state.has_velocity() {
-            TimeoutAction::ToDuration(self.output.frame_interval())
+            TimeoutAction::ToDuration(self.windows.output.frame_interval())
         } else {
             TimeoutAction::Drop
         }
@@ -474,7 +459,7 @@ impl<B: Backend> Catacomb<B> {
         }
 
         // Stage new velocity timer.
-        let timer = Timer::from_duration(self.output.frame_interval());
+        let timer = Timer::from_duration(self.windows.output.frame_interval());
         let velocity_timer = self
             .event_loop
             .insert_source(timer, |_, _, catacomb| catacomb.on_velocity_tick())
@@ -560,12 +545,12 @@ impl<B: Backend> Catacomb<B> {
         E: AbsolutePositionEvent<I>,
         I: InputBackend,
     {
-        let screen_size = self.output.resolution();
+        let screen_size = self.windows.output.resolution();
         let (mut x, mut y) = event.position_transformed(screen_size).into();
         let (width, height) = screen_size.to_f64().into();
 
         // Transform X/Y according to output rotation.
-        (x, y) = match self.output.orientation() {
+        (x, y) = match self.windows.output.orientation() {
             Orientation::Portrait => (x, y),
             Orientation::Landscape => (y, width - x),
             Orientation::InversePortrait => (width - x, height - y),

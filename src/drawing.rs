@@ -40,9 +40,6 @@ const OVERVIEW_TITLE_HEIGHT: i32 = 15;
 /// of 1.
 const OVERVIEW_BORDER_WIDTH: i32 = 1;
 
-/// Size of the debug touch rectangle.
-const TOUCH_DEBUG_SIZE: usize = 50;
-
 /// Cached texture.
 ///
 /// Includes all information necessary to render a surface's texture even after
@@ -183,7 +180,6 @@ pub struct Graphics {
     active_drop_target: Option<Texture>,
     drop_target: Option<Texture>,
     decoration: Option<Texture>,
-    touch_debug: Option<Texture>,
 }
 
 impl Graphics {
@@ -208,17 +204,6 @@ impl Graphics {
     pub fn drop_target(&mut self, renderer: &mut Gles2Renderer) -> &mut Texture {
         self.drop_target
             .get_or_insert_with(|| Texture::from_buffer(renderer, &DROP_TARGET_RGBA, 1, 1))
-    }
-
-    pub fn touch_debug(&mut self, renderer: &mut Gles2Renderer) -> &mut Texture {
-        self.touch_debug.get_or_insert_with(|| {
-            Texture::from_buffer(
-                renderer,
-                &[255; TOUCH_DEBUG_SIZE * TOUCH_DEBUG_SIZE * 4],
-                TOUCH_DEBUG_SIZE as i32,
-                TOUCH_DEBUG_SIZE as i32,
-            )
-        })
     }
 
     /// Decoration title bar height.
