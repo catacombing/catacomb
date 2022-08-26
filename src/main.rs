@@ -54,11 +54,7 @@ pub fn main() {
     // Create backend and add presently connected devices.
     let backend = UdevBackend::new(&catacomb.seat_name, None).expect("init udev");
     for (_, path) in backend.device_list() {
-        let _ = catacomb.backend.add_device(
-            &catacomb.display_handle,
-            &mut catacomb.windows.output,
-            path.into(),
-        );
+        add_device(&mut catacomb, path.into());
     }
 
     // Setup hardware acceleration.
@@ -87,25 +83,13 @@ pub fn main() {
     event_loop
         .handle()
         .insert_source(backend, move |event, _, catacomb| match event {
-            UdevEvent::Added { path, .. } => {
-                let _ = catacomb.backend.add_device(
-                    &catacomb.display_handle,
-                    &mut catacomb.windows.output,
-                    path,
-                );
-
-                // Kick-off rendering.
-                catacomb.create_frame();
-            },
+            UdevEvent::Added { path, .. } => add_device(catacomb, path),
             UdevEvent::Changed { device_id } => {
                 let _ = catacomb.backend.change_device(
                     &catacomb.display_handle,
                     &mut catacomb.windows.output,
                     device_id,
                 );
-
-                // Kick-off rendering.
-                catacomb.create_frame();
             },
             UdevEvent::Removed { device_id } => catacomb.backend.remove_device(device_id),
         })
@@ -119,6 +103,15 @@ pub fn main() {
         }
         catacomb.display.borrow_mut().flush_clients().expect("flushing clients");
     }
+}
+
+/// Add udev device, automatically kicking off rendering for it.
+fn add_device(catacomb: &mut Catacomb, path: PathBuf) {
+    let _ =
+        catacomb.backend.add_device(&catacomb.display_handle, &mut catacomb.windows.output, path);
+
+    // Kick-off rendering.
+    catacomb.create_frame();
 }
 
 /// Udev backend shared state.

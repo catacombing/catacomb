@@ -233,6 +233,7 @@ impl Catacomb {
         if self.windows.damaged() {
             self.backend.render(&mut self.windows, &mut self.damage);
         } else {
+            // TODO: Do we actually need to schedule redraws every time?
             self.backend.schedule_redraw(self.windows.output.frame_interval());
         }
 
