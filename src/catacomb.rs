@@ -9,6 +9,8 @@ use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMod
 use _server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as ManagerMode;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::ImportDma;
+use smithay::input::keyboard::XkbConfig;
+use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{
     Interest, LoopHandle, Mode as TriggerMode, PostAction, RegistrationToken,
@@ -20,7 +22,7 @@ use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Display, DisplayHandle, Resource};
-use smithay::utils::{Physical, Rectangle};
+use smithay::utils::{Physical, Rectangle, Serial, SERIAL_COUNTER};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{CompositorHandler, CompositorState};
 use smithay::wayland::data_device::{
@@ -29,7 +31,6 @@ use smithay::wayland::data_device::{
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportError};
 use smithay::wayland::input_method::{InputMethodManagerState, InputMethodSeat};
 use smithay::wayland::output::OutputManagerState;
-use smithay::wayland::seat::{KeyboardHandle, Seat, SeatHandler, SeatState, XkbConfig};
 use smithay::wayland::shell::kde::decoration::{KdeDecorationHandler, KdeDecorationState};
 use smithay::wayland::shell::wlr_layer::{
     Layer, LayerSurface, WlrLayerShellHandler, WlrLayerShellState,
@@ -42,7 +43,7 @@ use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::wayland::socket::ListeningSocketSource;
 use smithay::wayland::text_input::{TextInputHandle, TextInputManagerState};
 use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
-use smithay::wayland::{compositor, data_device, Serial, SERIAL_COUNTER};
+use smithay::wayland::{compositor, data_device};
 use smithay::{
     delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_input_method_manager,
     delegate_kde_decoration, delegate_layer_shell, delegate_output, delegate_seat, delegate_shm,
@@ -65,10 +66,10 @@ pub struct Catacomb {
     pub event_loop: LoopHandle<'static, Self>,
     pub button_state: PhysicalButtonState,
     pub display_handle: DisplayHandle,
-    pub keyboard: KeyboardHandle,
     pub touch_state: TouchState,
     pub seat_name: String,
     pub windows: Windows,
+    pub seat: Seat<Self>,
     pub sleeping: bool,
     pub backend: Udev,
 
@@ -82,8 +83,14 @@ pub struct Catacomb {
     seat_state: SeatState<Self>,
     shm_state: ShmState,
 
+    // Indicates if rendering was intentionally stalled.
+    //
+    // This will occur when rendering on a VBlank detects no damage is present, thus stopping
+    // rendering and further VBlank. If this is `true`, rendering needs to be kicked of manually
+    // again when damage is received.
+    stalled: bool,
+
     last_focus: Option<WlSurface>,
-    seat: Seat<Self>,
     damage: Damage,
 
     // NOTE: Must be last field to ensure it's dropped after any global.
@@ -142,8 +149,8 @@ impl Catacomb {
 
         // Initialize seat.
         let seat_name = backend.seat_name();
-        let seat_state = SeatState::new();
-        let mut seat = Seat::new(&display_handle, seat_name.clone(), None);
+        let mut seat_state = SeatState::new();
+        let mut seat = seat_state.new_wl_seat(&display_handle, seat_name.clone(), None);
 
         // Initialize IME and virtual keyboard.
         InputMethodManagerState::new::<Self>(&display_handle);
@@ -153,14 +160,7 @@ impl Catacomb {
 
         // Initialize keyboard/touch/data device.
         let data_device_state = DataDeviceState::new::<Self, _>(&display_handle, None);
-        let keyboard_display = display_handle.clone();
-        let keyboard = seat
-            .add_keyboard(XkbConfig::default(), 200, 25, move |seat, focused_surface| {
-                let client = focused_surface
-                    .and_then(|surface| keyboard_display.get_client(surface.id()).ok());
-                data_device::set_data_device_focus(&keyboard_display, seat, client)
-            })
-            .expect("adding keyboard");
+        seat.add_keyboard(XkbConfig::default(), 200, 25).expect("adding keyboard");
 
         // Initialize touch state.
         let touch = seat.add_touch();
@@ -179,7 +179,7 @@ impl Catacomb {
         }
 
         // Create window manager.
-        let windows = Windows::new(&display_handle);
+        let windows = Windows::new(&display_handle, event_loop.clone());
 
         Self {
             kde_decoration_state,
@@ -194,7 +194,6 @@ impl Catacomb {
             seat_state,
             shm_state,
             seat_name,
-            keyboard,
             windows,
             backend,
             seat,
@@ -203,6 +202,7 @@ impl Catacomb {
             button_state: Default::default(),
             last_focus: Default::default(),
             sleeping: Default::default(),
+            stalled: Default::default(),
             damage: Default::default(),
         }
     }
@@ -219,6 +219,9 @@ impl Catacomb {
 impl Catacomb {
     /// Handle everything necessary to draw a single frame.
     pub fn create_frame(&mut self) {
+        // Clear rendering stall status.
+        self.stalled = false;
+
         // Update transaction before rendering to update device orientation.
         self.windows.update_transaction();
 
@@ -226,30 +229,39 @@ impl Catacomb {
         let focus = self.windows.focus();
         if focus != self.last_focus {
             self.last_focus = focus.clone();
-            self.focus(focus.as_ref());
+            self.focus(focus);
         }
 
         // Redraw only when there is damage present.
         if self.windows.damaged() {
             self.backend.render(&mut self.windows, &mut self.damage);
-        } else {
-            // TODO: Do we actually need to schedule redraws every time?
+        } else if self.windows.transaction_active() {
+            // Keep redrawing during transaction, to handle liveliness changes or timeout.
             self.backend.schedule_redraw(self.windows.output.frame_interval());
+        } else {
+            // Indicate rendering was stalled.
+            self.stalled = true;
         }
-
-        // Handle window liveliness changes.
-        self.windows.refresh();
 
         // Request new frames for visible windows.
         self.windows.request_frames();
     }
 
     /// Focus a new surface.
-    pub fn focus(&mut self, surface: Option<&WlSurface>) {
+    pub fn focus(&mut self, surface: Option<WlSurface>) {
         if let Some(text_input) = self.seat.user_data().get::<TextInputHandle>() {
-            text_input.set_focus(surface);
+            text_input.set_focus(surface.as_ref(), || {});
         }
-        self.keyboard.set_focus(&self.display_handle, surface, SERIAL_COUNTER.next_serial());
+        if let Some(keyboard) = self.seat.get_keyboard() {
+            keyboard.set_focus(self, surface, SERIAL_COUNTER.next_serial());
+        }
+    }
+
+    /// Start rendering again if we're currently stalled.
+    pub fn unstall(&mut self) {
+        if self.stalled {
+            self.create_frame();
+        }
     }
 }
 
@@ -258,12 +270,14 @@ impl CompositorHandler for Catacomb {
         &mut self.compositor_state
     }
 
-    fn commit(&mut self, _display: &DisplayHandle, surface: &WlSurface) {
+    fn commit(&mut self, surface: &WlSurface) {
         if compositor::is_sync_subsurface(surface) {
             return;
         }
 
         self.windows.surface_commit(surface);
+
+        self.unstall();
     }
 }
 delegate_compositor!(Catacomb);
@@ -282,7 +296,6 @@ impl DmabufHandler for Catacomb {
 
     fn dmabuf_imported(
         &mut self,
-        _display: &DisplayHandle,
         _global: &DmabufGlobal,
         buffer: Dmabuf,
     ) -> Result<(), ImportError> {
@@ -302,16 +315,11 @@ impl XdgShellHandler for Catacomb {
         &mut self.xdg_shell_state
     }
 
-    fn new_toplevel(&mut self, _display: &DisplayHandle, surface: ToplevelSurface) {
+    fn new_toplevel(&mut self, surface: ToplevelSurface) {
         self.windows.add(surface);
     }
 
-    fn ack_configure(
-        &mut self,
-        _display: &DisplayHandle,
-        surface: WlSurface,
-        _configure: Configure,
-    ) {
+    fn ack_configure(&mut self, surface: WlSurface, _configure: Configure) {
         // Request new frames after each resize.
         let runtime = self.windows.runtime();
         if let Some(mut window) = self.windows.find_xdg(&surface) {
@@ -319,22 +327,20 @@ impl XdgShellHandler for Catacomb {
         }
     }
 
-    fn new_popup(
-        &mut self,
-        _display: &DisplayHandle,
-        surface: PopupSurface,
-        _positioner: PositionerState,
-    ) {
+    fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
         self.windows.add_popup(surface);
     }
 
-    fn grab(
-        &mut self,
-        _display: &DisplayHandle,
-        _surface: PopupSurface,
-        _seat: WlSeat,
-        _serial: Serial,
-    ) {
+    fn grab(&mut self, _surface: PopupSurface, _seat: WlSeat, _serial: Serial) {}
+
+    fn toplevel_destroyed(&mut self) {
+        self.windows.refresh_visible();
+        self.unstall();
+    }
+
+    fn popup_destroyed(&mut self) {
+        self.windows.refresh_popups();
+        self.unstall();
     }
 }
 delegate_xdg_shell!(Catacomb);
@@ -346,7 +352,6 @@ impl WlrLayerShellHandler for Catacomb {
 
     fn new_layer_surface(
         &mut self,
-        _display: &DisplayHandle,
         surface: LayerSurface,
         _wl_output: Option<WlOutput>,
         layer: Layer,
@@ -354,12 +359,25 @@ impl WlrLayerShellHandler for Catacomb {
     ) {
         self.windows.add_layer(layer, surface);
     }
+
+    fn destroyed(&mut self) {
+        self.windows.refresh_layers();
+        self.unstall();
+    }
 }
 delegate_layer_shell!(Catacomb);
 
 impl SeatHandler for Catacomb {
+    type KeyboardFocus = WlSurface;
+    type PointerFocus = WlSurface;
+
     fn seat_state(&mut self) -> &mut SeatState<Self> {
         &mut self.seat_state
+    }
+
+    fn focus_changed(&mut self, seat: &Seat<Self>, surface: Option<&Self::KeyboardFocus>) {
+        let client = surface.and_then(|surface| self.display_handle.get_client(surface.id()).ok());
+        data_device::set_data_device_focus(&self.display_handle, seat, client)
     }
 }
 delegate_seat!(Catacomb);
@@ -380,22 +398,16 @@ delegate_data_device!(Catacomb);
 delegate_output!(Catacomb);
 
 impl XdgDecorationHandler for Catacomb {
-    fn new_decoration(&mut self, _display: &DisplayHandle, toplevel: ToplevelSurface) {
+    fn new_decoration(&mut self, toplevel: ToplevelSurface) {
         toplevel.with_pending_state(|state| {
             state.decoration_mode = Some(DecorationMode::ServerSide);
         });
         toplevel.send_configure();
     }
 
-    fn request_mode(
-        &mut self,
-        _display: &DisplayHandle,
-        _toplevel: ToplevelSurface,
-        _mode: DecorationMode,
-    ) {
-    }
+    fn request_mode(&mut self, _toplevel: ToplevelSurface, _mode: DecorationMode) {}
 
-    fn unset_mode(&mut self, _display: &DisplayHandle, _toplevel: ToplevelSurface) {}
+    fn unset_mode(&mut self, _toplevel: ToplevelSurface) {}
 }
 delegate_xdg_decoration!(Catacomb);
 

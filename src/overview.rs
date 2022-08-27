@@ -6,10 +6,14 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use smithay::backend::renderer::gles2::{ffi, Gles2Frame, Gles2Renderer};
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
+use crate::catacomb::Catacomb;
 use crate::drawing::Graphics;
 use crate::geometry::Vector;
+use crate::input::HOLD_DURATION;
 use crate::output::Output;
 use crate::windows::window::Window;
 
@@ -42,15 +46,39 @@ const OVERDRAG_LIMIT: f64 = 3.;
 pub struct Overview {
     pub x_offset: f64,
     pub y_offset: f64,
+    pub hold_timer: Option<RegistrationToken>,
     pub last_drag_point: Point<f64, Logical>,
     pub last_overdrag_step: Option<Instant>,
     pub drag_direction: Option<Direction>,
-    pub hold_start: Option<Instant>,
 }
 
 impl Overview {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Start timer for D&D touch hold.
+    pub fn start_hold(&mut self, event_loop: &LoopHandle<'static, Catacomb>) {
+        // Ensure no timer is currently active.
+        self.cancel_hold(event_loop);
+
+        // Start a new timer.
+        let timer = Timer::from_duration(HOLD_DURATION);
+        let hold_timer = event_loop
+            .insert_source(timer, |_, _, catacomb| {
+                catacomb.windows.start_dnd();
+                catacomb.unstall();
+                TimeoutAction::Drop
+            })
+            .expect("insert D&D hold timer");
+        self.hold_timer = Some(hold_timer);
+    }
+
+    /// Cancel the D&D touch hold timer.
+    pub fn cancel_hold(&mut self, event_loop: &LoopHandle<'static, Catacomb>) {
+        if let Some(timer) = self.hold_timer.take() {
+            event_loop.remove(timer);
+        }
     }
 
     /// Index of the focused window.

@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
 use smithay::backend::renderer::Frame;
+use smithay::reexports::calloop::LoopHandle;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::DisplayHandle;
@@ -16,9 +17,9 @@ use smithay::wayland::compositor;
 use smithay::wayland::shell::wlr_layer::Layer;
 use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface};
 
-use crate::catacomb::Damage;
+use crate::catacomb::{Catacomb, Damage};
 use crate::drawing::{Graphics, MAX_DAMAGE_AGE};
-use crate::input::{Gesture, TouchState, HOLD_DURATION};
+use crate::input::{Gesture, TouchState};
 use crate::layer::Layers;
 use crate::orientation::Orientation;
 use crate::output::Output;
@@ -33,7 +34,7 @@ pub mod window;
 const OVERVIEW_HORIZONTAL_SENSITIVITY: f64 = 250.;
 
 /// Maximum time before a transaction is cancelled.
-const MAX_TRANSACTION_DURATION: Duration = Duration::from_millis(200);
+const MAX_TRANSACTION_DURATION: Duration = Duration::from_secs(1);
 
 /// Container tracking all known clients.
 #[derive(Debug)]
@@ -48,6 +49,7 @@ pub struct Windows {
     orphan_popups: Vec<Window<PopupSurface>>,
     layers: Layers,
 
+    event_loop: LoopHandle<'static, Catacomb>,
     transaction: Option<Transaction>,
     start_time: Instant,
     graphics: Graphics,
@@ -65,8 +67,9 @@ pub struct Windows {
 }
 
 impl Windows {
-    pub fn new(display: &DisplayHandle) -> Self {
+    pub fn new(display: &DisplayHandle, event_loop: LoopHandle<'static, Catacomb>) -> Self {
         Self {
+            event_loop,
             output: Output::new_dummy(display),
             start_time: Instant::now(),
             fully_damaged: true,
@@ -255,38 +258,59 @@ impl Windows {
         }
     }
 
-    /// Update window manager state.
-    pub fn refresh(&mut self) {
+    /// Reap dead layer shell windows.
+    pub fn refresh_layers(&mut self) {
+        self.transaction.get_or_insert(Transaction::new(self));
+
         // Handle layer shell death.
         let old_exclusive = self.output.exclusive;
-        for window in self.layers.iter() {
-            if !window.alive() {
-                self.transaction.get_or_insert(Transaction::new(self));
-                self.output.exclusive.reset(window.surface.anchor, window.surface.exclusive_zone);
-            }
+        for window in self.layers.iter().filter(|window| !window.alive()) {
+            self.output.exclusive.reset(window.surface.anchor, window.surface.exclusive_zone);
         }
 
-        // Resize windows on demand.
+        // Resize windows if reserved layer space changed.
         if self.output.exclusive != old_exclusive {
             self.resize_all();
-        } else if self.windows.iter().any(|window| !window.borrow().alive()) {
-            self.refresh_visible();
         }
+    }
 
-        // Cleanup old popup windows.
+    /// Reap dead XDG popup windows.
+    pub fn refresh_popups(&mut self) {
         for window in &mut self.windows {
             window.borrow_mut().refresh_popups();
         }
+    }
 
-        // Start D&D on long touch in overview.
-        if let View::Overview(overview) = &mut self.view {
-            if overview.hold_start.map_or(false, |start| start.elapsed() >= HOLD_DURATION) {
-                let index = overview.focused_index(self.windows.len());
-                let dnd = DragAndDrop::new(overview.last_drag_point, overview.x_offset, index);
-                self.view = View::DragAndDrop(dnd);
-                self.fully_damaged = true;
-            }
+    /// Reap dead visible windows.
+    ///
+    /// This will reorder and resize visible windows when any of them has died.
+    pub fn refresh_visible(&mut self) {
+        let transaction = self.transaction.get_or_insert(Transaction::new(self));
+        let primary = transaction.primary.upgrade();
+        let secondary = transaction.secondary.upgrade();
+
+        // Remove dead primary/secondary windows.
+        if secondary.as_ref().map_or(true, |window| !window.borrow().alive()) {
+            transaction.secondary = Weak::new();
         }
+        if primary.map_or(true, |window| !window.borrow().alive()) {
+            transaction.primary = mem::take(&mut transaction.secondary);
+        }
+
+        transaction.update_visible_dimensions(&self.output);
+    }
+
+    /// Start Overview window Drag & Drop.
+    pub fn start_dnd(&mut self) {
+        let overview = match &mut self.view {
+            View::Overview(overview) => overview,
+            _ => return,
+        };
+
+        let index = overview.focused_index(self.windows.len());
+        let dnd = DragAndDrop::new(overview.last_drag_point, overview.x_offset, index);
+        self.view = View::DragAndDrop(dnd);
+        self.fully_damaged = true;
     }
 
     /// Current window focus.
@@ -324,23 +348,9 @@ impl Windows {
         Some(surface.surface().clone())
     }
 
-    /// Reap dead visible windows.
-    ///
-    /// This will reorder and resize visible windows when any of them has died.
-    fn refresh_visible(&mut self) {
-        let transaction = self.transaction.get_or_insert(Transaction::new(self));
-        let primary = transaction.primary.upgrade();
-        let secondary = transaction.secondary.upgrade();
-
-        // Remove dead primary/secondary windows.
-        if secondary.as_ref().map_or(true, |window| !window.borrow().alive()) {
-            transaction.secondary = Weak::new();
-        }
-        if primary.map_or(true, |window| !window.borrow().alive()) {
-            transaction.primary = mem::take(&mut transaction.secondary);
-        }
-
-        transaction.update_visible_dimensions(&self.output);
+    /// Check if there's an active transaction.
+    pub fn transaction_active(&self) -> bool {
+        self.transaction.is_some()
     }
 
     /// Attempt to execute pending transactions.
@@ -464,7 +474,7 @@ impl Windows {
             // Click inside focused window stages it for opening as secondary.
             let window_bounds = overview.focused_bounds(&self.output, self.windows.len());
             if window_bounds.contains(point.to_i32_round()) {
-                overview.hold_start = Some(Instant::now());
+                overview.start_hold(&self.event_loop);
             }
 
             overview.last_drag_point = point;
@@ -480,7 +490,7 @@ impl Windows {
             View::DragAndDrop(_) | View::Workspace => return,
         };
 
-        overview.hold_start = None;
+        overview.cancel_hold(&self.event_loop);
 
         // Click inside focused window opens it as primary.
         let window_bounds = overview.focused_bounds(&self.output, self.windows.len());
@@ -546,7 +556,7 @@ impl Windows {
         }
 
         overview.last_overdrag_step = None;
-        overview.hold_start = None;
+        overview.cancel_hold(&self.event_loop);
 
         // Redraw when cycling through the overview.
         self.fully_damaged = true;

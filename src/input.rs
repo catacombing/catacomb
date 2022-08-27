@@ -10,11 +10,11 @@ use smithay::backend::input::{
 };
 #[cfg(feature = "winit")]
 use smithay::backend::winit::WinitEvent;
+use smithay::input::keyboard::{keysyms, FilterResult};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
-use smithay::utils::{Logical, Point, Rectangle, Size};
-use smithay::wayland::seat::{keysyms, FilterResult, TouchHandle};
-use smithay::wayland::SERIAL_COUNTER;
+use smithay::utils::{Logical, Point, Rectangle, Size, SERIAL_COUNTER};
+use smithay::wayland::seat::TouchHandle;
 
 use crate::catacomb::Catacomb;
 use crate::config::APP_DRAWER;
@@ -308,7 +308,10 @@ impl Catacomb {
                 self.touch_state.events.retain(|touch_event| touch_event.slot != event.slot());
             },
             _ => (),
-        };
+        }
+
+        // Wakeup rendering.
+        self.unstall();
     }
 
     /// Handle new touch input start.
@@ -469,24 +472,29 @@ impl Catacomb {
 
     /// Handle new keyboard input events.
     fn on_keyboard_input<I: InputBackend>(&mut self, event: impl KeyboardKeyEvent<I>) {
+        let keyboard = match self.seat.get_keyboard() {
+            Some(keyboard) => keyboard,
+            None => return,
+        };
         let serial = SERIAL_COUNTER.next_serial();
         let time = Event::time(&event);
         let keycode = event.key_code();
         let state = event.state();
 
-        self.keyboard.input(&self.display_handle, keycode, state, serial, time, |_mods, keysym| {
+        keyboard.input(self, keycode, state, serial, time, |catacomb, _mods, keysym| {
             match (keysym.modified_sym(), state) {
                 (keysym @ keysyms::KEY_XF86Switch_VT_1..=keysyms::KEY_XF86Switch_VT_12, _) => {
                     let vt = (keysym - keysyms::KEY_XF86Switch_VT_1 + 1) as i32;
-                    self.backend.change_vt(vt);
+                    catacomb.backend.change_vt(vt);
                 },
                 (keysyms::KEY_XF86PowerOff, KeyState::Pressed) => {
-                    let id = self.button_state.next_id();
-                    self.button_state.power = Some(id);
+                    let id = catacomb.button_state.next_id();
+                    catacomb.button_state.power = Some(id);
 
                     // Open drawer if button is still held after timeout.
                     let timer = Timer::from_duration(BUTTON_HOLD_DURATION);
-                    self.event_loop
+                    catacomb
+                        .event_loop
                         .insert_source(timer, move |_, _, catacomb| {
                             // Ignore timer if button was released.
                             if catacomb.button_state.power != Some(id) {
@@ -509,20 +517,21 @@ impl Catacomb {
                 },
                 (keysyms::KEY_XF86PowerOff, KeyState::Released) => {
                     // Toggle screen DPMS status on short press.
-                    if self.button_state.power.take().is_some() {
-                        self.sleeping = !self.sleeping;
-                        self.backend.set_sleep(self.sleeping);
+                    if catacomb.button_state.power.take().is_some() {
+                        catacomb.sleeping = !catacomb.sleeping;
+                        catacomb.backend.set_sleep(catacomb.sleeping);
 
                         // Remove timer on wakeup or if it was already staged.
-                        if let Some(suspend_timer) = self.suspend_timer.take() {
-                            self.event_loop.remove(suspend_timer);
+                        if let Some(suspend_timer) = catacomb.suspend_timer.take() {
+                            catacomb.event_loop.remove(suspend_timer);
                         }
 
                         // Timeout after prolonged inactivity.
-                        if self.sleeping {
+                        if catacomb.sleeping {
                             let timer = Timer::from_duration(SUSPEND_TIMEOUT);
-                            self.suspend_timer = Some(
-                                self.event_loop
+                            catacomb.suspend_timer = Some(
+                                catacomb
+                                    .event_loop
                                     .insert_source(timer, |_, _, _| {
                                         suspend();
                                         TimeoutAction::Drop
