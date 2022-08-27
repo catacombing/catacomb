@@ -360,6 +360,15 @@ impl<S: Surface> Window<S> {
             |_, _, _| true,
         );
 
+        // Update damage if window moved within its bounds due to centering.
+        let new_size = self.geometry().size;
+        let old_size = self.texture_cache.size;
+        if let Some(damage) = self.damage.as_mut().filter(|_| new_size != old_size) {
+            let mut moved_damage = *damage;
+            moved_damage.loc += (old_size - new_size).to_physical(output.scale());
+            *damage = damage.merge(moved_damage);
+        }
+
         // Send initial configure after the first commit.
         if !self.initial_configure_sent {
             self.initial_configure_sent = true;
