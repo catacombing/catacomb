@@ -89,16 +89,18 @@ impl Layers {
     pub fn foreground_window_at(&self, position: Point<f64, Logical>) -> Option<&LayerWindow> {
         self.overlay
             .iter()
+            .rev()
             .find(|window| window.contains(position))
-            .or_else(|| self.top.iter().find(|window| window.contains(position)))
+            .or_else(|| self.top.iter().rev().find(|window| window.contains(position)))
     }
 
     /// Background window at the specified position.
     pub fn background_window_at(&self, position: Point<f64, Logical>) -> Option<&LayerWindow> {
         self.bottom
             .iter()
+            .rev()
             .find(|window| window.contains(position))
-            .or_else(|| self.background.iter().find(|window| window.contains(position)))
+            .or_else(|| self.background.iter().rev().find(|window| window.contains(position)))
     }
 
     /// Apply all pending transactional updates.
