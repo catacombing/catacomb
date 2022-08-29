@@ -320,10 +320,11 @@ impl<S: Surface> Window<S> {
         self.acked_size = self.surface.acked_size();
 
         // Handle surface buffer changes.
+        let mut new_surfaces = Vec::new();
         compositor::with_surface_tree_upward(
             surface,
             self.bounds().loc,
-            |_, data, location| {
+            |surface, data, location| {
                 // Compute absolute surface location.
                 let mut location = *location;
                 if data.role == Some("subsurface") {
@@ -339,11 +340,16 @@ impl<S: Surface> Window<S> {
                 };
 
                 // Store pending buffer updates.
-                data.data_map.insert_if_missing(|| RefCell::new(SurfaceBuffer::new()));
+                let is_new = data.data_map.insert_if_missing(|| RefCell::new(SurfaceBuffer::new()));
                 let mut buffer =
                     data.data_map.get::<RefCell<SurfaceBuffer>>().unwrap().borrow_mut();
                 buffer.update_buffer(&mut attributes, assignment, output.scale());
                 self.buffers_pending = true;
+
+                // Collect surfaces created in this commit.
+                if is_new {
+                    new_surfaces.push(surface.clone());
+                }
 
                 // Update window damage.
                 for mut damage in buffer.damage.drain_physical() {
@@ -359,6 +365,19 @@ impl<S: Surface> Window<S> {
             |_, _, _| (),
             |_, _, _| true,
         );
+
+        // Ensure buffer is cleaned up when surface dies.
+        //
+        // NOTE: This is necessary since the `SurfaceData` is never dropped by Smithay,
+        // even if the window is dead and no more references are held to it in
+        // Catacomb.
+        for surface in new_surfaces {
+            compositor::add_destruction_hook(&surface, |data| {
+                if let Some(data) = data.data_map.get::<RefCell<SurfaceBuffer>>() {
+                    *data.borrow_mut() = Default::default();
+                }
+            });
+        }
 
         // Update damage if window moved within its bounds due to centering.
         let new_size = self.geometry().size;

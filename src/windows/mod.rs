@@ -258,7 +258,7 @@ impl Windows {
         }
     }
 
-    /// Reap dead layer shell windows.
+    /// Stage dead layer shell windows for reaping.
     pub fn refresh_layers(&mut self) {
         self.transaction.get_or_insert(Transaction::new(self));
 
@@ -281,7 +281,7 @@ impl Windows {
         }
     }
 
-    /// Reap dead visible windows.
+    /// Stage dead visible windows for reaping.
     ///
     /// This will reorder and resize visible windows when any of them has died.
     pub fn refresh_visible(&mut self) {
