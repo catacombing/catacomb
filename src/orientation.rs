@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::LoopHandle;
 use smithay::utils::Transform;
@@ -184,7 +185,8 @@ impl AccelerometerSource for DummyAccelerometer {
 }
 
 /// Device orientation.
-#[derive(PartialEq, Eq, Copy, Clone, Debug)]
+#[derive(Deserialize, Serialize, PartialEq, Eq, Copy, Clone, Debug)]
+#[serde(rename_all = "kebab-case")]
 pub enum Orientation {
     /// Portrait mode.
     Portrait,
@@ -213,6 +215,23 @@ impl Orientation {
             Self::InversePortrait => Transform::_180,
             Self::Landscape => Transform::_90,
             Self::InverseLandscape => Transform::_270,
+        }
+    }
+}
+
+impl FromStr for Orientation {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "portrait" => Ok(Self::Portrait),
+            "inverse-portrait" => Ok(Self::InversePortrait),
+            "landscape" => Ok(Self::Landscape),
+            "inverse-landscape" => Ok(Self::InverseLandscape),
+            _ => Err(format!(
+                "Got {s:?}, expected one of portrait, inverse-portrait, landscape, or \
+                 inverse-landscape"
+            )),
         }
     }
 }

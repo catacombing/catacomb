@@ -51,11 +51,12 @@ use smithay::{
     delegate_xdg_shell,
 };
 
+use crate::daemon;
 use crate::drawing::MAX_DAMAGE_AGE;
 use crate::input::{PhysicalButtonState, TouchState};
 use crate::orientation::{Accelerometer, AccelerometerSource};
+use crate::udev::Udev;
 use crate::windows::Windows;
-use crate::{daemon, Udev};
 
 /// The script to run after compositor start.
 const POST_START_SCRIPT: &str = "post_start.sh";
@@ -67,6 +68,7 @@ pub struct Catacomb {
     pub button_state: PhysicalButtonState,
     pub display_handle: DisplayHandle,
     pub touch_state: TouchState,
+    pub socket_name: String,
     pub seat_name: String,
     pub windows: Windows,
     pub seat: Seat<Self>,
@@ -190,6 +192,7 @@ impl Catacomb {
             display_handle,
             dmabuf_state,
             touch_state,
+            socket_name,
             event_loop,
             seat_state,
             shm_state,
@@ -299,12 +302,12 @@ impl DmabufHandler for Catacomb {
         _global: &DmabufGlobal,
         buffer: Dmabuf,
     ) -> Result<(), ImportError> {
-        let output_device = match &mut self.backend.output_device {
+        let output_device = match self.backend.output() {
             Some(output_device) => output_device,
             None => return Err(ImportError::Failed),
         };
 
-        output_device.renderer.import_dmabuf(&buffer, None).map_err(|_| ImportError::Failed)?;
+        output_device.renderer().import_dmabuf(&buffer, None).map_err(|_| ImportError::Failed)?;
         Ok(())
     }
 }

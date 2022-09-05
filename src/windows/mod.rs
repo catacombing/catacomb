@@ -61,6 +61,9 @@ pub struct Windows {
     /// was rotated and there is an active transaction pending waiting for
     /// clients to submit new buffers.
     orientation: Orientation,
+    /// Orientation independent from [`orientation_locked`] state.
+    unlocked_orientation: Orientation,
+    orientation_locked: bool,
 
     /// Compositor damage beyond window-internal changes.
     fully_damaged: bool,
@@ -73,6 +76,8 @@ impl Windows {
             output: Output::new_dummy(display),
             start_time: Instant::now(),
             fully_damaged: true,
+            unlocked_orientation: Default::default(),
+            orientation_locked: Default::default(),
             orphan_popups: Default::default(),
             transaction: Default::default(),
             orientation: Default::default(),
@@ -431,12 +436,35 @@ impl Windows {
 
     /// Update output orientation.
     pub fn update_orientation(&mut self, orientation: Orientation) {
+        self.unlocked_orientation = orientation;
+
+        // Ignore orientation changes during orientation lock.
+        if self.orientation_locked {
+            return;
+        }
+
         self.output.set_orientation(orientation);
 
         let transaction = self.transaction.get_or_insert(Transaction::new(self));
         transaction.orientation = orientation;
 
         self.resize_all();
+    }
+
+    /// Lock the output's orientation.
+    pub fn lock_orientation(&mut self, orientation: Option<Orientation>) {
+        // Change to the new locked orientation.
+        if let Some(orientation) = orientation {
+            self.update_orientation(orientation);
+        }
+
+        self.orientation_locked = true;
+    }
+
+    /// Unlock the output's orientation.
+    pub fn unlock_orientation(&mut self) {
+        self.orientation_locked = false;
+        self.update_orientation(self.unlocked_orientation);
     }
 
     /// Get the current rendering orientation.
