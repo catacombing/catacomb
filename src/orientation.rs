@@ -5,10 +5,10 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+// Orientation is in IPC for our lib target, reexport here for a more sensible path.
+pub use catacomb_ipc::Orientation;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::LoopHandle;
-use smithay::utils::Transform;
 use udev::{Device, Enumerator};
 
 use crate::catacomb::Catacomb;
@@ -181,58 +181,6 @@ impl AccelerometerSource for DummyAccelerometer {
                 TimeoutAction::Drop
             })
             .expect("insert dummy orientation timer");
-    }
-}
-
-/// Device orientation.
-#[derive(Deserialize, Serialize, PartialEq, Eq, Copy, Clone, Debug)]
-#[serde(rename_all = "kebab-case")]
-pub enum Orientation {
-    /// Portrait mode.
-    Portrait,
-
-    // Inverse portrait mode.
-    InversePortrait,
-
-    /// Landscape mode.
-    Landscape,
-
-    /// Inverse landscape mode.
-    InverseLandscape,
-}
-
-impl Default for Orientation {
-    fn default() -> Self {
-        Orientation::Portrait
-    }
-}
-
-impl Orientation {
-    /// Display rendering transform for this orientation.
-    pub fn transform(&self) -> Transform {
-        match self {
-            Self::Portrait => Transform::Normal,
-            Self::InversePortrait => Transform::_180,
-            Self::Landscape => Transform::_90,
-            Self::InverseLandscape => Transform::_270,
-        }
-    }
-}
-
-impl FromStr for Orientation {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "portrait" => Ok(Self::Portrait),
-            "inverse-portrait" => Ok(Self::InversePortrait),
-            "landscape" => Ok(Self::Landscape),
-            "inverse-landscape" => Ok(Self::InverseLandscape),
-            _ => Err(format!(
-                "Got {s:?}, expected one of portrait, inverse-portrait, landscape, or \
-                 inverse-landscape"
-            )),
-        }
     }
 }
 

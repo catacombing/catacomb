@@ -31,7 +31,7 @@ use smithay::utils::signaling::{Linkable, SignalToken, Signaler};
 use smithay::wayland::output::{Mode, PhysicalProperties};
 
 use crate::catacomb::{Catacomb, Damage};
-use crate::ipc;
+use crate::ipc_server;
 use crate::output::Output;
 use crate::windows::Windows;
 
@@ -85,7 +85,8 @@ pub fn run() {
         .expect("insert udev source");
 
     // Start IPC socket listener.
-    ipc::spawn_ipc_socket(event_loop.handle(), &catacomb.socket_name).expect("spawn IPC socket");
+    ipc_server::spawn_ipc_socket(event_loop.handle(), &catacomb.socket_name)
+        .expect("spawn IPC socket");
 
     // Continously dispatch event loop.
     loop {

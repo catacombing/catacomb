@@ -1,39 +1,23 @@
-//! IPC socket communication.
+//! IPC socket server.
 
 use std::error::Error;
-use std::io::{BufRead, BufReader, Write};
+use std::fs;
+use std::io::{BufRead, BufReader};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
-use std::{env, fs, process};
 
-use clap::Subcommand;
-use serde::{Deserialize, Serialize};
+use catacomb_ipc::{self, IpcMessage};
 use smithay::reexports::calloop::LoopHandle;
 
 use crate::catacomb::Catacomb;
-use crate::orientation::Orientation;
 use crate::socket::SocketSource;
-
-/// IPC message format.
-#[derive(Subcommand, Deserialize, Serialize, Debug)]
-pub enum IpcMessage {
-    /// Screen rotation (un)locking.
-    Orientation {
-        /// Lock rotation in the specified orientation.
-        #[clap(long, min_values = 0, conflicts_with = "unlock")]
-        lock: Option<Orientation>,
-        /// Clear screen rotation lock.
-        #[clap(long)]
-        unlock: bool,
-    },
-}
 
 /// Create an IPC socket.
 pub fn spawn_ipc_socket(
     event_loop: LoopHandle<'static, Catacomb>,
     socket_name: &str,
 ) -> Result<PathBuf, Box<dyn Error>> {
-    let socket_path = socket_path(socket_name);
+    let socket_path = catacomb_ipc::socket_path(socket_name);
 
     // Try to delete the socket if it exists already.
     if socket_path.exists() {
@@ -51,33 +35,6 @@ pub fn spawn_ipc_socket(
     })?;
 
     Ok(socket_path)
-}
-
-/// Send a message to the Catacomb IPC socket.
-pub fn send_message(message: IpcMessage) -> Result<(), Box<dyn Error>> {
-    let socket_name = match env::var("WAYLAND_DISPLAY") {
-        Ok(socket_name) => socket_name,
-        Err(_) => {
-            eprintln!("Error: WAYLAND_DISPLAY is not set");
-            process::exit(101);
-        },
-    };
-
-    let socket_path = socket_path(&socket_name);
-
-    // Ensure Catacomb's IPC listener is running.
-    if !socket_path.exists() {
-        eprintln!("Error: IPC socket not found, ensure Catacomb is running");
-        process::exit(102);
-    }
-
-    let mut socket = UnixStream::connect(&socket_path)?;
-
-    let message = serde_json::to_string(&message)?;
-    socket.write_all(message[..].as_bytes())?;
-    let _ = socket.flush();
-
-    Ok(())
 }
 
 /// Handle IPC socket messages.
@@ -103,9 +60,4 @@ fn handle_message(buffer: &mut String, stream: UnixStream, catacomb: &mut Cataco
             catacomb.windows.lock_orientation(orientation);
         },
     }
-}
-
-/// Path for the IPC socket file.
-fn socket_path(socket_name: &str) -> PathBuf {
-    dirs::runtime_dir().unwrap_or_else(env::temp_dir).join(format!("catacomb-{socket_name}.sock"))
 }

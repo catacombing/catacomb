@@ -63,6 +63,7 @@ dependencies = [
 name = "catacomb"
 version = "0.1.0"
 dependencies = [
+ "catacomb_ipc",
  "clap",
  "dirs",
  "libc",
@@ -70,6 +71,17 @@ dependencies = [
  "serde_json",
  "smithay",
  "udev",
+]
+
+[[package]]
+name = "catacomb_ipc"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "dirs",
+ "serde",
+ "serde_json",
+ "smithay",
 ]
 
 [[package]]
