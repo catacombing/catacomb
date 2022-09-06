@@ -1,15 +1,12 @@
 [package]
-name = "catacomb"
+name = "catacomb_ipc"
 version = "0.1.0"
-description = "A Wayland mobile compositor"
+description = "Catacomb IPC interface"
 authors = ["Christian Duerr <contact@christianduerr.com>"]
 homepage = "https://github.com/chrisduerr/catacomb"
 rust-version = "1.59.0"
 license = "GPL-3.0"
 edition = "2021"
-
-[workspace]
-members = ["catacomb_ipc"]
 
 [dependencies.smithay]
 git = "https://github.com/chrisduerr/smithay"
@@ -26,18 +23,15 @@ features = [
     "renderer_multi",
     "slog-stdlog"
 ]
-
+optional = true
 
 [dependencies]
-catacomb_ipc = { version = "0.1.0", path = "./catacomb_ipc", features = ["clap", "smithay"] }
+clap = { version = "3.2.19", features = ["derive"], optional = true }
 serde = { version = "1.0.144", features = ["derive"] }
-clap = { version = "3.2.19", features = ["derive"] }
 serde_json = "1.0.85"
-libc = "0.2.123"
 dirs = "4.0.0"
-udev = "0.6.2"
 
 [features]
-default = ["systemd"]
-libseat = ["smithay/backend_session_libseat"]
-systemd = ["smithay/backend_session_logind"]
+default = []
+clap = ["dep:clap"]
+smithay = ["dep:smithay"]

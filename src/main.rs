@@ -1,6 +1,5 @@
+use catacomb_ipc::IpcMessage;
 use clap::{self, Parser, Subcommand};
-
-use crate::ipc::IpcMessage;
 
 mod catacomb;
 mod config;
@@ -8,7 +7,7 @@ mod daemon;
 mod drawing;
 mod geometry;
 mod input;
-mod ipc;
+mod ipc_server;
 mod layer;
 mod orientation;
 mod output;
@@ -34,7 +33,7 @@ pub enum Subcommands {
 
 pub fn main() {
     match Options::parse().subcommands {
-        Some(Subcommands::Msg(msg)) => ipc::send_message(msg).expect("send IPC message"),
+        Some(Subcommands::Msg(msg)) => catacomb_ipc::send_message(msg).expect("send IPC message"),
         None => udev::run(),
     }
 }
