@@ -13,7 +13,7 @@ use smithay::wayland::compositor::{
     self, SubsurfaceCachedState, SurfaceAttributes, SurfaceData, TraversalAction,
 };
 use smithay::wayland::shell::wlr_layer::{
-    Anchor, ExclusiveZone, KeyboardInteractivity, LayerSurfaceCachedState,
+    Anchor, ExclusiveZone, KeyboardInteractivity, Layer, LayerSurfaceCachedState,
 };
 use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface, XdgPopupSurfaceRoleAttributes};
 
@@ -525,7 +525,12 @@ impl Window<CatacombLayerSurface> {
         let state = compositor::with_states(self.surface.surface(), |states| {
             *states.cached_state.current::<LayerSurfaceCachedState>()
         });
-        let output_size = output.size();
+
+        // Exclude gesture handle from Top/Overlay window size.
+        let output_size = match state.layer {
+            Layer::Background | Layer::Bottom => output.size(),
+            Layer::Top | Layer::Overlay => output.wm_size(),
+        };
         let mut size = state.size;
 
         let exclusive = match state.exclusive_zone {
@@ -580,7 +585,7 @@ impl Window<CatacombLayerSurface> {
         let old_exclusive = mem::replace(&mut self.surface.exclusive_zone, state.exclusive_zone);
         let old_anchor = mem::replace(&mut self.surface.anchor, state.anchor);
         output.exclusive.reset(old_anchor, old_exclusive);
-        output.exclusive.update(state.anchor, state.exclusive_zone);
+        output.exclusive.update(state.anchor, state.exclusive_zone, state.layer);
     }
 }
 

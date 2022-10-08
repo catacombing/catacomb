@@ -8,8 +8,6 @@ use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Event, InputBackend, InputEvent, KeyState,
     KeyboardKeyEvent, MouseButton, PointerButtonEvent, TouchEvent as _, TouchSlot,
 };
-#[cfg(feature = "winit")]
-use smithay::backend::winit::WinitEvent;
 use smithay::input::keyboard::{keysyms, FilterResult};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
@@ -19,7 +17,7 @@ use smithay::wayland::seat::TouchHandle;
 use crate::catacomb::Catacomb;
 use crate::config::APP_DRAWER;
 use crate::orientation::Orientation;
-use crate::output::Output;
+use crate::output::{Output, GESTURE_HANDLE_HEIGHT};
 use crate::windows::surface::OffsetSurface;
 
 /// Time before a tap is considered a hold.
@@ -27,15 +25,6 @@ pub const HOLD_DURATION: Duration = Duration::from_secs(1);
 
 /// Time before button press is considered a hold.
 const BUTTON_HOLD_DURATION: Duration = Duration::from_millis(500);
-
-/// Accepted overview gesture deviation in pixels at scale 1.
-const OVERVIEW_GESTURE_ACCURACY: f64 = 60.;
-
-/// Accepted home gesture deviation in pixels at scale 1.
-const HOME_GESTURE_ACCURACY: f64 = 30.;
-
-/// Home gesture distance from the output edges.
-const HOME_WIDTH_PERCENTAGE: f64 = 0.25;
 
 /// Maximum distance before touch input is considered a drag.
 const MAX_TAP_DISTANCE: f64 = 20.;
@@ -111,17 +100,13 @@ impl TouchState {
     }
 
     /// Get the updated active touch action.
-    fn action(&mut self, output: &Output, overview_active: bool) -> Option<TouchAction> {
+    fn action(&mut self, output: &Output) -> Option<TouchAction> {
         let output_size = output.size().to_f64();
         let touching = self.touching();
-        match self.start.gesture {
-            Some(Gesture::Overview) if overview_active => (),
-            Some(gesture) => {
-                if !touching && gesture.end_rect(output_size).contains(self.position) {
-                    return Some(TouchAction::Gesture(gesture));
-                }
-            },
-            _ => (),
+        if let Some(gesture) = self.start.gesture {
+            if !touching && gesture.end_rect(output_size).contains(self.position) {
+                return Some(TouchAction::Gesture(gesture));
+            }
         }
 
         // Convert to drag as soon as distance/time was exceeded once.
@@ -168,32 +153,24 @@ enum TouchAction {
 /// Touch gestures.
 #[derive(Debug, Copy, Clone)]
 pub enum Gesture {
-    Overview,
-    Home,
+    DragUp,
 }
 
 impl Gesture {
     /// Create a gesture from its starting location.
     fn from_start(output: &Output, position: Point<f64, Logical>) -> Option<Self> {
-        let match_gesture =
-            |gesture: Gesture| gesture.start_rect(output).contains(position).then(|| gesture);
-        match_gesture(Gesture::Overview).or_else(|| match_gesture(Gesture::Home))
+        [Gesture::DragUp]
+            .iter()
+            .find_map(|gesture| gesture.start_rect(output).contains(position).then(|| *gesture))
     }
 
     /// Touch area expected for gesture initiation.
     fn start_rect(&self, output: &Output) -> Rectangle<f64, Logical> {
-        let output_size = output.size().to_f64();
         match self {
-            Gesture::Overview => {
-                let accuracy = OVERVIEW_GESTURE_ACCURACY / output.scale() as f64;
-                let loc = (output_size.w - accuracy, output_size.h - accuracy);
+            Gesture::DragUp => {
+                let output_size = output.size().to_f64();
+                let loc = (0., output_size.h - GESTURE_HANDLE_HEIGHT as f64);
                 Rectangle::from_loc_and_size(loc, output_size)
-            },
-            Gesture::Home => {
-                let accuracy = HOME_GESTURE_ACCURACY / output.scale() as f64;
-                let loc = (output_size.w * HOME_WIDTH_PERCENTAGE, output_size.h - accuracy);
-                let size = (output_size.w - 2. * loc.0, output_size.h);
-                Rectangle::from_loc_and_size(loc, size)
             },
         }
     }
@@ -201,8 +178,7 @@ impl Gesture {
     /// Touch area expected for gesture completion.
     fn end_rect(&self, output_size: Size<f64, Logical>) -> Rectangle<f64, Logical> {
         let size = match self {
-            Gesture::Overview => (output_size.w * 0.75, output_size.h * 0.75),
-            Gesture::Home => (output_size.w, output_size.h * 0.75),
+            Gesture::DragUp => (output_size.w, output_size.h * 0.75),
         };
         Rectangle::from_loc_and_size((0., 0.), size)
     }
@@ -249,6 +225,7 @@ impl Catacomb {
     /// Process device orientation changes.
     pub fn handle_orientation(&mut self, orientation: Orientation) {
         self.windows.update_orientation(orientation);
+        self.unstall();
     }
 
     /// Process new input events.
@@ -320,10 +297,7 @@ impl Catacomb {
         let surface = self.windows.touch_surface_at(event.position);
 
         // Notify client.
-        let mut layer_touched = false;
-        if let Some(OffsetSurface { surface, offset, is_layer }) = surface {
-            layer_touched = is_layer;
-
+        if let Some(OffsetSurface { surface, offset }) = surface {
             let serial = SERIAL_COUNTER.next_serial();
             self.touch_state.touch.down(serial, time, &surface, offset, slot, position);
         }
@@ -336,11 +310,6 @@ impl Catacomb {
 
         // Initialize the touch state.
         self.touch_state.start(&self.windows.output, position);
-
-        // Inhibit gestures started above layer shell surfaces.
-        if layer_touched {
-            self.touch_state.start.gesture = None;
-        }
 
         // Only send touch start if there's no gesture in progress.
         if self.touch_state.start.gesture.is_none() {
@@ -360,8 +329,7 @@ impl Catacomb {
         }
         self.touch_state.slot = None;
 
-        let overview_active = self.windows.overview_active();
-        match self.touch_state.action(&self.windows.output, overview_active) {
+        match self.touch_state.action(&self.windows.output) {
             Some(TouchAction::Tap) => {
                 self.windows.on_tap(self.touch_state.position);
             },
@@ -393,8 +361,7 @@ impl Catacomb {
     /// them instead of creating a loop which continuously triggers these
     /// actions.
     fn update_position(&mut self, position: Point<f64, Logical>) {
-        let overview_active = self.windows.overview_active();
-        match self.touch_state.action(&self.windows.output, overview_active) {
+        match self.touch_state.action(&self.windows.output) {
             Some(TouchAction::Drag) => {
                 self.windows.on_drag(&mut self.touch_state, position);
 
@@ -441,6 +408,9 @@ impl Catacomb {
 
         // Generate motion events.
         self.update_position(self.touch_state.position);
+
+        // Ensure updates are rendered.
+        self.unstall();
 
         // Schedule another velocity tick.
         if self.touch_state.has_velocity() {

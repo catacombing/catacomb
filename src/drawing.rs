@@ -102,7 +102,7 @@ impl Texture {
                     height,
                     0,
                     ffi::RGBA,
-                    ffi::UNSIGNED_BYTE as u32,
+                    ffi::UNSIGNED_BYTE,
                     buffer.as_ptr() as *const _,
                 );
                 gl.BindTexture(ffi::TEXTURE_2D, 0);
@@ -269,7 +269,7 @@ impl Graphics {
         let title_height = Self::title_height();
         let border_width = Self::border_width();
 
-        let window_size = output.available().size.scale(FG_OVERVIEW_PERCENTAGE);
+        let window_size = output.available_overview().size.scale(FG_OVERVIEW_PERCENTAGE);
         let width = window_size.w + border_width * 2;
         let height = window_size.h + title_height + border_width;
 

@@ -187,11 +187,10 @@ impl Surface for CatacombLayerSurface {
 pub struct OffsetSurface {
     pub offset: Point<i32, Logical>,
     pub surface: WlSurface,
-    pub is_layer: bool,
 }
 
 impl OffsetSurface {
     pub fn new(surface: WlSurface, offset: Point<i32, Logical>) -> Self {
-        Self { surface, offset, is_layer: false }
+        Self { surface, offset }
     }
 }

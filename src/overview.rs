@@ -88,7 +88,7 @@ impl Overview {
 
     /// Focused window bounds.
     pub fn focused_bounds(&self, output: &Output, window_count: usize) -> Rectangle<i32, Logical> {
-        let available = output.available();
+        let available = output.available_overview();
         let window_size = available.size.scale(FG_OVERVIEW_PERCENTAGE);
         let x = overview_x_position(
             FG_OVERVIEW_PERCENTAGE,
@@ -158,7 +158,7 @@ impl Overview {
         let pos_iter = (min_inc.max(0)..max_exc).zip(-min_inc.min(0)..window_count).rev();
 
         // Maximum window size. Bigger windows will be truncated.
-        let available = output.available();
+        let available = output.available_overview();
         let max_size = available.size.scale(FG_OVERVIEW_PERCENTAGE);
 
         // Window decoration.
@@ -178,8 +178,9 @@ impl Overview {
                 available.size.w,
                 max_size.w,
                 position as f64 - self.x_offset.fract().round() + self.x_offset.fract(),
-            ) - border_width;
-            bounds.loc.y += (available.size.h - max_size.h + title_height + border_width) / 2;
+            );
+            bounds.loc.y +=
+                (available.size.h - max_size.h - border_width - title_height) / 2 + title_height;
 
             // Offset windows in the process of being closed.
             if position == min_inc.max(0) {
@@ -199,7 +200,7 @@ impl Overview {
 
     /// Check if the active window has exceeded the minimum close distance.
     pub fn should_close(&self, output: &Output) -> bool {
-        let close_distance = output.available().size.h as f64 * OVERVIEW_CLOSE_DISTANCE;
+        let close_distance = output.available_overview().size.h as f64 * OVERVIEW_CLOSE_DISTANCE;
         self.y_offset.abs() >= close_distance
     }
 
@@ -248,7 +249,7 @@ impl DragAndDrop {
         windows: &[Rc<RefCell<Window>>],
         graphics: &mut Graphics,
     ) {
-        let available = output.available();
+        let available = output.available_overview();
         let border_width = Graphics::border_width();
         let title_height = Graphics::title_height();
 
@@ -308,7 +309,7 @@ impl DragAndDrop {
         &self,
         output: &Output,
     ) -> (Rectangle<i32, Logical>, Rectangle<i32, Logical>) {
-        let available = output.available();
+        let available = output.available_overview();
         if available.size.h > available.size.w {
             let dnd_height = (available.size.h as f64 * DRAG_AND_DROP_PERCENTAGE).round() as i32;
             let size = Size::from((available.size.w, dnd_height));

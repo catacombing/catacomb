@@ -6,13 +6,14 @@ use std::mem;
 use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 
+use smithay::backend::renderer::gles2::ffi::{self as gl, Gles2};
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
 use smithay::backend::renderer::Frame;
 use smithay::reexports::calloop::LoopHandle;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::DisplayHandle;
-use smithay::utils::{Logical, Point, Rectangle};
+use smithay::utils::{Logical, Physical, Point, Rectangle};
 use smithay::wayland::compositor;
 use smithay::wayland::shell::wlr_layer::Layer;
 use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface};
@@ -22,7 +23,7 @@ use crate::drawing::{Graphics, MAX_DAMAGE_AGE};
 use crate::input::{Gesture, TouchState};
 use crate::layer::Layers;
 use crate::orientation::Orientation;
-use crate::output::Output;
+use crate::output::{Output, GESTURE_HANDLE_HEIGHT};
 use crate::overview::{Direction, DragAndDrop, Overview};
 use crate::windows::surface::{CatacombLayerSurface, OffsetSurface, Surface};
 use crate::windows::window::Window;
@@ -30,11 +31,20 @@ use crate::windows::window::Window;
 pub mod surface;
 pub mod window;
 
+/// Maximum time before a transaction is cancelled.
+const MAX_TRANSACTION_DURATION: Duration = Duration::from_secs(1);
+
 /// Horizontal sensitivity of the application overview.
 const OVERVIEW_HORIZONTAL_SENSITIVITY: f64 = 250.;
 
-/// Maximum time before a transaction is cancelled.
-const MAX_TRANSACTION_DURATION: Duration = Duration::from_secs(1);
+/// Relative size of gesture notch to the handle's whole width/height.
+const GESTURE_NOTCH_PERCENTAGE: f64 = 0.2;
+
+/// Gesture handle foreground color.
+const GESTURE_HANDLE_NOTCH_COLOR: [f32; 4] = [1., 1., 1., 1.];
+
+/// Gesture handle background color.
+const GESTURE_HANDLE_COLOR: [f32; 4] = [0., 0., 0., 1.];
 
 /// Container tracking all known clients.
 #[derive(Debug)]
@@ -251,7 +261,65 @@ impl Windows {
             },
         }
 
-        self.layers.draw_foreground(renderer, frame, &self.output, damage);
+        let workspace_active = self.view == View::Workspace;
+        self.layers.draw_foreground(renderer, frame, &self.output, damage, workspace_active);
+
+        // Draw gesture handle in workspace view.
+        let _ = renderer.with_context(|_, gl| unsafe {
+            self.draw_gesture_handle(gl, damage);
+        });
+    }
+
+    /// Draw the gesture handle.
+    unsafe fn draw_gesture_handle(&self, gl: &Gles2, damage: &[Rectangle<i32, Physical>]) {
+        let handle_height = GESTURE_HANDLE_HEIGHT * self.output.scale();
+        let output_size = self.output.physical_resolution();
+
+        // Calculate handle rectangle.
+        let (handle_loc, handle_size) = match self.output.orientation() {
+            Orientation::Portrait => {
+                ((0, output_size.h - handle_height), (output_size.w, handle_height))
+            },
+            Orientation::InversePortrait => ((0, 0), (output_size.w, handle_height)),
+            Orientation::Landscape => ((0, 0), (handle_height, output_size.h)),
+            Orientation::InverseLandscape => {
+                ((output_size.w - handle_height, 0), (handle_height, output_size.h))
+            },
+        };
+        let handle_rect = Rectangle::from_loc_and_size(handle_loc, handle_size);
+
+        // Skip rendering without damage.
+        if damage.iter().all(|damage| !damage.overlaps(handle_rect)) {
+            return;
+        }
+
+        gl.Enable(gl::SCISSOR_TEST);
+
+        // Draw Background.
+        gl.Scissor(handle_rect.loc.x, handle_rect.loc.y, handle_rect.size.w, handle_rect.size.h);
+        gl.ClearColor(
+            GESTURE_HANDLE_COLOR[0],
+            GESTURE_HANDLE_COLOR[1],
+            GESTURE_HANDLE_COLOR[2],
+            GESTURE_HANDLE_COLOR[3],
+        );
+        gl.Clear(gl::COLOR_BUFFER_BIT);
+
+        // Draw handle notch.
+        let notch_height = (handle_rect.size.h as f64 * GESTURE_NOTCH_PERCENTAGE) as i32;
+        let notch_width = (handle_rect.size.w as f64 * GESTURE_NOTCH_PERCENTAGE) as i32;
+        let notch_x = handle_rect.loc.x + (handle_rect.size.w - notch_width) / 2;
+        let notch_y = handle_rect.loc.y + (handle_rect.size.h - notch_height) / 2;
+        gl.Scissor(notch_x, notch_y, notch_width, notch_height);
+        gl.ClearColor(
+            GESTURE_HANDLE_NOTCH_COLOR[0],
+            GESTURE_HANDLE_NOTCH_COLOR[1],
+            GESTURE_HANDLE_NOTCH_COLOR[2],
+            GESTURE_HANDLE_NOTCH_COLOR[3],
+        );
+        gl.Clear(gl::COLOR_BUFFER_BIT);
+
+        gl.Disable(gl::SCISSOR_TEST);
     }
 
     /// Request new frames for all visible windows.
@@ -320,11 +388,6 @@ impl Windows {
 
     /// Current window focus.
     pub fn focus(&mut self) -> Option<WlSurface> {
-        // Clear focus outside of workspace view.
-        if let View::Overview(_) | View::DragAndDrop(_) = self.view {
-            return None;
-        }
-
         // Check for layer-shell window focus.
         if let Some(surface) = &self.focus.layer {
             return Some(surface.clone());
@@ -530,9 +593,13 @@ impl Windows {
             if self.primary.strong_count() > 0 {
                 self.set_secondary(None);
             }
-
-            self.set_view(View::Workspace);
         }
+
+        // Return to workspace view.
+        //
+        // If the click was outside of the focused window, we just close out of the
+        // Overview and return to the previous primary/secondary windows.
+        self.set_view(View::Workspace);
     }
 
     /// Handle a touch drag.
@@ -541,7 +608,7 @@ impl Windows {
             View::Overview(overview) => overview,
             View::DragAndDrop(dnd) => {
                 // Cancel velocity and clamp if touch position is outside the screen.
-                let output_size = self.output.size().to_f64();
+                let output_size = self.output.wm_size().to_f64();
                 if point.x < 0.
                     || point.x > output_size.w
                     || point.y < 0.
@@ -632,16 +699,16 @@ impl Windows {
     /// Handle touch gestures.
     pub fn on_gesture(&mut self, gesture: Gesture) {
         match (gesture, self.view) {
-            (Gesture::Overview, _) if !self.windows.is_empty() => {
-                self.set_view(View::Overview(Overview::default()));
-            },
-            (Gesture::Home, View::Workspace) => {
+            (Gesture::DragUp, View::Overview(_)) => {
+                self.focus.toplevel = Weak::new();
                 self.set_secondary(None);
                 self.set_primary(None);
                 self.set_view(View::Workspace);
             },
-            (Gesture::Home, View::Overview(_)) => self.set_view(View::Workspace),
-            _ => (),
+            (Gesture::DragUp, _) if !self.windows.is_empty() => {
+                self.set_view(View::Overview(Overview::default()));
+            },
+            (Gesture::DragUp, _) => (),
         }
     }
 
@@ -663,10 +730,7 @@ impl Windows {
             if !window.deny_focus {
                 self.focus.layer = Some(window.surface().clone());
             }
-            return window.surface_at(position).map(|mut surface| {
-                surface.is_layer = true;
-                surface
-            });
+            return window.surface_at(position);
         }
 
         for window in self.primary.upgrade().iter().chain(&self.secondary.upgrade()) {
@@ -681,10 +745,7 @@ impl Windows {
             if !window.deny_focus {
                 self.focus.layer = Some(window.surface().clone());
             }
-            return window.surface_at(position).map(|mut surface| {
-                surface.is_layer = true;
-                surface
-            });
+            return window.surface_at(position);
         }
 
         // Unfocus when touching outside of window bounds.
@@ -696,11 +757,6 @@ impl Windows {
     /// Application runtime.
     pub fn runtime(&self) -> u32 {
         self.start_time.elapsed().as_millis() as u32
-    }
-
-    /// Check if the overview is currently visible.
-    pub fn overview_active(&self) -> bool {
-        matches!(self.view, View::Overview(_))
     }
 
     /// Change the active view.

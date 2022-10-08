@@ -1,5 +1,6 @@
 //! Output region handling.
 
+use std::ops::{Add, Deref, Sub};
 use std::time::Duration;
 
 use smithay::reexports::wayland_server::backend::GlobalId;
@@ -8,10 +9,13 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::utils::{Logical, Physical, Rectangle, Size, Transform};
 use smithay::wayland::output::{Mode, Output as SmithayOutput, PhysicalProperties, Scale};
-use smithay::wayland::shell::wlr_layer::{Anchor, ExclusiveZone};
+use smithay::wayland::shell::wlr_layer::{Anchor, ExclusiveZone, Layer};
 
 use crate::catacomb::Catacomb;
 use crate::orientation::Orientation;
+
+/// Height at bottom of the screen reserved for gestures at scale factor 1.
+pub const GESTURE_HANDLE_HEIGHT: i32 = 15;
 
 /// Use a fixed output scale.
 const SCALE: i32 = 2;
@@ -141,19 +145,48 @@ impl Output {
         }
     }
 
+    /// Size available for windowing.
+    ///
+    /// This is the size available for window placement, excluding area reserved
+    /// for compositor controls.
+    pub fn wm_size(&self) -> Size<i32, Logical> {
+        let mut size = self.size();
+        size.h -= GESTURE_HANDLE_HEIGHT;
+        size
+    }
+
     /// Area of the output not reserved for layer shell windows.
     pub fn available(&self) -> Rectangle<i32, Logical> {
-        let loc = (self.exclusive.left, self.exclusive.top);
-        let mut size = self.size();
-        size.w -= self.exclusive.left + self.exclusive.right;
-        size.h -= self.exclusive.top + self.exclusive.bottom;
+        let loc = (*self.exclusive.left, *self.exclusive.top);
+        let mut size = self.wm_size();
+        size.w -= *self.exclusive.left + self.exclusive.right;
+        size.h -= *self.exclusive.top + self.exclusive.bottom;
         Rectangle::from_loc_and_size(loc, size)
     }
 
-    /// Resize the output.
-    #[cfg(feature = "winit")]
-    pub fn resize(&mut self, size: Size<i32, Physical>) {
-        self.mode.size = size;
+    /// Area of the output available in the application overview.
+    ///
+    /// This excludes foreground layer shell windows, since these are hidden
+    /// while the overview is active.
+    pub fn available_overview(&self) -> Rectangle<i32, Logical> {
+        let reserved = |exclusivity| match exclusivity {
+            Exclusivity::Foreground(_) => 0,
+            Exclusivity::Background(reserved) => reserved,
+        };
+
+        // Get reserved space on the background layers.
+        let (top, right, bottom, left) = (
+            reserved(self.exclusive.top),
+            reserved(self.exclusive.right),
+            reserved(self.exclusive.bottom),
+            reserved(self.exclusive.left),
+        );
+
+        let loc = (left, top);
+        let mut size = self.wm_size();
+        size.w -= left + right;
+        size.h -= top + bottom;
+        Rectangle::from_loc_and_size(loc, size)
     }
 
     /// Duration between frames in milliseconds.
@@ -194,35 +227,91 @@ impl Output {
 /// Output space reserved by layer shell surfaces.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct ExclusiveSpace {
-    pub top: i32,
-    pub right: i32,
-    pub bottom: i32,
-    pub left: i32,
+    pub top: Exclusivity,
+    pub right: Exclusivity,
+    pub bottom: Exclusivity,
+    pub left: Exclusivity,
 }
 
 impl ExclusiveSpace {
     /// Update the exclusive space.
-    pub fn update(&mut self, anchor: Anchor, zone: ExclusiveZone) {
+    pub fn update(&mut self, anchor: Anchor, zone: ExclusiveZone, layer: Layer) {
         let reserved = match zone {
             ExclusiveZone::Exclusive(reserved) => reserved,
             _ => return,
         };
 
         if anchor == Anchor::TOP || anchor == !Anchor::BOTTOM {
-            self.top = reserved as i32;
+            self.top = Exclusivity::from_layer(layer, reserved as i32);
         } else if anchor == Anchor::LEFT || anchor == !Anchor::RIGHT {
-            self.left = reserved as i32;
+            self.left = Exclusivity::from_layer(layer, reserved as i32);
         } else if anchor == Anchor::BOTTOM || anchor == !Anchor::TOP {
-            self.bottom = reserved as i32;
+            self.bottom = Exclusivity::from_layer(layer, reserved as i32);
         } else if anchor == Anchor::RIGHT || anchor == !Anchor::LEFT {
-            self.right = reserved as i32;
+            self.right = Exclusivity::from_layer(layer, reserved as i32);
         }
     }
 
     /// Revert the exclusive zone created with the supplied parameters.
     pub fn reset(&mut self, anchor: Anchor, zone: ExclusiveZone) {
         if let ExclusiveZone::Exclusive(_) = zone {
-            self.update(anchor, ExclusiveZone::Exclusive(0));
+            self.update(anchor, ExclusiveZone::Exclusive(0), Layer::Bottom);
+        }
+    }
+}
+
+/// Type of exclusive space reservation.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Exclusivity {
+    Foreground(i32),
+    Background(i32),
+}
+
+impl Default for Exclusivity {
+    fn default() -> Self {
+        Self::Background(0)
+    }
+}
+
+impl Exclusivity {
+    fn from_layer(layer: Layer, reserved: i32) -> Self {
+        match layer {
+            Layer::Bottom | Layer::Background => Self::Background(reserved),
+            Layer::Top | Layer::Overlay => Self::Foreground(reserved),
+        }
+    }
+}
+
+impl Add<Exclusivity> for i32 {
+    type Output = i32;
+
+    fn add(self, exclusivity: Exclusivity) -> Self::Output {
+        match exclusivity {
+            Exclusivity::Background(reserved) | Exclusivity::Foreground(reserved) => {
+                self + reserved
+            },
+        }
+    }
+}
+
+impl Sub<Exclusivity> for i32 {
+    type Output = i32;
+
+    fn sub(self, exclusivity: Exclusivity) -> Self::Output {
+        match exclusivity {
+            Exclusivity::Background(reserved) | Exclusivity::Foreground(reserved) => {
+                self - reserved
+            },
+        }
+    }
+}
+
+impl Deref for Exclusivity {
+    type Target = i32;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Exclusivity::Background(reserved) | Exclusivity::Foreground(reserved) => reserved,
         }
     }
 }
