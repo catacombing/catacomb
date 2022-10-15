@@ -1,6 +1,7 @@
 //! Catacomb compositor state.
 
 use std::cell::RefCell;
+use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::{env, io, mem};
@@ -51,7 +52,6 @@ use smithay::{
     delegate_xdg_shell,
 };
 
-use crate::daemon;
 use crate::drawing::MAX_DAMAGE_AGE;
 use crate::input::{PhysicalButtonState, TouchState};
 use crate::orientation::{Accelerometer, AccelerometerSource};
@@ -95,8 +95,18 @@ pub struct Catacomb {
     last_focus: Option<WlSurface>,
     damage: Damage,
 
+    post_start_child: Option<Child>,
+
     // NOTE: Must be last field to ensure it's dropped after any global.
     pub display: Rc<RefCell<Display<Self>>>,
+}
+
+impl Drop for Catacomb {
+    fn drop(&mut self) {
+        if let Some(mut post_start_child) = self.post_start_child.take() {
+            let _ = post_start_child.kill();
+        }
+    }
 }
 
 impl Catacomb {
@@ -174,11 +184,23 @@ impl Catacomb {
         });
 
         // Run user startup script.
-        if let Some(mut script_path) = dirs::config_dir() {
+        let post_start_child = dirs::config_dir().and_then(|mut script_path| {
             script_path.push("catacomb");
             script_path.push(POST_START_SCRIPT);
-            let _ = daemon::spawn(script_path.as_os_str(), []);
-        }
+
+            let mut child = Command::new(script_path.as_os_str());
+            child.stdin(Stdio::null());
+            child.stdout(Stdio::null());
+            child.stderr(Stdio::null());
+
+            match child.spawn() {
+                Ok(child) => Some(child),
+                Err(err) => {
+                    eprintln!("Unable to launch {script_path:?}: {err}");
+                    None
+                },
+            }
+        });
 
         // Create window manager.
         let windows = Windows::new(&display_handle, event_loop.clone());
@@ -187,6 +209,7 @@ impl Catacomb {
             kde_decoration_state,
             layer_shell_state,
             data_device_state,
+            post_start_child,
             compositor_state,
             xdg_shell_state,
             display_handle,
