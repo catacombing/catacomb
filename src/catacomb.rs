@@ -126,7 +126,7 @@ impl Catacomb {
 
         // Log and set `WAYLAND_DISPLAY` for children.
         env::set_var("WAYLAND_DISPLAY", &socket_name);
-        println!("Wayland socket: {}", socket_name);
+        println!("Wayland socket: {socket_name}");
 
         // Register display event source.
         event_loop

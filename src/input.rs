@@ -543,6 +543,6 @@ impl Catacomb {
 /// Suspend to RAM.
 fn suspend() {
     if let Err(err) = fs::write("/sys/power/state", "mem") {
-        eprintln!("Failed suspending to RAM: {}", err);
+        eprintln!("Failed suspending to RAM: {err}");
     }
 }

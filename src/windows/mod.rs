@@ -252,7 +252,7 @@ impl Windows {
                 dnd.draw(renderer, frame, &self.output, &self.windows, &mut self.graphics);
             },
             View::Overview(ref mut overview) => {
-                overview.draw(renderer, frame, &self.output, &self.windows, &mut self.graphics);
+                overview.draw(renderer, frame, &self.output, &self.windows);
 
                 // Stage immediate redraw while overview animations are active.
                 if overview.animating_drag(self.windows.len()) {
@@ -563,7 +563,7 @@ impl Windows {
     pub fn on_touch_start(&mut self, point: Point<f64, Logical>) {
         if let View::Overview(overview) = &mut self.view {
             // Click inside focused window stages it for opening as secondary.
-            let window_bounds = overview.focused_bounds(&self.output, self.windows.len());
+            let window_bounds = overview.focused_bounds(&self.output);
             if window_bounds.contains(point.to_i32_round()) {
                 overview.start_hold(&self.event_loop);
             }
@@ -584,7 +584,7 @@ impl Windows {
         overview.cancel_hold(&self.event_loop);
 
         // Click inside focused window opens it as primary.
-        let window_bounds = overview.focused_bounds(&self.output, self.windows.len());
+        let window_bounds = overview.focused_bounds(&self.output);
         if !self.windows.is_empty() && window_bounds.contains(point.to_i32_round()) {
             let index = overview.focused_index(self.windows.len());
 

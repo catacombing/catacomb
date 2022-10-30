@@ -12,7 +12,6 @@ use smithay::wayland::compositor::{BufferAssignment, Damage as SurfaceDamage, Su
 
 use crate::geometry::Vector;
 use crate::output::Output;
-use crate::overview::FG_OVERVIEW_PERCENTAGE;
 
 /// Maximum buffer age before damage information is discarded.
 pub const MAX_DAMAGE_AGE: usize = 2;
@@ -22,23 +21,6 @@ const ACTIVE_DROP_TARGET_RGBA: [u8; 4] = [128, 128, 128, 128];
 
 /// Color of the overview tiling location highlight.
 const DROP_TARGET_RGBA: [u8; 4] = [128, 128, 128, 64];
-
-/// Background color behind half-size windows in the overview.
-const BACKGROUND_RGBA: [u8; 4] = [0, 0, 0, 255];
-
-/// Decoration titlebar color in the overview.
-const TITLE_RGBA: [u8; 4] = [64, 64, 64, 255];
-
-/// Decoration border color in the overview.
-const BORDER_RGBA: [u8; 4] = [32, 32, 32, 255];
-
-/// Height of the window decoration title in the application overview with a DPR
-/// of 1.
-const OVERVIEW_TITLE_HEIGHT: i32 = 15;
-
-/// Width of the window decoration border in the application overview with a DPR
-/// of 1.
-const OVERVIEW_BORDER_WIDTH: i32 = 1;
 
 /// Cached texture.
 ///
@@ -167,11 +149,6 @@ impl Texture {
             );
         }
     }
-
-    /// Texture dimensions.
-    pub fn size(&self) -> Size<i32, Logical> {
-        self.size
-    }
 }
 
 /// Grahpics texture cache.
@@ -179,21 +156,9 @@ impl Texture {
 pub struct Graphics {
     active_drop_target: Option<Texture>,
     drop_target: Option<Texture>,
-    decoration: Option<Texture>,
 }
 
 impl Graphics {
-    /// Get the window decoration texture corresponding to the active output
-    /// size.
-    pub fn decoration(&mut self, renderer: &mut Gles2Renderer, output: &Output) -> &mut Texture {
-        let expected_size = Self::decoration_size(output);
-        if self.decoration.as_ref().map(|decoration| decoration.size) != Some(expected_size) {
-            self.decoration = None;
-        }
-
-        self.decoration.get_or_insert_with(|| Self::create_decoration(renderer, output))
-    }
-
     /// Get the texture for the hovered overview drop target area.
     pub fn active_drop_target(&mut self, renderer: &mut Gles2Renderer) -> &mut Texture {
         self.active_drop_target
@@ -204,76 +169,6 @@ impl Graphics {
     pub fn drop_target(&mut self, renderer: &mut Gles2Renderer) -> &mut Texture {
         self.drop_target
             .get_or_insert_with(|| Texture::from_buffer(renderer, &DROP_TARGET_RGBA, 1, 1))
-    }
-
-    /// Decoration title bar height.
-    pub fn title_height() -> i32 {
-        OVERVIEW_TITLE_HEIGHT
-    }
-
-    /// Decoration border width.
-    pub fn border_width() -> i32 {
-        OVERVIEW_BORDER_WIDTH
-    }
-
-    /// Create overview window decoration.
-    fn create_decoration(renderer: &mut Gles2Renderer, output: &Output) -> Texture {
-        let size = Self::decoration_size(output);
-        let title_height = Self::title_height() as usize;
-        let border_width = Self::border_width() as usize;
-
-        let width = size.w as usize;
-        let height = size.h as usize;
-
-        let mut buffer = vec![0; width * height * 4];
-
-        // Helper to fill rectangles of the buffer.
-        let mut fill = |x_start, x_end, y_start, y_end, rgba: [u8; 4]| {
-            for x in x_start..x_end {
-                for y in y_start..y_end {
-                    let start = y * width * 4 + x * 4;
-                    buffer[start..start + 4].copy_from_slice(&rgba);
-                }
-            }
-        };
-
-        // Background.
-        let right_border = width - border_width;
-        let bottom_border = height - border_width;
-        fill(border_width, right_border, title_height, bottom_border, BACKGROUND_RGBA);
-
-        // Titlebar.
-        fill(border_width, width, border_width, title_height - border_width, TITLE_RGBA);
-
-        // Titlebar top border.
-        fill(border_width, right_border, 0, border_width, BORDER_RGBA);
-
-        // Titlebar bottom border.
-        let title_border = title_height - border_width;
-        fill(border_width, right_border, title_border, title_height, BORDER_RGBA);
-
-        // Left border.
-        fill(0, border_width, 0, height, BORDER_RGBA);
-
-        // Right border.
-        fill(right_border, width, 0, height, BORDER_RGBA);
-
-        // Bottom border.
-        fill(border_width, right_border, bottom_border, height, BORDER_RGBA);
-
-        Texture::from_buffer(renderer, &buffer, size.w, size.h)
-    }
-
-    /// Total window decoration size.
-    fn decoration_size(output: &Output) -> Size<i32, Logical> {
-        let title_height = Self::title_height();
-        let border_width = Self::border_width();
-
-        let window_size = output.available_overview().size.scale(FG_OVERVIEW_PERCENTAGE);
-        let width = window_size.w + border_width * 2;
-        let height = window_size.h + title_height + border_width;
-
-        Size::from((width, height))
     }
 }
 

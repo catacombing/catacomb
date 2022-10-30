@@ -91,7 +91,7 @@ pub fn run() {
     // Continously dispatch event loop.
     loop {
         if let Err(error) = event_loop.dispatch(None, &mut catacomb) {
-            eprintln!("Event loop error: {}", error);
+            eprintln!("Event loop error: {error}");
             break;
         }
         catacomb.display.borrow_mut().flush_clients().expect("flushing clients");
@@ -220,7 +220,7 @@ impl Udev {
         let dispatcher = Dispatcher::new(drm, move |event, _, catacomb: &mut Catacomb| {
             match event {
                 DrmEvent::VBlank(_crtc) => catacomb.create_frame(),
-                DrmEvent::Error(error) => eprintln!("DRM error: {}", error),
+                DrmEvent::Error(error) => eprintln!("DRM error: {error}"),
             };
         });
         let token = self.event_loop.register_dispatcher(dispatcher.clone())?;

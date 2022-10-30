@@ -1,7 +1,7 @@
 //! Application overview.
 
 use std::cell::RefCell;
-use std::cmp::{self, Ordering};
+use std::cmp;
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -19,11 +19,11 @@ use crate::windows::window::Window;
 
 /// Percentage of output width reserved for the main window in the application
 /// overview.
-pub const FG_OVERVIEW_PERCENTAGE: f64 = 0.75;
+const FG_OVERVIEW_PERCENTAGE: f64 = 0.75;
 
-/// Percentage of remaining space reserved for background windows in the
+/// Percentage of output width reserved for the secondary windows in the
 /// application overview.
-const BG_OVERVIEW_PERCENTAGE: f64 = 0.5;
+const BG_OVERVIEW_PERCENTAGE: f64 = 0.7;
 
 /// Percentage of the screen for the drop highlight areas.
 const DRAG_AND_DROP_PERCENTAGE: f64 = 0.3;
@@ -37,6 +37,9 @@ const CLOSE_CANCEL_ANIMATION_SPEED: f64 = 0.3;
 
 /// Animation speed for the return from overdrag, lower means faster.
 const OVERDRAG_ANIMATION_SPEED: f64 = 25.;
+
+/// Spacing between windows in the overview, as percentage from overview width.
+const OVERVIEW_SPACING_PERCENTAGE: f64 = 0.75;
 
 /// Maximum amount of overdrag before inputs are ignored.
 const OVERDRAG_LIMIT: f64 = 3.;
@@ -87,18 +90,9 @@ impl Overview {
     }
 
     /// Focused window bounds.
-    pub fn focused_bounds(&self, output: &Output, window_count: usize) -> Rectangle<i32, Logical> {
+    pub fn focused_bounds(&self, output: &Output) -> Rectangle<i32, Logical> {
         let available = output.available_overview();
-        let window_size = available.size.scale(FG_OVERVIEW_PERCENTAGE);
-        let x = overview_x_position(
-            FG_OVERVIEW_PERCENTAGE,
-            BG_OVERVIEW_PERCENTAGE,
-            available.size.w,
-            window_size.w,
-            self.focused_index(window_count) as f64 + self.x_offset,
-        ) + available.loc.x;
-        let y = (available.size.h - window_size.h) / 2 + available.loc.y;
-        Rectangle::from_loc_and_size((x, y), window_size)
+        OverviewPosition::new(available, self.x_offset, 0., self.x_offset).bounds
     }
 
     /// Clamp the X/Y offsets.
@@ -141,60 +135,27 @@ impl Overview {
         frame: &mut Gles2Frame,
         output: &Output,
         windows: &[Rc<RefCell<Window>>],
-        graphics: &mut Graphics,
     ) {
         let window_count = windows.len() as i32;
         self.clamp_offset(window_count);
 
-        // Create an iterator over all windows in the overview.
-        //
-        // We start by going over all negative index windows from lowest to highest
-        // index and then proceed from highest to lowest index with the positive
-        // windows. This ensures that outer windows are rendered below the ones
-        // toward the center.
-        let min_inc = self.x_offset.round() as i32;
-        let max_exc = window_count + self.x_offset.round() as i32;
-        let neg_iter = (min_inc..0).zip(0..window_count);
-        let pos_iter = (min_inc.max(0)..max_exc).zip(-min_inc.min(0)..window_count).rev();
-
-        // Maximum window size. Bigger windows will be truncated.
         let available = output.available_overview();
-        let max_size = available.size.scale(FG_OVERVIEW_PERCENTAGE);
 
-        // Window decoration.
-        let decoration = graphics.decoration(renderer, output);
-        let border_width = Graphics::border_width();
-        let title_height = Graphics::title_height();
+        // Draw up to three visible windows (center and one to each side).
+        let mut offset = self.x_offset - 1.;
+        while offset < self.x_offset + 2. {
+            let window_index = usize::try_from(-offset.round() as isize);
 
-        // Render each window at the desired location in the overview.
-        for (position, i) in neg_iter.chain(pos_iter) {
-            let mut window = windows[i as usize].borrow_mut();
+            if let Some(window) = window_index.ok().and_then(|i| windows.get(i)) {
+                let position =
+                    OverviewPosition::new(available, self.x_offset, self.y_offset, offset);
 
-            // Window boundaries.
-            let mut bounds = Rectangle::from_loc_and_size(available.loc, max_size);
-            bounds.loc.x += overview_x_position(
-                FG_OVERVIEW_PERCENTAGE,
-                BG_OVERVIEW_PERCENTAGE,
-                available.size.w,
-                max_size.w,
-                position as f64 - self.x_offset.fract().round() + self.x_offset.fract(),
-            );
-            bounds.loc.y +=
-                (available.size.h - max_size.h - border_width - title_height) / 2 + title_height;
-
-            // Offset windows in the process of being closed.
-            if position == min_inc.max(0) {
-                bounds.loc.y += self.y_offset.round() as i32;
+                // Draw the window.
+                let mut window = window.borrow_mut();
+                window.draw(renderer, frame, output, position.scale, position.bounds, None);
             }
 
-            // Draw decoration.
-            let decoration_bounds = Rectangle::from_loc_and_size(
-                (bounds.loc.x - border_width, bounds.loc.y - title_height),
-                decoration.size(),
-            );
-            decoration.draw_at(frame, output, decoration_bounds, 1., None);
-
-            window.draw(renderer, frame, output, FG_OVERVIEW_PERCENTAGE, bounds, None);
+            offset += 1.;
         }
     }
 
@@ -250,31 +211,13 @@ impl DragAndDrop {
         graphics: &mut Graphics,
     ) {
         let available = output.available_overview();
-        let border_width = Graphics::border_width();
-        let title_height = Graphics::title_height();
 
         // Calculate window bounds.
-        let max_size = available.size.scale(FG_OVERVIEW_PERCENTAGE);
-        let mut bounds = Rectangle::from_loc_and_size(available.loc, max_size);
-        bounds.loc.x += overview_x_position(
-            FG_OVERVIEW_PERCENTAGE,
-            BG_OVERVIEW_PERCENTAGE,
-            available.size.w,
-            max_size.w,
-            self.overview_x_offset.fract() - self.overview_x_offset.fract().round(),
-        ) - border_width;
-        bounds.loc.y += (available.size.h - max_size.h + title_height + border_width) / 2;
+        let x_offset = self.overview_x_offset;
+        let mut bounds = OverviewPosition::new(available, x_offset, 0., x_offset).bounds;
 
         // Offset by dragged distance.
         bounds.loc += self.window_position.to_i32_round();
-
-        // Render decoration for the window.
-        let decoration = graphics.decoration(renderer, output);
-        let decoration_bounds = Rectangle::from_loc_and_size(
-            (bounds.loc.x - border_width, bounds.loc.y - title_height),
-            decoration.size(),
-        );
-        decoration.draw_at(frame, output, decoration_bounds, 1., None);
 
         // Render the window being drag-and-dropped.
         let mut window = windows[self.window_index].borrow_mut();
@@ -339,48 +282,39 @@ pub enum Direction {
     Vertical,
 }
 
-/// Calculate the X coordinate of a window in the application overview based on
-/// its position.
-fn overview_x_position(
-    fg_percentage: f64,
-    bg_percentage: f64,
-    output_width: i32,
-    window_width: i32,
-    position: f64,
-) -> i32 {
-    let bg_space_size = output_width as f64 * (1. - fg_percentage) * 0.5;
-    let next_space_size = bg_space_size * (1. - bg_percentage).powf(position.abs());
-    let next_space_size = next_space_size.round() as i32;
-
-    match position.partial_cmp(&0.) {
-        Some(Ordering::Less) => next_space_size,
-        Some(Ordering::Greater) => output_width - window_width - next_space_size,
-        _ => bg_space_size.round() as i32,
-    }
+/// Window placed in the application overview.
+#[derive(Debug)]
+struct OverviewPosition {
+    bounds: Rectangle<i32, Logical>,
+    scale: f64,
 }
 
-#[cfg(test)]
-mod test {
-    use super::*;
+impl OverviewPosition {
+    /// Calculate the rectangle for a window in the application overview.
+    fn new(
+        available_rect: Rectangle<i32, Logical>,
+        center_offset_x: f64,
+        center_offset_y: f64,
+        window_offset: f64,
+    ) -> Self {
+        // Calculate window's distance from the center of the overview.
+        let delta = center_offset_x - window_offset.round();
 
-    #[test]
-    fn overview_position() {
-        assert_eq!(overview_x_position(0.5, 0.5, 100, 50, -2.), 6);
-        assert_eq!(overview_x_position(0.5, 0.5, 100, 50, -1.), 13);
-        assert_eq!(overview_x_position(0.5, 0.5, 100, 50, 0.), 25);
-        assert_eq!(overview_x_position(0.5, 0.5, 100, 50, 1.), 37);
-        assert_eq!(overview_x_position(0.5, 0.5, 100, 50, 2.), 44);
+        // Calculate the window's scale.
+        let scale = BG_OVERVIEW_PERCENTAGE
+            + (FG_OVERVIEW_PERCENTAGE - BG_OVERVIEW_PERCENTAGE) * (1. - delta.abs());
 
-        assert_eq!(overview_x_position(0.5, 0.75, 100, 50, -2.), 2);
-        assert_eq!(overview_x_position(0.5, 0.75, 100, 50, -1.), 6);
-        assert_eq!(overview_x_position(0.5, 0.75, 100, 50, 0.), 25);
-        assert_eq!(overview_x_position(0.5, 0.75, 100, 50, 1.), 44);
-        assert_eq!(overview_x_position(0.5, 0.75, 100, 50, 2.), 48);
+        // Calculate the window's size and position.
+        let bounds_size = available_rect.size.scale(scale);
+        let bounds_loc = available_rect.loc + (available_rect.size - bounds_size).scale(0.5);
+        let mut bounds = Rectangle::from_loc_and_size(bounds_loc, bounds_size);
+        bounds.loc.x += (delta * available_rect.size.w as f64 * OVERVIEW_SPACING_PERCENTAGE) as i32;
 
-        assert_eq!(overview_x_position(0.75, 0.75, 100, 50, -2.), 1);
-        assert_eq!(overview_x_position(0.75, 0.75, 100, 50, -1.), 3);
-        assert_eq!(overview_x_position(0.75, 0.75, 100, 50, 0.), 13);
-        assert_eq!(overview_x_position(0.75, 0.75, 100, 50, 1.), 47);
-        assert_eq!(overview_x_position(0.75, 0.75, 100, 50, 2.), 49);
+        // Offset windows in the process of being closed.
+        if (window_offset - center_offset_x).abs() < f64::EPSILON {
+            bounds.loc.y += center_offset_y.round() as i32;
+        }
+
+        Self { bounds, scale }
     }
 }
