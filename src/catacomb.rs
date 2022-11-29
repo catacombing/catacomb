@@ -359,12 +359,12 @@ impl XdgShellHandler for Catacomb {
 
     fn grab(&mut self, _surface: PopupSurface, _seat: WlSeat, _serial: Serial) {}
 
-    fn toplevel_destroyed(&mut self) {
-        self.windows.refresh_visible();
+    fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        self.windows.reap_xdg(&surface);
         self.unstall();
     }
 
-    fn popup_destroyed(&mut self) {
+    fn popup_destroyed(&mut self, _surface: PopupSurface) {
         self.windows.refresh_popups();
         self.unstall();
     }
@@ -386,8 +386,8 @@ impl WlrLayerShellHandler for Catacomb {
         self.windows.add_layer(layer, surface);
     }
 
-    fn destroyed(&mut self) {
-        self.windows.refresh_layers();
+    fn layer_destroyed(&mut self, surface: LayerSurface) {
+        self.windows.reap_layer(surface);
         self.unstall();
     }
 }

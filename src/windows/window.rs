@@ -19,8 +19,8 @@ use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface, XdgPopupSurfac
 
 use crate::drawing::{SurfaceBuffer, Texture};
 use crate::output::{ExclusiveSpace, Output};
+use crate::windows;
 use crate::windows::surface::{CatacombLayerSurface, OffsetSurface, Surface};
-use crate::windows::Transaction;
 
 /// Wayland client window state.
 #[derive(Debug)]
@@ -57,6 +57,9 @@ pub struct Window<S = ToplevelSurface> {
 
     /// Pending window damage.
     damage: Option<Rectangle<i32, Physical>>,
+
+    /// Window liveliness override.
+    dead: bool,
 }
 
 impl<S: Surface> Window<S> {
@@ -74,6 +77,7 @@ impl<S: Surface> Window<S> {
             visible: Default::default(),
             popups: Default::default(),
             damage: Default::default(),
+            dead: Default::default(),
         }
     }
 
@@ -99,7 +103,7 @@ impl<S: Surface> Window<S> {
 
     /// Check window liveliness.
     pub fn alive(&self) -> bool {
-        self.surface.alive()
+        !self.dead && self.surface.alive()
     }
 
     /// Check if this window contains a specific point.
@@ -251,13 +255,9 @@ impl<S: Surface> Window<S> {
     }
 
     /// Change the window dimensions.
-    pub fn set_dimensions(
-        &mut self,
-        transaction: &Transaction,
-        rectangle: Rectangle<i32, Logical>,
-    ) {
+    pub fn set_dimensions(&mut self, rectangle: Rectangle<i32, Logical>) {
         // Prevent redundant configure events.
-        let transaction = self.start_transaction(transaction);
+        let transaction = self.start_transaction();
         let old_ractangle = mem::replace(&mut transaction.rectangle, rectangle);
         if transaction.rectangle != old_ractangle && self.initial_configure_sent {
             self.reconfigure();
@@ -271,13 +271,9 @@ impl<S: Surface> Window<S> {
     }
 
     /// Send output leave event to this window's surfaces.
-    pub fn leave(&mut self, transaction: &Transaction, output: &Output) {
+    pub fn leave(&mut self, output: &Output) {
         self.with_surfaces(|surface, _| output.leave(surface));
         self.visible = false;
-
-        // Resize to fullscreen for app overview.
-        let rectangle = Rectangle::from_loc_and_size((0, 0), output.available().size);
-        self.set_dimensions(transaction, rectangle);
     }
 
     /// Execute a function for all surfaces of this window.
@@ -292,10 +288,8 @@ impl<S: Surface> Window<S> {
     }
 
     /// Create a new transaction, or access the active one.
-    ///
-    /// Takes in a transaction as parameter to ensure the window will not get
-    /// stuck in the frozen state indefinitely.
-    fn start_transaction(&mut self, _transaction: &Transaction) -> &mut WindowTransaction {
+    fn start_transaction(&mut self) -> &mut WindowTransaction {
+        windows::start_transaction();
         self.transaction.get_or_insert(WindowTransaction::new(self))
     }
 
@@ -311,7 +305,8 @@ impl<S: Surface> Window<S> {
 
     /// Check if the transaction is ready for application.
     pub fn transaction_done(&self) -> bool {
-        self.transaction.as_ref().map_or(true, |t| t.rectangle.size == self.acked_size)
+        !self.alive()
+            || self.transaction.as_ref().map_or(true, |t| t.rectangle.size == self.acked_size)
     }
 
     /// Handle common surface commit logic for surfaces of any kind.
@@ -476,6 +471,12 @@ impl<S: Surface> Window<S> {
         }
     }
 
+    /// Close the application.
+    pub fn kill(&mut self) {
+        self.surface.send_close();
+        self.dead = true;
+    }
+
     /// Check if this window requires a redraw.
     pub fn damaged(&self) -> bool {
         self.transaction.is_none() && self.damage.is_some()
@@ -509,19 +510,14 @@ impl Window<PopupSurface> {
 
 impl Window<CatacombLayerSurface> {
     /// Handle a surface commit for layer shell windows.
-    pub fn surface_commit(
-        &mut self,
-        surface: &WlSurface,
-        output: &mut Output,
-        transaction: &Transaction,
-    ) {
+    pub fn surface_commit(&mut self, surface: &WlSurface, output: &mut Output) {
         self.update_layer_state(output);
-        self.update_dimensions(output, transaction);
+        self.update_dimensions(output);
         self.surface_commit_common(surface, output);
     }
 
     /// Recompute the window's size and location.
-    pub fn update_dimensions(&mut self, output: &mut Output, transaction: &Transaction) {
+    pub fn update_dimensions(&mut self, output: &mut Output) {
         let state = compositor::with_states(self.surface.surface(), |states| {
             *states.cached_state.current::<LayerSurfaceCachedState>()
         });
@@ -569,7 +565,7 @@ impl Window<CatacombLayerSurface> {
         };
 
         let dimensions = Rectangle::from_loc_and_size((x, y), size);
-        self.set_dimensions(transaction, dimensions);
+        self.set_dimensions(dimensions);
     }
 
     /// Update layer-specific shell properties.

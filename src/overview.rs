@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 use std::cmp;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::time::Instant;
 
 use smithay::backend::renderer::gles2::{ffi, Gles2Frame, Gles2Renderer};
@@ -15,6 +15,7 @@ use crate::drawing::Graphics;
 use crate::geometry::Vector;
 use crate::input::HOLD_DURATION;
 use crate::output::Output;
+use crate::windows::layout::{LayoutPosition, Layouts};
 use crate::windows::window::Window;
 
 /// Percentage of output width reserved for the main window in the application
@@ -45,31 +46,44 @@ const OVERVIEW_SPACING_PERCENTAGE: f64 = 0.75;
 const OVERDRAG_LIMIT: f64 = 3.;
 
 /// Overview view state.
-#[derive(Default, Copy, Clone, PartialEq, Debug)]
+#[derive(Debug)]
 pub struct Overview {
-    pub x_offset: f64,
-    pub y_offset: f64,
     pub hold_timer: Option<RegistrationToken>,
+    pub closing_window: Weak<RefCell<Window>>,
     pub last_drag_point: Point<f64, Logical>,
     pub last_overdrag_step: Option<Instant>,
-    pub drag_direction: Option<Direction>,
+    pub drag_action: DragAction,
+    pub x_offset: f64,
+    pub y_offset: f64,
 }
 
 impl Overview {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(active_offset: f64) -> Self {
+        Self {
+            x_offset: active_offset,
+            last_overdrag_step: Default::default(),
+            last_drag_point: Default::default(),
+            closing_window: Default::default(),
+            drag_action: Default::default(),
+            hold_timer: Default::default(),
+            y_offset: Default::default(),
+        }
     }
 
     /// Start timer for D&D touch hold.
-    pub fn start_hold(&mut self, event_loop: &LoopHandle<'static, Catacomb>) {
+    pub fn start_hold(
+        &mut self,
+        event_loop: &LoopHandle<'static, Catacomb>,
+        layout_position: LayoutPosition,
+    ) {
         // Ensure no timer is currently active.
         self.cancel_hold(event_loop);
 
         // Start a new timer.
         let timer = Timer::from_duration(HOLD_DURATION);
         let hold_timer = event_loop
-            .insert_source(timer, |_, _, catacomb| {
-                catacomb.windows.start_dnd();
+            .insert_source(timer, move |_, _, catacomb| {
+                catacomb.windows.start_dnd(layout_position);
                 catacomb.unstall();
                 TimeoutAction::Drop
             })
@@ -84,15 +98,39 @@ impl Overview {
         }
     }
 
-    /// Index of the focused window.
-    pub fn focused_index(&self, window_count: usize) -> usize {
-        (self.x_offset.min(0.).abs().round() as usize).min(window_count - 1)
-    }
-
-    /// Focused window bounds.
-    pub fn focused_bounds(&self, output: &Output) -> Rectangle<i32, Logical> {
+    /// Get layout position at the specified point.
+    pub fn layout_position(
+        &self,
+        output: &Output,
+        layouts: &Layouts,
+        point: Point<f64, Logical>,
+    ) -> Option<LayoutPosition> {
         let available = output.available_overview();
-        OverviewPosition::new(available, self.x_offset, 0., self.x_offset).bounds
+
+        let mut offset = self.x_offset - 1.;
+        while offset < self.x_offset + 2. {
+            let position = OverviewPosition::new(available, self.x_offset, offset);
+            if position.bounds.to_f64().contains(point) {
+                let layout_index = usize::try_from(-offset.round() as isize).ok()?;
+                let layout = layouts.get(layout_index)?;
+
+                // Check if click was within secondary window.
+                if layout.secondary().is_some()
+                    && position.secondary_bounds(output).to_f64().contains(point)
+                {
+                    return Some(LayoutPosition::new(layout_index, true));
+                }
+
+                // Check if click was within primary window.
+                if layout.primary().is_some() && position.bounds.to_f64().contains(point) {
+                    return Some(LayoutPosition::new(layout_index, false));
+                }
+            }
+
+            offset += 1.;
+        }
+
+        None
     }
 
     /// Clamp the X/Y offsets.
@@ -134,25 +172,59 @@ impl Overview {
         renderer: &mut Gles2Renderer,
         frame: &mut Gles2Frame,
         output: &Output,
-        windows: &[Rc<RefCell<Window>>],
+        layouts: &Layouts,
     ) {
-        let window_count = windows.len() as i32;
-        self.clamp_offset(window_count);
+        let layout_count = layouts.len() as i32;
+        self.clamp_offset(layout_count);
 
         let available = output.available_overview();
 
         // Draw up to three visible windows (center and one to each side).
         let mut offset = self.x_offset - 1.;
         while offset < self.x_offset + 2. {
-            let window_index = usize::try_from(-offset.round() as isize);
+            let layout_index = usize::try_from(-offset.round() as isize).ok();
 
-            if let Some(window) = window_index.ok().and_then(|i| windows.get(i)) {
-                let position =
-                    OverviewPosition::new(available, self.x_offset, self.y_offset, offset);
+            // Get layout at offset index.
+            let layout = match layout_index.and_then(|i| layouts.get(i)) {
+                Some(layout) => layout,
+                None => {
+                    offset += 1.;
+                    continue;
+                },
+            };
 
-                // Draw the window.
-                let mut window = window.borrow_mut();
-                window.draw(renderer, frame, output, position.scale, position.bounds, None);
+            let position = OverviewPosition::new(available, self.x_offset, offset);
+            let closing_window = self.drag_action.closing_window();
+
+            // Draw the primary window.
+            if let Some(primary) = layout.primary() {
+                // Offset window if it's in the process of being closed.
+                let mut bounds = position.bounds;
+                if Weak::ptr_eq(&closing_window, &Rc::downgrade(primary)) {
+                    // Prevent dragging primary/secondary across from each other.
+                    self.y_offset = self.y_offset.min(0.);
+
+                    bounds.loc.y += self.y_offset.round() as i32;
+                }
+
+                let mut primary = primary.borrow_mut();
+                primary.draw(renderer, frame, output, position.scale, bounds, None);
+            }
+
+            // Draw the secondary window.
+            if let Some(secondary) = layout.secondary() {
+                let mut bounds = position.secondary_bounds(output);
+
+                // Offset window if it's in the process of being closed.
+                if Weak::ptr_eq(&closing_window, &Rc::downgrade(secondary)) {
+                    // Prevent dragging primary/secondary across from each other.
+                    self.y_offset = self.y_offset.max(0.);
+
+                    bounds.loc.y += self.y_offset.round() as i32;
+                }
+
+                let mut secondary = secondary.borrow_mut();
+                secondary.draw(renderer, frame, output, position.scale, bounds, None);
             }
 
             offset += 1.;
@@ -179,24 +251,44 @@ impl Overview {
 }
 
 /// Drag and drop windows into tiling position.
-#[derive(Default, Copy, Clone, PartialEq, Debug)]
+#[derive(Clone, Debug)]
 pub struct DragAndDrop {
     pub window_position: Point<f64, Logical>,
     pub touch_position: Point<f64, Logical>,
+    pub window: Rc<RefCell<Window>>,
     pub overview_x_offset: f64,
-    pub window_index: usize,
+    window_bounds: Rectangle<i32, Logical>,
+    scale: f64,
 }
 
 impl DragAndDrop {
     pub fn new(
-        touch_position: Point<f64, Logical>,
-        overview_x_offset: f64,
-        window_index: usize,
+        output: &Output,
+        overview: &Overview,
+        layout_position: LayoutPosition,
+        window: Rc<RefCell<Window>>,
     ) -> Self {
+        // Calculate X offset when one of the outside windows is being dragged.
+        let window_x_offset =
+            -(layout_position.index as f64) + (overview.x_offset - overview.x_offset.round());
+
+        // Calculate layout position in overview.
+        let available = output.available_overview();
+        let position = OverviewPosition::new(available, overview.x_offset, window_x_offset);
+
+        // Calculate original bounds of dragged window.
+        let window_bounds = if layout_position.secondary {
+            position.secondary_bounds(output)
+        } else {
+            position.bounds
+        };
+
         Self {
-            overview_x_offset,
-            touch_position,
-            window_index,
+            window_bounds,
+            window,
+            touch_position: overview.last_drag_point,
+            overview_x_offset: overview.x_offset,
+            scale: position.scale,
             window_position: Default::default(),
         }
     }
@@ -207,21 +299,15 @@ impl DragAndDrop {
         renderer: &mut Gles2Renderer,
         frame: &mut Gles2Frame,
         output: &Output,
-        windows: &[Rc<RefCell<Window>>],
         graphics: &mut Graphics,
     ) {
-        let available = output.available_overview();
-
-        // Calculate window bounds.
-        let x_offset = self.overview_x_offset;
-        let mut bounds = OverviewPosition::new(available, x_offset, 0., x_offset).bounds;
-
         // Offset by dragged distance.
+        let mut bounds = self.window_bounds;
         bounds.loc += self.window_position.to_i32_round();
 
         // Render the window being drag-and-dropped.
-        let mut window = windows[self.window_index].borrow_mut();
-        window.draw(renderer, frame, output, FG_OVERVIEW_PERCENTAGE, bounds, None);
+        let mut window = self.window.borrow_mut();
+        window.draw(renderer, frame, output, self.scale, bounds, None);
 
         // Set custom OpenGL blending function.
         let _ = renderer.with_context(|_, gl| unsafe {
@@ -232,6 +318,7 @@ impl DragAndDrop {
         let (primary_bounds, secondary_bounds) = self.drop_bounds(output);
 
         // Render the drop areas.
+        let available = output.available_overview();
         let scale = cmp::max(available.size.w, available.size.h) as f64;
         for bounds in [primary_bounds, secondary_bounds] {
             if bounds.to_f64().contains(self.touch_position) {
@@ -275,11 +362,26 @@ impl DragAndDrop {
     }
 }
 
-/// Directional plane.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub enum Direction {
-    Horizontal,
-    Vertical,
+/// Purpose of an overview touch drag action.
+#[derive(Default, Debug)]
+pub enum DragAction {
+    /// Close a window in the overview.
+    Close(Weak<RefCell<Window>>),
+    /// Cycle through overview windows.
+    Cycle,
+    /// No action active.
+    #[default]
+    None,
+}
+
+impl DragAction {
+    /// Window in the process of being closed.
+    pub fn closing_window(&self) -> Weak<RefCell<Window>> {
+        match self {
+            Self::Close(window) => window.clone(),
+            _ => Weak::new(),
+        }
+    }
 }
 
 /// Window placed in the application overview.
@@ -294,7 +396,6 @@ impl OverviewPosition {
     fn new(
         available_rect: Rectangle<i32, Logical>,
         center_offset_x: f64,
-        center_offset_y: f64,
         window_offset: f64,
     ) -> Self {
         // Calculate window's distance from the center of the overview.
@@ -310,11 +411,18 @@ impl OverviewPosition {
         let mut bounds = Rectangle::from_loc_and_size(bounds_loc, bounds_size);
         bounds.loc.x += (delta * available_rect.size.w as f64 * OVERVIEW_SPACING_PERCENTAGE) as i32;
 
-        // Offset windows in the process of being closed.
-        if (window_offset - center_offset_x).abs() < f64::EPSILON {
-            bounds.loc.y += center_offset_y.round() as i32;
-        }
-
         Self { bounds, scale }
+    }
+
+    /// Secondary window bounds for this layout's position.
+    fn secondary_bounds(&self, output: &Output) -> Rectangle<i32, Logical> {
+        let primary_size = output.primary_rectangle(true).size;
+        let secondary_offset = primary_size.scale(self.scale).h;
+
+        let mut secondary_bounds = self.bounds;
+        secondary_bounds.loc.y += secondary_offset;
+        secondary_bounds.size.h -= secondary_offset;
+
+        secondary_bounds
     }
 }

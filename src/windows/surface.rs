@@ -1,5 +1,6 @@
 //! Window surfaces.
 
+use std::ops::Deref;
 use std::sync::Mutex;
 
 use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
@@ -180,6 +181,14 @@ impl Surface for CatacombLayerSurface {
 
     fn geometry(&self) -> Rectangle<i32, Logical> {
         Rectangle::from_loc_and_size((0, 0), self.acked_size())
+    }
+}
+
+impl Deref for CatacombLayerSurface {
+    type Target = LayerSurface;
+
+    fn deref(&self) -> &Self::Target {
+        &self.surface
     }
 }
 

@@ -13,7 +13,7 @@ members = ["catacomb_ipc"]
 
 [dependencies.smithay]
 git = "https://github.com/chrisduerr/smithay"
-rev = "8b516fbf7324232a2b680de31cc49aa242d06191"
+rev = "86e722203e284ce0be19d929ec8906100575fbb5"
 default-features = false
 features = [
     "use_system_lib",
