@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Catacomb IPC interface"
 authors = ["Christian Duerr <contact@christianduerr.com>"]
 homepage = "https://github.com/chrisduerr/catacomb"
-rust-version = "1.60.0"
+rust-version = "1.65.0"
 license = "GPL-3.0"
 edition = "2021"
 

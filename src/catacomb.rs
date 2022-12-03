@@ -1,7 +1,7 @@
 //! Catacomb compositor state.
 
 use std::cell::RefCell;
-use std::os::fd::AsRawFd;
+use std::os::unix::io::AsRawFd;
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
 use std::sync::Arc;

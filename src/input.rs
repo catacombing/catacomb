@@ -116,10 +116,10 @@ impl TouchState {
             || self.start.time.elapsed() >= HOLD_DURATION
         {
             self.is_drag = true;
-            return self.start.gesture.is_none().then(|| TouchAction::Drag);
+            return self.start.gesture.is_none().then_some(TouchAction::Drag);
         }
 
-        (!touching).then(|| TouchAction::Tap)
+        (!touching).then_some(TouchAction::Tap)
     }
 }
 
@@ -161,7 +161,7 @@ impl Gesture {
     fn from_start(output: &Output, position: Point<f64, Logical>) -> Option<Self> {
         [Gesture::DragUp]
             .iter()
-            .find_map(|gesture| gesture.start_rect(output).contains(position).then(|| *gesture))
+            .find_map(|gesture| gesture.start_rect(output).contains(position).then_some(*gesture))
     }
 
     /// Touch area expected for gesture initiation.

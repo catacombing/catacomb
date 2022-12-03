@@ -353,7 +353,7 @@ impl OutputDevice {
             let property_info = drm.get_property(*handle).ok()?;
             let property_name = property_info.name().to_str().ok()?;
 
-            (property_name == name).then(|| *handle)
+            (property_name == name).then_some(*handle)
         })
     }
 
