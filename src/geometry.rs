@@ -97,6 +97,11 @@ impl Vector for Vector3D<f32> {
         let z = self.z.max(other.z);
         Self { x, y, z }
     }
+
+    fn sub(&self, other: impl Into<Self>) -> Self {
+        let other = other.into();
+        Self { x: self.x - other.x, y: self.y - other.y, z: self.z - other.z }
+    }
 }
 
 pub trait Vector: Sized {
@@ -108,6 +113,9 @@ pub trait Vector: Sized {
 
     /// Compare and return the bigger of each individual dimensions.
     fn max(&self, other: impl Into<Self>) -> Self;
+
+    /// Subtract one vector from another.
+    fn sub(&self, other: impl Into<Self>) -> Self;
 }
 
 /// Helper trait for converting into a 2D vector.
@@ -150,6 +158,12 @@ where
         let tuple = self.as_vector();
         let other = other.into().as_vector();
         Self::from((cmp::max(tuple.0, other.0), cmp::max(tuple.1, other.1)))
+    }
+
+    fn sub(&self, other: impl Into<Self>) -> Self {
+        let lhs = self.as_vector();
+        let rhs = other.into().as_vector();
+        Self::from((lhs.0 - rhs.0, lhs.1 - rhs.1))
     }
 }
 

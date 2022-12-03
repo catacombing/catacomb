@@ -3,12 +3,11 @@
 use std::ops::{Add, Deref, Sub};
 use std::time::Duration;
 
+use smithay::output::{Mode, Output as SmithayOutput, PhysicalProperties, Scale, Subpixel};
 use smithay::reexports::wayland_server::backend::GlobalId;
-use smithay::reexports::wayland_server::protocol::wl_output::Subpixel;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::utils::{Logical, Physical, Rectangle, Size, Transform};
-use smithay::wayland::output::{Mode, Output as SmithayOutput, PhysicalProperties, Scale};
 use smithay::wayland::shell::wlr_layer::{Anchor, ExclusiveZone, Layer};
 
 use crate::catacomb::Catacomb;
@@ -87,7 +86,7 @@ impl Output {
     #[inline]
     pub fn set_mode(&mut self, mode: Mode) {
         let scale = Some(Scale::Integer(self.scale));
-        let transform = Some(self.transform.into());
+        let transform = Some(self.transform);
         self.output.change_current_state(Some(mode), transform, scale, None);
         self.output.set_preferred(mode);
         self.mode = mode;
@@ -215,12 +214,12 @@ impl Output {
 
     /// Add the given surface to the display.
     pub fn enter(&self, surface: &WlSurface) {
-        self.output.enter(&self.display, surface);
+        self.output.enter(surface);
     }
 
     /// Remove the given surface from the display.
     pub fn leave(&self, surface: &WlSurface) {
-        self.output.leave(&self.display, surface);
+        self.output.leave(surface);
     }
 }
 

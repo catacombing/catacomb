@@ -18,6 +18,7 @@ use smithay::wayland::shell::wlr_layer::{
 use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface, XdgPopupSurfaceRoleAttributes};
 
 use crate::drawing::{SurfaceBuffer, Texture};
+use crate::geometry::Vector;
 use crate::output::{ExclusiveSpace, Output};
 use crate::windows;
 use crate::windows::surface::{CatacombLayerSurface, OffsetSurface, Surface};
@@ -116,18 +117,12 @@ impl<S: Surface> Window<S> {
     /// If no location is specified, the textures cached location will be used.
     pub fn draw<'a>(
         &mut self,
-        renderer: &mut Gles2Renderer,
         frame: &mut Gles2Frame,
         output: &Output,
         scale: f64,
         bounds: impl Into<Option<Rectangle<i32, Logical>>>,
         damage: impl Into<Option<&'a [Rectangle<i32, Physical>]>>,
     ) {
-        // Skip updating windows during transactions.
-        if self.transaction.is_none() && self.buffers_pending {
-            self.import_buffers(renderer);
-        }
-
         let bounds = bounds.into().unwrap_or_else(|| self.bounds());
         let physical_bounds = bounds.to_physical(output.scale());
 
@@ -161,7 +156,7 @@ impl<S: Surface> Window<S> {
         for popup in &mut self.popups {
             let loc = bounds.loc + popup.rectangle.loc;
             let popup_bounds = Rectangle::from_loc_and_size(loc, (i32::MAX, i32::MAX));
-            popup.draw(renderer, frame, output, scale, popup_bounds, damage);
+            popup.draw(frame, output, scale, popup_bounds, damage);
         }
     }
 
@@ -175,7 +170,12 @@ impl<S: Surface> Window<S> {
     }
 
     /// Import the buffers of all surfaces into the renderer.
-    fn import_buffers(&mut self, renderer: &mut Gles2Renderer) {
+    pub fn import_buffers(&mut self, renderer: &mut Gles2Renderer) {
+        // Skip updating windows during transactions.
+        if self.transaction.is_some() || !self.buffers_pending {
+            return;
+        }
+
         let geometry = self.geometry();
         self.texture_cache.reset(geometry.size);
         self.buffers_pending = false;
@@ -360,7 +360,7 @@ impl<S: Surface> Window<S> {
         let old_size = self.texture_cache.size;
         if let Some(damage) = self.damage.as_mut().filter(|_| new_size != old_size) {
             let mut moved_damage = *damage;
-            moved_damage.loc += (old_size - new_size).to_physical(output.scale());
+            moved_damage.loc += old_size.sub(new_size).to_physical(output.scale()).to_point();
             *damage = damage.merge(moved_damage);
         }
 

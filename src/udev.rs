@@ -10,11 +10,12 @@ use smithay::backend::egl::context::EGLContext;
 use smithay::backend::egl::display::EGLDisplay;
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::gles2::Gles2Renderer;
-use smithay::backend::renderer::{Bind, ImportDma, ImportEgl, Renderer};
+use smithay::backend::renderer::{Bind, Frame, ImportDma, ImportEgl, Renderer};
 use smithay::backend::session::auto::AutoSession;
 use smithay::backend::session::{Session, Signal};
 use smithay::backend::udev;
 use smithay::backend::udev::{UdevBackend, UdevEvent};
+use smithay::output::{Mode, PhysicalProperties, Subpixel};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{Dispatcher, EventLoop, LoopHandle, RegistrationToken};
 use smithay::reexports::drm::control::connector::State as ConnectorState;
@@ -25,12 +26,11 @@ use smithay::reexports::drm::control::Device;
 use smithay::reexports::input::Libinput;
 use smithay::reexports::nix::fcntl::OFlag;
 use smithay::reexports::nix::sys::stat::dev_t as DeviceId;
-use smithay::reexports::wayland_server::protocol::wl_output::Subpixel;
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::utils::signaling::{Linkable, SignalToken, Signaler};
-use smithay::wayland::output::{Mode, PhysicalProperties};
 
 use crate::catacomb::{Catacomb, Damage};
+use crate::drawing::Graphics;
 use crate::ipc_server;
 use crate::output::Output;
 use crate::windows::Windows;
@@ -190,7 +190,7 @@ impl Udev {
         let mut drm = DrmDevice::new(device_fd, true, None)?;
         let gbm = GbmDevice::new(device_fd)?;
 
-        let display = EGLDisplay::new(&gbm, None)?;
+        let display = unsafe { EGLDisplay::new(&gbm, None)? };
         let context = EGLContext::new(&display, None)?;
 
         let mut renderer = unsafe { Gles2Renderer::new(context, None).expect("create renderer") };
@@ -225,8 +225,12 @@ impl Udev {
         });
         let token = self.event_loop.register_dispatcher(dispatcher.clone())?;
 
+        // Create OpenGL textures.
+        let graphics = Graphics::new(&mut renderer);
+
         self.output_device = Some(OutputDevice {
             gbm_surface,
+            graphics,
             renderer,
             token,
             gbm,
@@ -274,13 +278,15 @@ impl Udev {
         renderer: &Gles2Renderer,
         drm: &DrmDevice<RawFd>,
         gbm: &GbmDevice<RawFd>,
-    ) -> Option<GbmBufferedSurface<GbmDevice<RawFd>, RawFd>> {
+    ) -> Option<GbmBufferedSurface<GbmDevice<RawFd>, RawFd, ()>> {
         let formats = Bind::<Dmabuf>::supported_formats(renderer)?;
         let resources = drm.resource_handles().ok()?;
 
         // Find the first connected output port.
         let connector = resources.connectors().iter().find_map(|conn| {
-            drm.get_connector(*conn).ok().filter(|conn| conn.state() == ConnectorState::Connected)
+            drm.get_connector(*conn, true)
+                .ok()
+                .filter(|conn| conn.state() == ConnectorState::Connected)
         })?;
         let connector_mode = *connector.modes().get(0)?;
 
@@ -288,7 +294,6 @@ impl Udev {
             // Get all available encoders.
             .encoders()
             .iter()
-            .flatten()
             .flat_map(|handle| drm.get_encoder(*handle))
             // Get all CRTCs compatible with the encoder.
             .flat_map(|encoder| resources.filter_crtcs(encoder.possible_crtcs()))
@@ -322,10 +327,11 @@ impl Udev {
 
 /// Target device for rendering.
 pub struct OutputDevice {
-    gbm_surface: GbmBufferedSurface<GbmDevice<RawFd>, RawFd>,
+    gbm_surface: GbmBufferedSurface<GbmDevice<RawFd>, RawFd, ()>,
     drm: Dispatcher<'static, DrmDevice<i32>, Catacomb>,
     renderer: Gles2Renderer,
     gbm: GbmDevice<RawFd>,
+    graphics: Graphics,
     id: DeviceId,
 
     _restart_token: SignalToken,
@@ -379,15 +385,20 @@ impl OutputDevice {
         let (dmabuf, age) = self.gbm_surface.next_buffer()?;
         self.renderer.bind(dmabuf)?;
 
+        // Import all pending buffers.
+        windows.import_buffers(&mut self.renderer);
+
         // Draw the current frame into the buffer.
         let transform = windows.orientation().transform();
         let output_size = windows.output.physical_resolution();
-        self.renderer.render(output_size, transform, |renderer, frame| {
-            windows.draw(renderer, frame, damage, age);
-        })?;
+        let mut frame = self.renderer.render(output_size, transform)?;
+        windows.draw(&mut frame, &self.graphics, damage, age);
+
+        // XXX: This must be done before `queue_buffer` to prevent rendering artifacts.
+        let _ = frame.finish();
 
         // Queue buffer for rendering.
-        self.gbm_surface.queue_buffer()?;
+        self.gbm_surface.queue_buffer(())?;
 
         Ok(())
     }

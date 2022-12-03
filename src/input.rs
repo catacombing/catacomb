@@ -404,7 +404,8 @@ impl Catacomb {
             * (velocity.x.abs() * FRICTION * animation_speed + 1.).min(velocity.x.abs());
         velocity.y -= velocity.y.signum()
             * (velocity.y.abs() * FRICTION * animation_speed + 1.).min(velocity.y.abs());
-        *position += *velocity * animation_speed;
+        position.x += velocity.x * animation_speed;
+        position.y += velocity.y * animation_speed;
 
         // Generate motion events.
         self.update_position(self.touch_state.position);

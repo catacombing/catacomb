@@ -1,6 +1,6 @@
 //! Layer shell windows.
 
-use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
+use smithay::backend::renderer::gles2::Gles2Frame;
 use smithay::utils::{Logical, Physical, Point, Rectangle};
 use smithay::wayland::shell::wlr_layer::{ExclusiveZone, Layer};
 
@@ -47,24 +47,22 @@ impl Layers {
     /// Draw background/bottom layer windows.
     pub fn draw_background(
         &mut self,
-        renderer: &mut Gles2Renderer,
         frame: &mut Gles2Frame,
         output: &Output,
         damage: &[Rectangle<i32, Physical>],
     ) {
         for window in &mut self.background {
-            window.draw(renderer, frame, output, 1., None, damage);
+            window.draw(frame, output, 1., None, damage);
         }
 
         for window in &mut self.bottom {
-            window.draw(renderer, frame, output, 1., None, damage);
+            window.draw(frame, output, 1., None, damage);
         }
     }
 
     /// Draw top/overlay layer windows.
     pub fn draw_foreground(
         &mut self,
-        renderer: &mut Gles2Renderer,
         frame: &mut Gles2Frame,
         output: &Output,
         damage: &[Rectangle<i32, Physical>],
@@ -77,11 +75,11 @@ impl Layers {
         };
 
         for window in self.top.iter_mut().filter(filter_exclusive) {
-            window.draw(renderer, frame, output, 1., None, damage);
+            window.draw(frame, output, 1., None, damage);
         }
 
         for window in self.overlay.iter_mut().filter(filter_exclusive) {
-            window.draw(renderer, frame, output, 1., None, damage);
+            window.draw(frame, output, 1., None, damage);
         }
     }
 

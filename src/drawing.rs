@@ -69,8 +69,8 @@ impl Texture {
     ) -> Self {
         assert!(buffer.len() as i32 >= width * height * 4);
 
-        let texture = renderer
-            .with_context(|renderer, gl| unsafe {
+        let texture_id = renderer
+            .with_context(|gl| unsafe {
                 let mut tex = 0;
                 gl.GenTextures(1, &mut tex);
                 gl.BindTexture(ffi::TEXTURE_2D, tex);
@@ -89,9 +89,12 @@ impl Texture {
                 );
                 gl.BindTexture(ffi::TEXTURE_2D, 0);
 
-                Gles2Texture::from_raw(renderer, tex, (width, height).into())
+                tex
             })
             .expect("create texture");
+
+        let texture =
+            unsafe { Gles2Texture::from_raw(renderer, texture_id, (width, height).into()) };
 
         Texture::new(Rc::new(texture), (width, height))
     }
@@ -103,7 +106,7 @@ impl Texture {
     /// window bounds. The scaling will always take part **before** the
     /// truncation.
     pub fn draw_at(
-        &mut self,
+        &self,
         frame: &mut Gles2Frame,
         output: &Output,
         window_bounds: Rectangle<i32, Logical>,
@@ -117,7 +120,7 @@ impl Texture {
         }
 
         // Truncate source size based on window bounds.
-        let src_size = (self.size + self.location).min(scaled_window_bounds);
+        let src_size = (self.size + self.location.to_size()).min(scaled_window_bounds);
         let src = Rectangle::from_loc_and_size((0, 0), src_size);
         let src_buffer = src.to_buffer(self.scale, self.transform, &self.size);
 
@@ -152,23 +155,17 @@ impl Texture {
 }
 
 /// Grahpics texture cache.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Graphics {
-    active_drop_target: Option<Texture>,
-    drop_target: Option<Texture>,
+    pub active_drop_target: Texture,
+    pub drop_target: Texture,
 }
 
 impl Graphics {
-    /// Get the texture for the hovered overview drop target area.
-    pub fn active_drop_target(&mut self, renderer: &mut Gles2Renderer) -> &mut Texture {
-        self.active_drop_target
-            .get_or_insert_with(|| Texture::from_buffer(renderer, &ACTIVE_DROP_TARGET_RGBA, 1, 1))
-    }
-
-    /// Get the texture for the unfocused overview drop target area.
-    pub fn drop_target(&mut self, renderer: &mut Gles2Renderer) -> &mut Texture {
-        self.drop_target
-            .get_or_insert_with(|| Texture::from_buffer(renderer, &DROP_TARGET_RGBA, 1, 1))
+    pub fn new(renderer: &mut Gles2Renderer) -> Self {
+        let active_drop_target = Texture::from_buffer(renderer, &ACTIVE_DROP_TARGET_RGBA, 1, 1);
+        let drop_target = Texture::from_buffer(renderer, &DROP_TARGET_RGBA, 1, 1);
+        Self { active_drop_target, drop_target }
     }
 }
 

@@ -80,7 +80,6 @@ pub struct Windows {
     event_loop: LoopHandle<'static, Catacomb>,
     transaction: Option<Transaction>,
     start_time: Instant,
-    graphics: Graphics,
     focus: Focus,
 
     /// Orientation used for the window's current rendered state.
@@ -109,7 +108,6 @@ impl Windows {
             orphan_popups: Default::default(),
             transaction: Default::default(),
             orientation: Default::default(),
-            graphics: Default::default(),
             layouts: Default::default(),
             layers: Default::default(),
             focus: Default::default(),
@@ -143,7 +141,7 @@ impl Windows {
             wl_surface = Cow::Owned(surface);
         }
 
-        self.layouts.windows_mut().find(|window| window.surface().eq(&wl_surface))
+        self.layouts.windows_mut().find(|window| window.surface().eq(wl_surface.as_ref()))
     }
 
     /// Handle a surface commit for any window.
@@ -157,7 +155,7 @@ impl Windows {
         // Find a window matching the root surface.
         macro_rules! find_window {
             ($windows:expr) => {{
-                $windows.find(|window| window.surface().eq(&root_surface))
+                $windows.find(|window| window.surface().eq(root_surface.as_ref()))
             }};
         }
 
@@ -219,11 +217,22 @@ impl Windows {
         Some(())
     }
 
+    /// Import pending buffers for all windows.
+    pub fn import_buffers(&mut self, renderer: &mut Gles2Renderer) {
+        for mut window in self.layouts.windows_mut() {
+            window.import_buffers(renderer);
+        }
+
+        for window in self.layers.iter_mut() {
+            window.import_buffers(renderer);
+        }
+    }
+
     /// Draw the current window state.
     pub fn draw(
         &mut self,
-        renderer: &mut Gles2Renderer,
         frame: &mut Gles2Frame,
+        graphics: &Graphics,
         damage: &mut Damage,
         buffer_age: u8,
     ) {
@@ -248,22 +257,22 @@ impl Windows {
         // Clear the screen.
         let _ = frame.clear([1., 0., 1., 1.], damage);
 
-        self.layers.draw_background(renderer, frame, &self.output, damage);
+        self.layers.draw_background(frame, &self.output, damage);
 
         match self.view {
             View::Workspace => {
                 self.layouts.with_visible(|window| {
-                    window.draw(renderer, frame, &self.output, 1., None, damage);
+                    window.draw(frame, &self.output, 1., None, damage);
                 });
             },
             View::DragAndDrop(ref dnd) => {
                 self.layouts.with_visible(|window| {
-                    window.draw(renderer, frame, &self.output, 1., None, damage);
+                    window.draw(frame, &self.output, 1., None, damage);
                 });
-                dnd.draw(renderer, frame, &self.output, &mut self.graphics);
+                dnd.draw(frame, &self.output, graphics);
             },
             View::Overview(ref mut overview) => {
-                overview.draw(renderer, frame, &self.output, &self.layouts);
+                overview.draw(frame, &self.output, &self.layouts);
 
                 // Stage immediate redraw while overview animations are active.
                 if overview.animating_drag(self.layouts.len()) {
@@ -273,10 +282,10 @@ impl Windows {
         }
 
         let workspace_active = matches!(self.view, View::Workspace);
-        self.layers.draw_foreground(renderer, frame, &self.output, damage, workspace_active);
+        self.layers.draw_foreground(frame, &self.output, damage, workspace_active);
 
         // Draw gesture handle in workspace view.
-        let _ = renderer.with_context(|_, gl| unsafe {
+        let _ = frame.with_context(|gl| unsafe {
             self.draw_gesture_handle(gl, damage);
         });
     }
@@ -522,6 +531,8 @@ impl Windows {
         self.orientation
     }
 
+    // TODO: This is causing issues.
+    //
     /// Check if any window was damaged since the last redraw.
     pub fn damaged(&mut self) -> bool {
         let active_layout = self.layouts.active();

@@ -5,7 +5,7 @@ use std::cmp;
 use std::rc::{Rc, Weak};
 use std::time::Instant;
 
-use smithay::backend::renderer::gles2::{ffi, Gles2Frame, Gles2Renderer};
+use smithay::backend::renderer::gles2::{ffi, Gles2Frame};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
 use smithay::utils::{Logical, Point, Rectangle, Size};
@@ -167,13 +167,7 @@ impl Overview {
     }
 
     /// Render the overview.
-    pub fn draw(
-        &mut self,
-        renderer: &mut Gles2Renderer,
-        frame: &mut Gles2Frame,
-        output: &Output,
-        layouts: &Layouts,
-    ) {
+    pub fn draw(&mut self, frame: &mut Gles2Frame, output: &Output, layouts: &Layouts) {
         let layout_count = layouts.len() as i32;
         self.clamp_offset(layout_count);
 
@@ -208,7 +202,7 @@ impl Overview {
                 }
 
                 let mut primary = primary.borrow_mut();
-                primary.draw(renderer, frame, output, position.scale, bounds, None);
+                primary.draw(frame, output, position.scale, bounds, None);
             }
 
             // Draw the secondary window.
@@ -224,7 +218,7 @@ impl Overview {
                 }
 
                 let mut secondary = secondary.borrow_mut();
-                secondary.draw(renderer, frame, output, position.scale, bounds, None);
+                secondary.draw(frame, output, position.scale, bounds, None);
             }
 
             offset += 1.;
@@ -294,23 +288,17 @@ impl DragAndDrop {
     }
 
     /// Draw the tiling location picker.
-    pub fn draw(
-        &self,
-        renderer: &mut Gles2Renderer,
-        frame: &mut Gles2Frame,
-        output: &Output,
-        graphics: &mut Graphics,
-    ) {
+    pub fn draw(&self, frame: &mut Gles2Frame, output: &Output, graphics: &Graphics) {
         // Offset by dragged distance.
         let mut bounds = self.window_bounds;
         bounds.loc += self.window_position.to_i32_round();
 
         // Render the window being drag-and-dropped.
         let mut window = self.window.borrow_mut();
-        window.draw(renderer, frame, output, self.scale, bounds, None);
+        window.draw(frame, output, self.scale, bounds, None);
 
         // Set custom OpenGL blending function.
-        let _ = renderer.with_context(|_, gl| unsafe {
+        let _ = frame.with_context(|gl| unsafe {
             gl.BlendFunc(ffi::SRC_ALPHA, ffi::ONE_MINUS_SRC_ALPHA);
         });
 
@@ -322,14 +310,14 @@ impl DragAndDrop {
         let scale = cmp::max(available.size.w, available.size.h) as f64;
         for bounds in [primary_bounds, secondary_bounds] {
             if bounds.to_f64().contains(self.touch_position) {
-                graphics.active_drop_target(renderer).draw_at(frame, output, bounds, scale, None);
+                graphics.active_drop_target.draw_at(frame, output, bounds, scale, None);
             } else {
-                graphics.drop_target(renderer).draw_at(frame, output, bounds, scale, None);
+                graphics.drop_target.draw_at(frame, output, bounds, scale, None);
             }
         }
 
         // Reset OpenGL blending function.
-        let _ = renderer.with_context(|_, gl| unsafe {
+        let _ = frame.with_context(|gl| unsafe {
             gl.BlendFunc(ffi::ONE, ffi::ONE_MINUS_SRC_ALPHA);
         });
     }
@@ -407,7 +395,7 @@ impl OverviewPosition {
 
         // Calculate the window's size and position.
         let bounds_size = available_rect.size.scale(scale);
-        let bounds_loc = available_rect.loc + (available_rect.size - bounds_size).scale(0.5);
+        let bounds_loc = available_rect.loc + available_rect.size.sub(bounds_size).scale(0.5);
         let mut bounds = Rectangle::from_loc_and_size(bounds_loc, bounds_size);
         bounds.loc.x += (delta * available_rect.size.w as f64 * OVERVIEW_SPACING_PERCENTAGE) as i32;
 

@@ -1,6 +1,7 @@
 //! Catacomb compositor state.
 
 use std::cell::RefCell;
+use std::os::fd::AsRawFd;
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -131,7 +132,11 @@ impl Catacomb {
         // Register display event source.
         event_loop
             .insert_source(
-                Generic::new(display.backend().poll_fd(), Interest::READ, TriggerMode::Level),
+                Generic::new(
+                    display.backend().poll_fd().as_raw_fd(),
+                    Interest::READ,
+                    TriggerMode::Level,
+                ),
                 |_, _, catacomb| catacomb.handle_socket_readiness(),
             )
             .expect("register display");
@@ -168,7 +173,7 @@ impl Catacomb {
         InputMethodManagerState::new::<Self>(&display_handle);
         seat.add_input_method(XkbConfig::default(), 200, 25);
         TextInputManagerState::new::<Self>(&display_handle);
-        VirtualKeyboardManagerState::new::<Self>(&display_handle);
+        VirtualKeyboardManagerState::new::<Self, _>(&display_handle, |_| true);
 
         // Initialize keyboard/touch/data device.
         let data_device_state = DataDeviceState::new::<Self, _>(&display_handle, None);
