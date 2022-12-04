@@ -344,9 +344,10 @@ impl Windows {
 
     /// Request new frames for all visible windows.
     pub fn request_frames(&mut self) {
+        let runtime = self.runtime();
+        self.layers.request_frames(runtime);
+
         if matches!(self.view, View::Workspace) {
-            let runtime = self.runtime();
-            self.layers.request_frames(runtime);
             self.layouts.with_visible(|window| window.request_frame(runtime));
         }
     }
@@ -531,19 +532,11 @@ impl Windows {
         self.orientation
     }
 
-    // TODO: This is causing issues.
-    //
     /// Check if any window was damaged since the last redraw.
     pub fn damaged(&mut self) -> bool {
-        let active_layout = self.layouts.active();
-        let primary = active_layout.primary();
-        let secondary = active_layout.secondary();
-
         self.fully_damaged
-            || (matches!(self.view, View::Workspace)
-                && (primary.map_or(false, |window| window.borrow().damaged())
-                    || secondary.map_or(false, |window| window.borrow().damaged())
-                    || self.layers.iter().any(|window| window.damaged())))
+            || self.layers.iter().any(|window| window.damaged())
+            || self.layouts.windows().any(|window| window.damaged())
     }
 
     /// Window damage since last redraw.
