@@ -60,6 +60,23 @@ impl Layouts {
         self.add_transaction(Transaction::Active(layout_index));
     }
 
+    /// Cycle through window layouts.
+    ///
+    /// This will switch the layout to the one `n` layouts away from it.
+    pub fn cycle_active(&mut self, output: &Output, mut n: isize) {
+        let active_index = match self.active_layout {
+            Some(active_layout) => active_layout,
+            // Use first "step" to cycle from no active layout to index 0.
+            None => {
+                n -= n.signum();
+                0
+            },
+        };
+
+        let target_layout = (active_index as isize + n).rem_euclid(self.layouts.len() as isize);
+        self.set_active(output, Some(target_layout as usize));
+    }
+
     /// Update the active layout's primary window.
     pub fn set_primary(&mut self, output: &Output, position: LayoutPosition) {
         let layout = match self.layouts.get(position.index) {

@@ -11,7 +11,7 @@ use smithay::backend::input::{
 use smithay::input::keyboard::{keysyms, FilterResult};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
-use smithay::utils::{Logical, Point, Rectangle, Size, SERIAL_COUNTER};
+use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
 use smithay::wayland::seat::TouchHandle;
 
 use crate::catacomb::Catacomb;
@@ -101,10 +101,10 @@ impl TouchState {
 
     /// Get the updated active touch action.
     fn action(&mut self, output: &Output) -> Option<TouchAction> {
-        let output_size = output.size().to_f64();
         let touching = self.touching();
-        if let Some(gesture) = self.start.gesture {
-            if !touching && gesture.end_rect(output_size).contains(self.position) {
+        if self.start.is_gesture && !touching {
+            if let Some(gesture) = Gesture::from_points(output, self.start.position, self.position)
+            {
                 return Some(TouchAction::Gesture(gesture));
             }
         }
@@ -116,7 +116,7 @@ impl TouchState {
             || self.start.time.elapsed() >= HOLD_DURATION
         {
             self.is_drag = true;
-            return self.start.gesture.is_none().then_some(TouchAction::Drag);
+            return (!self.start.is_gesture).then_some(TouchAction::Drag);
         }
 
         (!touching).then_some(TouchAction::Tap)
@@ -126,19 +126,19 @@ impl TouchState {
 /// Start of a touch interaction.
 struct TouchStart {
     position: Point<f64, Logical>,
-    gesture: Option<Gesture>,
+    is_gesture: bool,
     time: Instant,
 }
 
 impl Default for TouchStart {
     fn default() -> Self {
-        Self { time: Instant::now(), position: Default::default(), gesture: Default::default() }
+        Self { time: Instant::now(), position: Default::default(), is_gesture: Default::default() }
     }
 }
 
 impl TouchStart {
     fn new(output: &Output, position: Point<f64, Logical>) -> Self {
-        Self { gesture: Gesture::from_start(output, position), time: Instant::now(), position }
+        Self { is_gesture: Gesture::is_start(output, position), time: Instant::now(), position }
     }
 }
 
@@ -153,34 +153,44 @@ enum TouchAction {
 /// Touch gestures.
 #[derive(Debug, Copy, Clone)]
 pub enum Gesture {
-    DragUp,
+    Up,
+    Left,
+    Right,
 }
 
 impl Gesture {
-    /// Create a gesture from its starting location.
-    fn from_start(output: &Output, position: Point<f64, Logical>) -> Option<Self> {
-        [Gesture::DragUp]
-            .iter()
-            .find_map(|gesture| gesture.start_rect(output).contains(position).then_some(*gesture))
-    }
-
-    /// Touch area expected for gesture initiation.
-    fn start_rect(&self, output: &Output) -> Rectangle<f64, Logical> {
-        match self {
-            Gesture::DragUp => {
-                let output_size = output.size().to_f64();
-                let loc = (0., output_size.h - GESTURE_HANDLE_HEIGHT as f64);
-                Rectangle::from_loc_and_size(loc, output_size)
-            },
+    /// Get a gesture from its start/end.
+    fn from_points(
+        output: &Output,
+        start: Point<f64, Logical>,
+        end: Point<f64, Logical>,
+    ) -> Option<Self> {
+        // Handle left/right drag on gesture handle.
+        if Self::is_start(output, end) {
+            let delta = end.x - start.x;
+            if delta < -MAX_TAP_DISTANCE {
+                return Some(Gesture::Left);
+            } else if delta > MAX_TAP_DISTANCE {
+                return Some(Gesture::Right);
+            }
         }
+
+        // Handle drag up.
+        let output_size = output.size().to_f64();
+        let drag_up_rect =
+            Rectangle::from_loc_and_size((0., 0.), (output_size.w, output_size.h * 0.75));
+        if drag_up_rect.contains(end) {
+            return Some(Gesture::Up);
+        }
+
+        None
     }
 
-    /// Touch area expected for gesture completion.
-    fn end_rect(&self, output_size: Size<f64, Logical>) -> Rectangle<f64, Logical> {
-        let size = match self {
-            Gesture::DragUp => (output_size.w, output_size.h * 0.75),
-        };
-        Rectangle::from_loc_and_size((0., 0.), size)
+    /// Check if a touch should start a new gesture.
+    fn is_start(output: &Output, position: Point<f64, Logical>) -> bool {
+        let output_size = output.size().to_f64();
+        let loc = (0., output_size.h - GESTURE_HANDLE_HEIGHT as f64);
+        Rectangle::from_loc_and_size(loc, output_size).contains(position)
     }
 }
 
@@ -312,7 +322,7 @@ impl Catacomb {
         self.touch_state.start(&self.windows.output, position);
 
         // Only send touch start if there's no gesture in progress.
-        if self.touch_state.start.gesture.is_none() {
+        if !self.touch_state.start.is_gesture {
             self.windows.on_touch_start(position);
         }
     }

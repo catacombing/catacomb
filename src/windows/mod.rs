@@ -699,16 +699,18 @@ impl Windows {
     /// Handle touch gestures.
     pub fn on_gesture(&mut self, gesture: Gesture) {
         match (gesture, &self.view) {
-            (Gesture::DragUp, View::Overview(_)) => {
+            (Gesture::Up, View::Overview(_)) => {
                 self.layouts.set_active(&self.output, None);
                 self.focus.toplevel = Weak::new();
                 self.set_view(View::Workspace);
             },
-            (Gesture::DragUp, _) if !self.layouts.is_empty() => {
+            (Gesture::Up, _) if !self.layouts.is_empty() => {
                 let overview = Overview::new(self.layouts.active_offset());
                 self.set_view(View::Overview(overview));
             },
-            (Gesture::DragUp, _) => (),
+            (Gesture::Left, View::Workspace) => self.layouts.cycle_active(&self.output, 1),
+            (Gesture::Right, View::Workspace) => self.layouts.cycle_active(&self.output, -1),
+            (Gesture::Up | Gesture::Left | Gesture::Right, _) => (),
         }
     }
 
