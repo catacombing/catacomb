@@ -34,16 +34,17 @@ const DRAG_AND_DROP_PERCENTAGE: f64 = 0.3;
 const OVERVIEW_CLOSE_DISTANCE: f64 = 0.25;
 
 /// Animation speed for the return from close, lower means faster.
-const CLOSE_CANCEL_ANIMATION_SPEED: f64 = 0.3;
+const VERTICAL_DRAG_ANIMATION_SPEED: f64 = 0.3;
 
-/// Animation speed for the return from overdrag, lower means faster.
-const OVERDRAG_ANIMATION_SPEED: f64 = 25.;
+/// Animation speed for the return to nearest integer x-offset, lower means
+/// faster.
+const HORIZONTAL_DRAG_ANIMATION_SPEED: f64 = 75.;
 
 /// Spacing between windows in the overview, as percentage from overview width.
 const OVERVIEW_SPACING_PERCENTAGE: f64 = 0.75;
 
 /// Maximum amount of overdrag before inputs are ignored.
-const OVERDRAG_LIMIT: f64 = 3.;
+const OVERDRAG_LIMIT: f64 = 0.25;
 
 /// Overview view state.
 #[derive(Debug)]
@@ -51,7 +52,7 @@ pub struct Overview {
     pub hold_timer: Option<RegistrationToken>,
     pub closing_window: Weak<RefCell<Window>>,
     pub last_drag_point: Point<f64, Logical>,
-    pub last_overdrag_step: Option<Instant>,
+    pub last_animation_step: Option<Instant>,
     pub drag_action: DragAction,
     pub x_offset: f64,
     pub y_offset: f64,
@@ -61,7 +62,7 @@ impl Overview {
     pub fn new(active_offset: f64) -> Self {
         Self {
             x_offset: active_offset,
-            last_overdrag_step: Default::default(),
+            last_animation_step: Default::default(),
             last_drag_point: Default::default(),
             closing_window: Default::default(),
             drag_action: Default::default(),
@@ -141,29 +142,31 @@ impl Overview {
         let min_offset = -window_count as f64 + 1.;
         self.x_offset = self.x_offset.clamp(min_offset - OVERDRAG_LIMIT, OVERDRAG_LIMIT);
 
-        let last_overdrag_step = match &mut self.last_overdrag_step {
-            Some(last_overdrag_step) => last_overdrag_step,
+        let last_animation_step = match &mut self.last_animation_step {
+            Some(last_animation_step) => last_animation_step,
             None => return,
         };
 
-        // Handle bounce-back from overdrag/cancelled application close.
+        // Handle horizontal and vertical bounce-back.
 
         // Compute framerate-independent delta.
-        let delta = last_overdrag_step.elapsed().as_millis() as f64;
-        let overdrag_delta = delta / OVERDRAG_ANIMATION_SPEED;
-        let close_delta = delta / CLOSE_CANCEL_ANIMATION_SPEED;
+        let delta = last_animation_step.elapsed().as_millis() as f64;
+        let horizontal_delta = delta / HORIZONTAL_DRAG_ANIMATION_SPEED;
+        let vertical_delta = delta / VERTICAL_DRAG_ANIMATION_SPEED;
 
-        // Overdrag bounce-back.
-        if self.x_offset > 0. {
-            self.x_offset -= overdrag_delta.min(self.x_offset);
-        } else if self.x_offset < min_offset {
-            self.x_offset = (self.x_offset + overdrag_delta).min(min_offset);
+        // Horizontal bounce-back to closes valid integer offset.
+        let target = self.x_offset.round().max(min_offset).min(0.);
+        let fract = self.x_offset.fract();
+        if self.x_offset > 0. || fract <= -0.5 {
+            self.x_offset = (self.x_offset - horizontal_delta).max(target);
+        } else if self.x_offset < min_offset || fract <= f64::EPSILON {
+            self.x_offset = (self.x_offset + horizontal_delta).min(target);
         }
 
         // Close window bounce-back.
-        self.y_offset -= close_delta.min(self.y_offset.abs()).copysign(self.y_offset);
+        self.y_offset -= vertical_delta.min(self.y_offset.abs()).copysign(self.y_offset);
 
-        *last_overdrag_step = Instant::now();
+        *last_animation_step = Instant::now();
     }
 
     /// Render the overview.
@@ -240,7 +243,10 @@ impl Overview {
     /// Check if overview animations are active.
     pub fn animating_drag(&self, window_count: usize) -> bool {
         let min_offset = -(window_count as f64) + 1.;
-        self.x_offset > 0. || self.x_offset < min_offset || self.y_offset != 0.
+        self.x_offset > 0.
+            || self.x_offset < min_offset
+            || self.y_offset != 0.
+            || self.x_offset.fract() <= f64::EPSILON
     }
 }
 

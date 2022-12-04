@@ -648,7 +648,7 @@ impl Windows {
             touch_state.cancel_velocity();
         }
 
-        overview.last_overdrag_step = None;
+        overview.last_animation_step = None;
         overview.cancel_hold(&self.event_loop);
 
         // Redraw when cycling through the overview.
@@ -661,7 +661,7 @@ impl Windows {
             View::Overview(overview) => {
                 let should_close = overview.should_close(&self.output);
 
-                overview.last_overdrag_step = Some(Instant::now());
+                overview.last_animation_step = Some(Instant::now());
                 overview.y_offset = 0.;
 
                 // Close window if y offset exceeds the threshold.
