@@ -155,7 +155,7 @@ impl Overview {
         let vertical_delta = delta / VERTICAL_DRAG_ANIMATION_SPEED;
 
         // Horizontal bounce-back to closes valid integer offset.
-        let target = self.x_offset.round().max(min_offset).min(0.);
+        let target = self.x_offset.round().clamp(min_offset, 0.);
         let fract = self.x_offset.fract();
         if self.x_offset > 0. || fract <= -0.5 {
             self.x_offset = (self.x_offset - horizontal_delta).max(target);

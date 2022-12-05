@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::cell::{RefCell, RefMut};
 use std::mem;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Instant, UNIX_EPOCH};
 
@@ -78,9 +78,9 @@ pub struct Windows {
     layers: Layers,
 
     event_loop: LoopHandle<'static, Catacomb>,
+    activated: Option<ToplevelSurface>,
     transaction: Option<Transaction>,
     start_time: Instant,
-    focus: Focus,
 
     /// Orientation used for the window's current rendered state.
     ///
@@ -108,9 +108,9 @@ impl Windows {
             orphan_popups: Default::default(),
             transaction: Default::default(),
             orientation: Default::default(),
+            activated: Default::default(),
             layouts: Default::default(),
             layers: Default::default(),
-            focus: Default::default(),
             view: Default::default(),
         }
     }
@@ -398,33 +398,47 @@ impl Windows {
 
     /// Current window focus.
     pub fn focus(&mut self) -> Option<WlSurface> {
-        // Check for layer-shell window focus.
-        if let Some(surface) = &self.focus.layer {
-            return Some(surface.clone());
-        }
-
-        // Check for toplevel window focus.
-        let toplevel = self.focus.toplevel.upgrade();
-        let window = toplevel.as_ref().or_else(|| self.layouts.active().primary())?;
-        let surface = window.borrow().surface.clone();
+        let surface = match self.layouts.focus.as_ref().map(|window| window.upgrade()) {
+            // Use focused surface if the window is still alive.
+            Some(Some(window)) => Some(window.borrow().surface.clone()),
+            // Fallback to primary if secondary perished.
+            Some(None) => {
+                let primary = self.layouts.active().primary();
+                let surface = primary.map(|window| window.borrow().surface.clone());
+                self.layouts.focus = primary.map(Rc::downgrade);
+                surface
+            },
+            // Do not upgrade if toplevel is explicitly unfocused.
+            None => None,
+        };
 
         // Update window activation state.
-        if self.focus.activated.as_ref() != Some(&surface) {
+        if self.activated != surface {
             // Clear old activated flag.
-            let last_activated = self.focus.activated.replace(surface.clone());
-            if let Some(activated) = last_activated {
+            if let Some(activated) = self.activated.take() {
                 activated.set_state(|state| {
                     state.states.unset(State::Activated);
                 });
             }
 
             // Set new activated flag.
-            surface.set_state(|state| {
-                state.states.set(State::Activated);
-            });
+            if let Some(surface) = &surface {
+                surface.set_state(|state| {
+                    state.states.set(State::Activated);
+                });
+            }
+            self.activated = surface.clone();
         }
 
-        Some(surface.surface().clone())
+        surface.map(|surface| surface.surface().clone())
+            // Check for layer-shell window focus.
+            .or_else(|| self.layers.focus.clone())
+    }
+
+    /// Clear all window focus.
+    fn clear_focus(&mut self) {
+        self.layouts.focus = None;
+        self.layers.focus = None;
     }
 
     /// Start a new transaction.
@@ -576,7 +590,14 @@ impl Windows {
     pub fn on_tap(&mut self, point: Point<f64, Logical>) {
         let overview = match &mut self.view {
             View::Overview(overview) => overview,
-            View::DragAndDrop(_) | View::Workspace => return,
+            View::Workspace => {
+                // Clear focus on gesture handle tap.
+                if point.y >= (self.output.size().h - GESTURE_HANDLE_HEIGHT) as f64 {
+                    self.clear_focus();
+                }
+                return;
+            },
+            View::DragAndDrop(_) => return,
         };
 
         overview.cancel_hold(&self.event_loop);
@@ -701,7 +722,6 @@ impl Windows {
         match (gesture, &self.view) {
             (Gesture::Up, View::Overview(_)) => {
                 self.layouts.set_active(&self.output, None);
-                self.focus.toplevel = Weak::new();
                 self.set_view(View::Workspace);
             },
             (Gesture::Up, _) if !self.layouts.is_empty() => {
@@ -726,33 +746,39 @@ impl Windows {
             _ => return None,
         };
 
+        // Clear current focus.
+        self.clear_focus();
+
         // Search for topmost clicked surface.
 
         if let Some(window) = self.layers.foreground_window_at(position) {
+            let surface = window.surface_at(position);
+
             if !window.deny_focus {
-                self.focus.layer = Some(window.surface().clone());
+                self.layers.focus = Some(window.surface().clone());
             }
-            return window.surface_at(position);
+
+            return surface;
         }
 
-        let active_layout = self.layouts.active();
+        let active_layout = self.layouts.active().clone();
         for window in active_layout.primary().iter().chain(&active_layout.secondary()) {
             let window_ref = window.borrow();
             if window_ref.contains(position) {
-                self.focus.toplevel = Rc::downgrade(window);
+                self.layouts.focus = Some(Rc::downgrade(window));
                 return window_ref.surface_at(position);
             }
         }
 
         if let Some(window) = self.layers.background_window_at(position) {
-            if !window.deny_focus {
-                self.focus.layer = Some(window.surface().clone());
-            }
-            return window.surface_at(position);
-        }
+            let surface = window.surface_at(position);
 
-        // Unfocus when touching outside of window bounds.
-        self.focus.clear();
+            if !window.deny_focus {
+                self.layers.focus = Some(window.surface().clone());
+            }
+
+            return surface;
+        }
 
         None
     }
@@ -795,21 +821,5 @@ enum View {
 impl Default for View {
     fn default() -> Self {
         View::Workspace
-    }
-}
-
-/// Current window focus.
-#[derive(Default, Debug)]
-struct Focus {
-    activated: Option<ToplevelSurface>,
-    toplevel: Weak<RefCell<Window>>,
-    layer: Option<WlSurface>,
-}
-
-impl Focus {
-    /// Clear all window focus.
-    fn clear(&mut self) {
-        self.toplevel = Weak::new();
-        self.layer = None;
     }
 }

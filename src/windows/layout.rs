@@ -3,7 +3,7 @@
 use std::cell::{Ref, RefCell, RefMut};
 use std::cmp::Ordering;
 use std::mem;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use smithay::wayland::shell::xdg::ToplevelSurface;
 
@@ -15,6 +15,8 @@ const DEFAULT_LAYOUT: Layout = Layout { primary: None, secondary: None };
 /// Active workspaces.
 #[derive(Debug, Default)]
 pub struct Layouts {
+    pub focus: Option<Weak<RefCell<Window>>>,
+
     transactions: Vec<Transaction>,
     active_layout: Option<usize>,
     layouts: Vec<Layout>,
@@ -52,8 +54,10 @@ impl Layouts {
     /// Switch the active layout.
     pub fn set_active(&mut self, output: &Output, layout_index: Option<usize>) {
         // Send enter events for new layout's windows.
+        self.focus = None;
         let layout = layout_index.and_then(|i| self.layouts.get(i)).unwrap_or(&DEFAULT_LAYOUT);
-        for window in layout.primary.iter().chain(&layout.secondary) {
+        for window in layout.secondary.iter().chain(&layout.primary) {
+            self.focus = Some(Rc::downgrade(window));
             window.borrow_mut().enter(output);
         }
 
@@ -99,6 +103,7 @@ impl Layouts {
         // Send enter event for new primary.
         let window = if position.secondary { &layout.secondary } else { &layout.primary };
         if let Some(window) = window {
+            self.focus = Some(Rc::downgrade(window));
             window.borrow_mut().enter(output);
         }
 
@@ -148,6 +153,7 @@ impl Layouts {
         // Send enter event for new secondary.
         let window = if position.secondary { &layout.secondary } else { &layout.primary };
         if let Some(window) = window {
+            self.focus = Some(Rc::downgrade(window));
             window.borrow_mut().enter(output);
         }
 
@@ -220,6 +226,7 @@ impl Layouts {
         }
         self.transactions.clear();
 
+        // Reap dead windows and apply window transactions.
         let mut index = 0;
         self.layouts.retain_mut(|layout| {
             // Update secondary window transaction and liveliness.

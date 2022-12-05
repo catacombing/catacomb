@@ -1,6 +1,7 @@
 //! Layer shell windows.
 
 use smithay::backend::renderer::gles2::Gles2Frame;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Physical, Point, Rectangle};
 use smithay::wayland::shell::wlr_layer::{ExclusiveZone, Layer};
 
@@ -13,6 +14,8 @@ type LayerWindow = Window<CatacombLayerSurface>;
 /// Layer shell windows.
 #[derive(Debug, Default)]
 pub struct Layers {
+    pub focus: Option<WlSurface>,
+
     background: Vec<LayerWindow>,
     bottom: Vec<LayerWindow>,
     top: Vec<LayerWindow>,
