@@ -359,6 +359,9 @@ impl Windows {
 
     /// Stage dead layer shell window for reaping.
     pub fn reap_layer(&mut self, surface: LayerSurface) {
+        // Start transaction to ensure window is reaped even without any resize.
+        start_transaction();
+
         // Handle layer shell death.
         let old_exclusive = self.output.exclusive;
         if let Some(window) = self.layers.iter().find(|layer| layer.surface.eq(&surface)) {
