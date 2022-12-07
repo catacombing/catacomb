@@ -3,7 +3,7 @@
 use smithay::backend::renderer::gles2::Gles2Frame;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Physical, Point, Rectangle};
-use smithay::wayland::shell::wlr_layer::{ExclusiveZone, Layer};
+use smithay::wayland::shell::wlr_layer::Layer;
 
 use crate::output::Output;
 use crate::windows::surface::CatacombLayerSurface;
@@ -69,19 +69,12 @@ impl Layers {
         frame: &mut Gles2Frame,
         output: &Output,
         damage: &[Rectangle<i32, Physical>],
-        workspace_active: bool,
     ) {
-        // Don't draw layer shell windows with exclusive zones in the overview.
-        let filter_exclusive = |window: &&mut LayerWindow| {
-            workspace_active
-                || !matches!(window.surface.exclusive_zone, ExclusiveZone::Exclusive(_))
-        };
-
-        for window in self.top.iter_mut().filter(filter_exclusive) {
+        for window in self.top.iter_mut() {
             window.draw(frame, output, 1., None, damage);
         }
 
-        for window in self.overlay.iter_mut().filter(filter_exclusive) {
+        for window in self.overlay.iter_mut() {
             window.draw(frame, output, 1., None, damage);
         }
     }

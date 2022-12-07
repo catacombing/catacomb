@@ -281,8 +281,10 @@ impl Windows {
             },
         }
 
-        let workspace_active = matches!(self.view, View::Workspace);
-        self.layers.draw_foreground(frame, &self.output, damage, workspace_active);
+        // Only draw top/overlay windows in workspace view.
+        if matches!(self.view, View::Workspace) {
+            self.layers.draw_foreground(frame, &self.output, damage);
+        }
 
         // Draw gesture handle in workspace view.
         let _ = frame.with_context(|gl| unsafe {
