@@ -751,15 +751,13 @@ impl Windows {
             _ => return None,
         };
 
-        // Clear current focus.
-        self.clear_focus();
-
         // Search for topmost clicked surface.
 
         if let Some(window) = self.layers.foreground_window_at(position) {
             let surface = window.surface_at(position);
 
             if !window.deny_focus {
+                self.layouts.focus = None;
                 self.layers.focus = Some(window.surface().clone());
             }
 
@@ -770,7 +768,7 @@ impl Windows {
         for window in active_layout.primary().iter().chain(&active_layout.secondary()) {
             let window_ref = window.borrow();
             if window_ref.contains(position) {
-                self.layouts.focus = Some(Rc::downgrade(window));
+                self.layers.focus = None;
                 return window_ref.surface_at(position);
             }
         }
@@ -779,11 +777,19 @@ impl Windows {
             let surface = window.surface_at(position);
 
             if !window.deny_focus {
+                self.layouts.focus = None;
                 self.layers.focus = Some(window.surface().clone());
             }
 
             return surface;
         }
+
+        // Clear focus if touch wasn't on any surface.
+        //
+        // NOTE: We can't just always clear focus since a layer shell surface that
+        // denies focus should still return the touched surface but not clear
+        // the focus.
+        self.clear_focus();
 
         None
     }
