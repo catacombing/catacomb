@@ -11,7 +11,7 @@ use smithay::utils::{Buffer as BufferSpace, Logical, Physical, Point, Rectangle,
 use smithay::wayland::compositor::{BufferAssignment, Damage as SurfaceDamage, SurfaceAttributes};
 
 use crate::geometry::Vector;
-use crate::output::Output;
+use crate::output::Canvas;
 
 /// Maximum buffer age before damage information is discarded.
 pub const MAX_DAMAGE_AGE: usize = 2;
@@ -108,7 +108,7 @@ impl Texture {
     pub fn draw_at(
         &self,
         frame: &mut Gles2Frame,
-        output: &Output,
+        canvas: &Canvas,
         window_bounds: Rectangle<i32, Logical>,
         window_scale: f64,
         damage: impl Into<Option<Rectangle<i32, Physical>>>,
@@ -128,7 +128,7 @@ impl Texture {
         let location = window_bounds.loc + self.location.scale(window_scale);
         let dst_size = src_size.scale(window_scale).min(window_bounds.size);
         let dst = Rectangle::from_loc_and_size(location, dst_size);
-        let dst_physical = dst.to_physical(output.scale());
+        let dst_physical = dst.to_physical(canvas.scale());
 
         // Calculate surface damage.
         let full_damage = Rectangle::from_loc_and_size((0, 0), dst_physical.size);

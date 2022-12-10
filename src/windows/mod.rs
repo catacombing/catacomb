@@ -2,10 +2,10 @@
 
 use std::borrow::Cow;
 use std::cell::{RefCell, RefMut};
-use std::mem;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Instant, UNIX_EPOCH};
+use std::{cmp, mem};
 
 use smithay::backend::renderer::gles2::ffi::{self as gl, Gles2};
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
@@ -24,7 +24,7 @@ use crate::drawing::{Graphics, MAX_DAMAGE_AGE};
 use crate::input::{Gesture, TouchState};
 use crate::layer::Layers;
 use crate::orientation::Orientation;
-use crate::output::{Output, GESTURE_HANDLE_HEIGHT};
+use crate::output::{Canvas, Output, GESTURE_HANDLE_HEIGHT};
 use crate::overview::{DragAction, DragAndDrop, Overview};
 use crate::windows::layout::{LayoutPosition, Layouts};
 use crate::windows::surface::{CatacombLayerSurface, OffsetSurface, Surface};
@@ -69,25 +69,25 @@ pub fn start_transaction() {
 /// Container tracking all known clients.
 #[derive(Debug)]
 pub struct Windows {
-    pub output: Output,
-
-    layouts: Layouts,
-    view: View,
-
     orphan_popups: Vec<Window<PopupSurface>>,
+    layouts: Layouts,
     layers: Layers,
+    view: View,
 
     event_loop: LoopHandle<'static, Catacomb>,
     activated: Option<ToplevelSurface>,
     transaction: Option<Transaction>,
     start_time: Instant,
+    output: Output,
 
-    /// Orientation used for the window's current rendered state.
+    /// Cached output state for rendering.
     ///
-    /// This is used to keep rendering at the previous orientation when a device
-    /// was rotated and there is an active transaction pending waiting for
-    /// clients to submit new buffers.
-    orientation: Orientation,
+    /// This is used to tie the transactions to their respective output size and
+    /// should be passed to anyone who doesn't communicate with clients about
+    /// future updates, but instead tries to calculate things for the next
+    /// rendered frame.
+    canvas: Canvas,
+
     /// Orientation independent from [`Windows::orientation_locked`] state.
     unlocked_orientation: Orientation,
     orientation_locked: bool,
@@ -98,16 +98,19 @@ pub struct Windows {
 
 impl Windows {
     pub fn new(display: &DisplayHandle, event_loop: LoopHandle<'static, Catacomb>) -> Self {
+        let output = Output::new_dummy(display);
+        let canvas = *output.canvas();
+
         Self {
             event_loop,
-            output: Output::new_dummy(display),
+            output,
+            canvas,
             start_time: Instant::now(),
             fully_damaged: true,
             unlocked_orientation: Default::default(),
             orientation_locked: Default::default(),
             orphan_popups: Default::default(),
             transaction: Default::default(),
-            orientation: Default::default(),
             activated: Default::default(),
             layouts: Default::default(),
             layers: Default::default(),
@@ -174,13 +177,13 @@ impl Windows {
         }
 
         // Handle layer shell surface commits.
-        let old_exclusive = self.output.exclusive;
+        let old_exclusive = *self.output.exclusive();
         if let Some(window) = find_window!(self.layers.iter_mut()) {
             window.surface_commit(surface, &mut self.output);
         }
 
         // Resize windows after exclusive zone change.
-        if self.output.exclusive != old_exclusive {
+        if self.output.exclusive() != &old_exclusive {
             self.resize_all();
         }
     }
@@ -219,6 +222,11 @@ impl Windows {
 
     /// Import pending buffers for all windows.
     pub fn import_buffers(&mut self, renderer: &mut Gles2Renderer) {
+        // Do not import buffers during a transaction.
+        if self.transaction_active() {
+            return;
+        }
+
         for mut window in self.layouts.windows_mut() {
             window.import_buffers(renderer);
         }
@@ -246,8 +254,10 @@ impl Windows {
             || fully_damaged
             || !matches!(self.view, View::Workspace)
         {
-            let output_size = self.output.size().to_physical(self.output.scale());
-            damage.push(Rectangle::from_loc_and_size((0, 0), output_size));
+            // Use maximum dimension as damage square to account for possible rotation.
+            let resolution = self.output.physical_resolution();
+            let max_dimension = cmp::max(resolution.w, resolution.h);
+            damage.push(Rectangle::from_loc_and_size((0, 0), (max_dimension, max_dimension)));
             damage.take_since(1)
         } else {
             self.window_damage(damage);
@@ -257,22 +267,22 @@ impl Windows {
         // Clear the screen.
         let _ = frame.clear([1., 0., 1., 1.], damage);
 
-        self.layers.draw_background(frame, &self.output, damage);
+        self.layers.draw_background(frame, &self.canvas, damage);
 
         match self.view {
             View::Workspace => {
                 self.layouts.with_visible(|window| {
-                    window.draw(frame, &self.output, 1., None, damage);
+                    window.draw(frame, &self.canvas, 1., None, damage);
                 });
             },
             View::DragAndDrop(ref dnd) => {
                 self.layouts.with_visible(|window| {
-                    window.draw(frame, &self.output, 1., None, damage);
+                    window.draw(frame, &self.canvas, 1., None, damage);
                 });
-                dnd.draw(frame, &self.output, graphics);
+                dnd.draw(frame, &self.canvas, graphics);
             },
             View::Overview(ref mut overview) => {
-                overview.draw(frame, &self.output, &self.layouts);
+                overview.draw(frame, &self.canvas, &self.layouts);
 
                 // Stage immediate redraw while overview animations are active.
                 if overview.animating_drag(self.layouts.len()) {
@@ -283,7 +293,7 @@ impl Windows {
 
         // Only draw top/overlay windows in workspace view.
         if matches!(self.view, View::Workspace) {
-            self.layers.draw_foreground(frame, &self.output, damage);
+            self.layers.draw_foreground(frame, &self.canvas, damage);
         }
 
         // Draw gesture handle in workspace view.
@@ -294,11 +304,11 @@ impl Windows {
 
     /// Draw the gesture handle.
     unsafe fn draw_gesture_handle(&self, gl: &Gles2, damage: &[Rectangle<i32, Physical>]) {
-        let handle_height = GESTURE_HANDLE_HEIGHT * self.output.scale();
-        let output_size = self.output.physical_resolution();
+        let handle_height = GESTURE_HANDLE_HEIGHT * self.canvas.scale();
+        let output_size = self.canvas.physical_resolution();
 
         // Calculate handle rectangle.
-        let (handle_loc, handle_size) = match self.output.orientation() {
+        let (handle_loc, handle_size) = match self.orientation() {
             Orientation::Portrait => {
                 ((0, output_size.h - handle_height), (output_size.w, handle_height))
             },
@@ -365,13 +375,13 @@ impl Windows {
         start_transaction();
 
         // Handle layer shell death.
-        let old_exclusive = self.output.exclusive;
+        let old_exclusive = *self.output.exclusive();
         if let Some(window) = self.layers.iter().find(|layer| layer.surface.eq(&surface)) {
-            self.output.exclusive.reset(window.surface.anchor, window.surface.exclusive_zone);
+            self.output.exclusive().reset(window.surface.anchor, window.surface.exclusive_zone);
         }
 
         // Resize windows if reserved layer space changed.
-        if self.output.exclusive != old_exclusive {
+        if self.output.exclusive() != &old_exclusive {
             self.resize_all();
         }
     }
@@ -449,7 +459,7 @@ impl Windows {
     /// Start a new transaction.
     fn start_transaction(&mut self) -> &mut Transaction {
         start_transaction();
-        self.transaction.get_or_insert(Transaction::new(self))
+        self.transaction.get_or_insert(Transaction::new())
     }
 
     /// Check if there's an active transaction.
@@ -488,12 +498,10 @@ impl Windows {
         self.layers.apply_transaction();
 
         // Apply window management changes.
-        if let Some(transaction) = self.transaction.take() {
-            self.orientation = transaction.orientation;
-            if let Some(view) = transaction.view {
-                self.view = view;
-            }
+        if let Some(view) = self.transaction.take().and_then(|transaction| transaction.view) {
+            self.view = view;
         }
+        self.canvas = *self.output.canvas();
 
         // Close overview if all layouts died.
         if self.layouts.is_empty() {
@@ -523,10 +531,13 @@ impl Windows {
             return;
         }
 
+        // Start transaction to ensure output transaction will be applied.
+        start_transaction();
+
+        // Update output orientation.
         self.output.set_orientation(orientation);
 
-        self.start_transaction().orientation = orientation;
-
+        // Resize all windows to new output size.
         self.resize_all();
     }
 
@@ -548,7 +559,7 @@ impl Windows {
 
     /// Get the current rendering orientation.
     pub fn orientation(&self) -> Orientation {
-        self.orientation
+        self.canvas.orientation()
     }
 
     /// Check if any window was damaged since the last redraw.
@@ -803,18 +814,28 @@ impl Windows {
     fn set_view(&mut self, view: View) {
         self.start_transaction().view = Some(view);
     }
+
+    /// Get immutable reference to the current output.
+    pub fn output(&self) -> &Output {
+        &self.output
+    }
+
+    /// Update the window manager's current output.
+    pub fn set_output(&mut self, output: Output) {
+        self.canvas = *output.canvas();
+        self.output = output;
+    }
 }
 
 /// Atomic changes to [`Windows`].
 #[derive(Debug)]
 struct Transaction {
-    orientation: Orientation,
     view: Option<View>,
 }
 
 impl Transaction {
-    fn new(current_state: &Windows) -> Self {
-        Self { orientation: current_state.orientation, view: None }
+    fn new() -> Self {
+        Self { view: None }
     }
 }
 

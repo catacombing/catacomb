@@ -14,7 +14,7 @@ use crate::catacomb::Catacomb;
 use crate::drawing::Graphics;
 use crate::geometry::Vector;
 use crate::input::HOLD_DURATION;
-use crate::output::Output;
+use crate::output::Canvas;
 use crate::windows::layout::{LayoutPosition, Layouts};
 use crate::windows::window::Window;
 
@@ -102,11 +102,11 @@ impl Overview {
     /// Get layout position at the specified point.
     pub fn layout_position(
         &self,
-        output: &Output,
+        canvas: &Canvas,
         layouts: &Layouts,
         point: Point<f64, Logical>,
     ) -> Option<LayoutPosition> {
-        let available = output.available_overview();
+        let available = canvas.available_overview();
 
         let mut offset = self.x_offset - 1.;
         while offset < self.x_offset + 2. {
@@ -117,7 +117,7 @@ impl Overview {
 
                 // Check if click was within secondary window.
                 if layout.secondary().is_some()
-                    && position.secondary_bounds(output).to_f64().contains(point)
+                    && position.secondary_bounds().to_f64().contains(point)
                 {
                     return Some(LayoutPosition::new(layout_index, true));
                 }
@@ -170,11 +170,13 @@ impl Overview {
     }
 
     /// Render the overview.
-    pub fn draw(&mut self, frame: &mut Gles2Frame, output: &Output, layouts: &Layouts) {
+    pub fn draw(&mut self, frame: &mut Gles2Frame, canvas: &Canvas, layouts: &Layouts) {
         let layout_count = layouts.len() as i32;
         self.clamp_offset(layout_count);
 
-        let available = output.available_overview();
+        // TODO: Need to use cached size rather than computing from scratch because of
+        // possible transaction.
+        let available = canvas.available_overview();
 
         // Draw up to three visible windows (center and one to each side).
         let mut offset = self.x_offset - 1.;
@@ -205,12 +207,12 @@ impl Overview {
                 }
 
                 let mut primary = primary.borrow_mut();
-                primary.draw(frame, output, position.scale, bounds, None);
+                primary.draw(frame, canvas, position.scale, bounds, None);
             }
 
             // Draw the secondary window.
             if let Some(secondary) = layout.secondary() {
-                let mut bounds = position.secondary_bounds(output);
+                let mut bounds = position.secondary_bounds();
 
                 // Offset window if it's in the process of being closed.
                 if Weak::ptr_eq(&closing_window, &Rc::downgrade(secondary)) {
@@ -221,7 +223,7 @@ impl Overview {
                 }
 
                 let mut secondary = secondary.borrow_mut();
-                secondary.draw(frame, output, position.scale, bounds, None);
+                secondary.draw(frame, canvas, position.scale, bounds, None);
             }
 
             offset += 1.;
@@ -229,8 +231,8 @@ impl Overview {
     }
 
     /// Check if the active window has exceeded the minimum close distance.
-    pub fn should_close(&self, output: &Output) -> bool {
-        let close_distance = output.available_overview().size.h as f64 * OVERVIEW_CLOSE_DISTANCE;
+    pub fn should_close(&self, canvas: &Canvas) -> bool {
+        let close_distance = canvas.available_overview().size.h as f64 * OVERVIEW_CLOSE_DISTANCE;
         self.y_offset.abs() >= close_distance
     }
 
@@ -263,7 +265,7 @@ pub struct DragAndDrop {
 
 impl DragAndDrop {
     pub fn new(
-        output: &Output,
+        canvas: &Canvas,
         overview: &Overview,
         layout_position: LayoutPosition,
         window: Rc<RefCell<Window>>,
@@ -273,15 +275,12 @@ impl DragAndDrop {
             -(layout_position.index as f64) + (overview.x_offset - overview.x_offset.round());
 
         // Calculate layout position in overview.
-        let available = output.available_overview();
+        let available = canvas.available_overview();
         let position = OverviewPosition::new(available, overview.x_offset, window_x_offset);
 
         // Calculate original bounds of dragged window.
-        let window_bounds = if layout_position.secondary {
-            position.secondary_bounds(output)
-        } else {
-            position.bounds
-        };
+        let window_bounds =
+            if layout_position.secondary { position.secondary_bounds() } else { position.bounds };
 
         Self {
             window_bounds,
@@ -294,14 +293,14 @@ impl DragAndDrop {
     }
 
     /// Draw the tiling location picker.
-    pub fn draw(&self, frame: &mut Gles2Frame, output: &Output, graphics: &Graphics) {
+    pub fn draw(&self, frame: &mut Gles2Frame, canvas: &Canvas, graphics: &Graphics) {
         // Offset by dragged distance.
         let mut bounds = self.window_bounds;
         bounds.loc += self.window_position.to_i32_round();
 
         // Render the window being drag-and-dropped.
         let mut window = self.window.borrow_mut();
-        window.draw(frame, output, self.scale, bounds, None);
+        window.draw(frame, canvas, self.scale, bounds, None);
 
         // Set custom OpenGL blending function.
         let _ = frame.with_context(|gl| unsafe {
@@ -309,16 +308,16 @@ impl DragAndDrop {
         });
 
         // Get bounds of the drop areas.
-        let (primary_bounds, secondary_bounds) = self.drop_bounds(output);
+        let (primary_bounds, secondary_bounds) = self.drop_bounds(canvas);
 
         // Render the drop areas.
-        let available = output.available_overview();
+        let available = canvas.available_overview();
         let scale = cmp::max(available.size.w, available.size.h) as f64;
         for bounds in [primary_bounds, secondary_bounds] {
             if bounds.to_f64().contains(self.touch_position) {
-                graphics.active_drop_target.draw_at(frame, output, bounds, scale, None);
+                graphics.active_drop_target.draw_at(frame, canvas, bounds, scale, None);
             } else {
-                graphics.drop_target.draw_at(frame, output, bounds, scale, None);
+                graphics.drop_target.draw_at(frame, canvas, bounds, scale, None);
             }
         }
 
@@ -331,9 +330,9 @@ impl DragAndDrop {
     /// Bounds for the drop preview areas of the D&D action.
     pub fn drop_bounds(
         &self,
-        output: &Output,
+        canvas: &Canvas,
     ) -> (Rectangle<i32, Logical>, Rectangle<i32, Logical>) {
-        let available = output.available_overview();
+        let available = canvas.available_overview();
         if available.size.h > available.size.w {
             let dnd_height = (available.size.h as f64 * DRAG_AND_DROP_PERCENTAGE).round() as i32;
             let size = Size::from((available.size.w, dnd_height));
@@ -409,14 +408,12 @@ impl OverviewPosition {
     }
 
     /// Secondary window bounds for this layout's position.
-    fn secondary_bounds(&self, output: &Output) -> Rectangle<i32, Logical> {
-        let primary_size = output.primary_rectangle(true).size;
-        let secondary_offset = primary_size.scale(self.scale).h;
+    fn secondary_bounds(&self) -> Rectangle<i32, Logical> {
+        let secondary_offset = self.bounds.size.h / 2;
 
         let mut secondary_bounds = self.bounds;
         secondary_bounds.loc.y += secondary_offset;
         secondary_bounds.size.h -= secondary_offset;
-
         secondary_bounds
     }
 }

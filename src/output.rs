@@ -7,7 +7,7 @@ use smithay::output::{Mode, Output as SmithayOutput, PhysicalProperties, Scale, 
 use smithay::reexports::wayland_server::backend::GlobalId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::DisplayHandle;
-use smithay::utils::{Logical, Physical, Rectangle, Size, Transform};
+use smithay::utils::{Logical, Physical, Rectangle, Size};
 use smithay::wayland::shell::wlr_layer::{Anchor, ExclusiveZone, Layer};
 
 use crate::catacomb::Catacomb;
@@ -22,16 +22,10 @@ const SCALE: i32 = 2;
 /// Wayland output, typically a screen.
 #[derive(Debug)]
 pub struct Output {
-    /// Layer shell reserved space.
-    pub exclusive: ExclusiveSpace,
-
     global: Option<GlobalId>,
-    orientation: Orientation,
     display: DisplayHandle,
     output: SmithayOutput,
-    transform: Transform,
-    scale: i32,
-    mode: Mode,
+    canvas: Canvas,
 }
 
 impl Drop for Output {
@@ -52,18 +46,9 @@ impl Output {
     ) -> Self {
         let output = SmithayOutput::new(name.into(), properties, None);
         let global = Some(output.create_global::<Catacomb>(display));
-        let scale = SCALE;
 
-        let mut output = Self {
-            global,
-            output,
-            scale,
-            mode,
-            display: display.clone(),
-            orientation: Default::default(),
-            transform: Default::default(),
-            exclusive: Default::default(),
-        };
+        let mut output =
+            Self { global, output, canvas: Canvas::new(mode), display: display.clone() };
 
         // Update the active mode.
         output.set_mode(output.mode);
@@ -85,11 +70,11 @@ impl Output {
     /// Update the output's active mode.
     #[inline]
     pub fn set_mode(&mut self, mode: Mode) {
-        let scale = Some(Scale::Integer(self.scale));
-        let transform = Some(self.transform);
+        let scale = Some(Scale::Integer(self.canvas.scale));
+        let transform = Some(self.orientation.transform());
         self.output.change_current_state(Some(mode), transform, scale, None);
         self.output.set_preferred(mode);
-        self.mode = mode;
+        self.canvas.mode = mode;
     }
 
     /// Primary window dimensions.
@@ -118,6 +103,68 @@ impl Output {
             loc.x += (available.size.w + 1) / 2;
             Rectangle::from_loc_and_size(loc, size)
         }
+    }
+
+    /// Duration between frames in milliseconds.
+    pub fn frame_interval(&self) -> Duration {
+        Duration::from_millis(1_000_000 / self.canvas.mode.refresh as u64)
+    }
+
+    /// Update the device orientation.
+    pub fn set_orientation(&mut self, orientation: Orientation) {
+        self.canvas.orientation = orientation;
+
+        // Update output mode to apply transform.
+        self.set_mode(self.canvas.mode);
+    }
+
+    /// Add the given surface to the display.
+    pub fn enter(&self, surface: &WlSurface) {
+        self.output.enter(surface);
+    }
+
+    /// Remove the given surface from the display.
+    pub fn leave(&self, surface: &WlSurface) {
+        self.output.leave(surface);
+    }
+
+    /// Get output state.
+    pub fn canvas(&self) -> &Canvas {
+        &self.canvas
+    }
+
+    /// Get a mutable reference to the output's reserved space.
+    pub fn exclusive(&mut self) -> &mut ExclusiveSpace {
+        &mut self.canvas.exclusive
+    }
+}
+
+impl Deref for Output {
+    type Target = Canvas;
+
+    fn deref(&self) -> &Self::Target {
+        &self.canvas
+    }
+}
+
+/// Output state for rendering.
+#[derive(Copy, Clone, Debug)]
+pub struct Canvas {
+    exclusive: ExclusiveSpace,
+    orientation: Orientation,
+    scale: i32,
+    mode: Mode,
+}
+
+impl Canvas {
+    fn new(mode: Mode) -> Self {
+        let scale = SCALE;
+        Self { mode, scale, orientation: Default::default(), exclusive: Default::default() }
+    }
+
+    /// Device orientation.
+    pub fn orientation(&self) -> Orientation {
+        self.orientation
     }
 
     /// Output device resolution.
@@ -188,38 +235,9 @@ impl Output {
         Rectangle::from_loc_and_size(loc, size)
     }
 
-    /// Duration between frames in milliseconds.
-    pub fn frame_interval(&self) -> Duration {
-        Duration::from_millis(1_000_000 / self.mode.refresh as u64)
-    }
-
-    /// Update the device orientation.
-    pub fn set_orientation(&mut self, orientation: Orientation) {
-        self.transform = orientation.transform();
-        self.orientation = orientation;
-
-        // Update output mode to apply transform.
-        self.set_mode(self.mode);
-    }
-
-    /// Device orientation.
-    pub fn orientation(&self) -> Orientation {
-        self.orientation
-    }
-
     /// Output scale.
     pub fn scale(&self) -> i32 {
         self.scale
-    }
-
-    /// Add the given surface to the display.
-    pub fn enter(&self, surface: &WlSurface) {
-        self.output.enter(surface);
-    }
-
-    /// Remove the given surface from the display.
-    pub fn leave(&self, surface: &WlSurface) {
-        self.output.leave(surface);
     }
 }
 

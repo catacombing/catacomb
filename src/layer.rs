@@ -5,7 +5,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Physical, Point, Rectangle};
 use smithay::wayland::shell::wlr_layer::Layer;
 
-use crate::output::Output;
+use crate::output::Canvas;
 use crate::windows::surface::CatacombLayerSurface;
 use crate::windows::window::Window;
 
@@ -51,15 +51,15 @@ impl Layers {
     pub fn draw_background(
         &mut self,
         frame: &mut Gles2Frame,
-        output: &Output,
+        canvas: &Canvas,
         damage: &[Rectangle<i32, Physical>],
     ) {
         for window in &mut self.background {
-            window.draw(frame, output, 1., None, damage);
+            window.draw(frame, canvas, 1., None, damage);
         }
 
         for window in &mut self.bottom {
-            window.draw(frame, output, 1., None, damage);
+            window.draw(frame, canvas, 1., None, damage);
         }
     }
 
@@ -67,15 +67,15 @@ impl Layers {
     pub fn draw_foreground(
         &mut self,
         frame: &mut Gles2Frame,
-        output: &Output,
+        canvas: &Canvas,
         damage: &[Rectangle<i32, Physical>],
     ) {
         for window in self.top.iter_mut() {
-            window.draw(frame, output, 1., None, damage);
+            window.draw(frame, canvas, 1., None, damage);
         }
 
         for window in self.overlay.iter_mut() {
-            window.draw(frame, output, 1., None, damage);
+            window.draw(frame, canvas, 1., None, damage);
         }
     }
 

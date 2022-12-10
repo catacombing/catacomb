@@ -76,7 +76,7 @@ pub fn run() {
             UdevEvent::Changed { device_id } => {
                 let _ = catacomb.backend.change_device(
                     &catacomb.display_handle,
-                    &mut catacomb.windows.output,
+                    &mut catacomb.windows,
                     device_id,
                 );
             },
@@ -100,8 +100,7 @@ pub fn run() {
 
 /// Add udev device, automatically kicking off rendering for it.
 fn add_device(catacomb: &mut Catacomb, path: PathBuf) {
-    let _ =
-        catacomb.backend.add_device(&catacomb.display_handle, &mut catacomb.windows.output, path);
+    let _ = catacomb.backend.add_device(&catacomb.display_handle, &mut catacomb.windows, path);
 
     // Kick-off rendering.
     catacomb.create_frame();
@@ -181,7 +180,7 @@ impl Udev {
     fn add_device(
         &mut self,
         display_handle: &DisplayHandle,
-        output: &mut Output,
+        windows: &mut Windows,
         path: PathBuf,
     ) -> Result<(), Box<dyn Error>> {
         let open_flags = OFlag::O_RDWR | OFlag::O_CLOEXEC | OFlag::O_NOCTTY | OFlag::O_NONBLOCK;
@@ -202,7 +201,7 @@ impl Udev {
 
         // Create the surface we will render to.
         let gbm_surface = self
-            .create_gbm_surface(display_handle, output, &renderer, &drm, &gbm)
+            .create_gbm_surface(display_handle, windows, &renderer, &drm, &gbm)
             .ok_or("gbm surface")?;
 
         // Redraw when VT is focused.
@@ -257,14 +256,14 @@ impl Udev {
     fn change_device(
         &mut self,
         display_handle: &DisplayHandle,
-        output: &mut Output,
+        windows: &mut Windows,
         device_id: DeviceId,
     ) -> Result<(), Box<dyn Error>> {
         let device = self.output_device.as_ref().filter(|dev| dev.id == device_id);
         let path = device.and_then(|device| device.gbm.dev_path());
         if let Some(path) = path {
             self.remove_device(device_id);
-            self.add_device(display_handle, output, path)?;
+            self.add_device(display_handle, windows, path)?;
         }
 
         Ok(())
@@ -274,7 +273,7 @@ impl Udev {
     fn create_gbm_surface(
         &mut self,
         display: &DisplayHandle,
-        output: &mut Output,
+        windows: &mut Windows,
         renderer: &Gles2Renderer,
         drm: &DrmDevice<RawFd>,
         gbm: &GbmDevice<RawFd>,
@@ -314,12 +313,12 @@ impl Udev {
         let (physical_width, physical_height) = connector.size().unwrap_or((0, 0));
         let output_name = format!("{:?}", connector.interface());
 
-        *output = Output::new(display, output_name, mode, PhysicalProperties {
+        windows.set_output(Output::new(display, output_name, mode, PhysicalProperties {
             size: (physical_width as i32, physical_height as i32).into(),
             subpixel: Subpixel::Unknown,
             model: "Generic DRM".into(),
             make: "Catacomb".into(),
-        });
+        }));
 
         Some(surface)
     }
@@ -390,7 +389,7 @@ impl OutputDevice {
 
         // Draw the current frame into the buffer.
         let transform = windows.orientation().transform();
-        let output_size = windows.output.physical_resolution();
+        let output_size = windows.output().physical_resolution();
         let mut frame = self.renderer.render(output_size, transform)?;
         windows.draw(&mut frame, &self.graphics, damage, age);
 

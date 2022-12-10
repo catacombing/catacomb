@@ -19,7 +19,7 @@ use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface, XdgPopupSurfac
 
 use crate::drawing::{SurfaceBuffer, Texture};
 use crate::geometry::Vector;
-use crate::output::{ExclusiveSpace, Output};
+use crate::output::{Canvas, ExclusiveSpace, Output};
 use crate::windows;
 use crate::windows::surface::{CatacombLayerSurface, OffsetSurface, Surface};
 
@@ -118,13 +118,13 @@ impl<S: Surface> Window<S> {
     pub fn draw<'a>(
         &mut self,
         frame: &mut Gles2Frame,
-        output: &Output,
+        canvas: &Canvas,
         scale: f64,
         bounds: impl Into<Option<Rectangle<i32, Logical>>>,
         damage: impl Into<Option<&'a [Rectangle<i32, Physical>]>>,
     ) {
         let bounds = bounds.into().unwrap_or_else(|| self.bounds());
-        let physical_bounds = bounds.to_physical(output.scale());
+        let physical_bounds = bounds.to_physical(canvas.scale());
 
         // Treat no damage information as full damage.
         let full_damage = [physical_bounds];
@@ -149,14 +149,14 @@ impl<S: Surface> Window<S> {
         self.damage = None;
 
         for texture in &mut self.texture_cache.textures {
-            texture.draw_at(frame, output, bounds, scale, window_damage);
+            texture.draw_at(frame, canvas, bounds, scale, window_damage);
         }
 
         // Draw popup tree.
         for popup in &mut self.popups {
             let loc = bounds.loc + popup.rectangle.loc;
             let popup_bounds = Rectangle::from_loc_and_size(loc, (i32::MAX, i32::MAX));
-            popup.draw(frame, output, scale, popup_bounds, damage);
+            popup.draw(frame, canvas, scale, popup_bounds, damage);
         }
     }
 
@@ -171,8 +171,8 @@ impl<S: Surface> Window<S> {
 
     /// Import the buffers of all surfaces into the renderer.
     pub fn import_buffers(&mut self, renderer: &mut Gles2Renderer) {
-        // Skip updating windows during transactions.
-        if self.transaction.is_some() || !self.buffers_pending {
+        // Short-circuit if we know no new buffer is waiting for import.
+        if !self.buffers_pending {
             return;
         }
 
@@ -530,7 +530,7 @@ impl Window<CatacombLayerSurface> {
         let mut size = state.size;
 
         let exclusive = match state.exclusive_zone {
-            ExclusiveZone::Neutral => output.exclusive,
+            ExclusiveZone::Neutral => *output.exclusive(),
             _ => ExclusiveSpace::default(),
         };
 
@@ -580,8 +580,8 @@ impl Window<CatacombLayerSurface> {
         // Update exclusive zones.
         let old_exclusive = mem::replace(&mut self.surface.exclusive_zone, state.exclusive_zone);
         let old_anchor = mem::replace(&mut self.surface.anchor, state.anchor);
-        output.exclusive.reset(old_anchor, old_exclusive);
-        output.exclusive.update(state.anchor, state.exclusive_zone, state.layer);
+        output.exclusive().reset(old_anchor, old_exclusive);
+        output.exclusive().update(state.anchor, state.exclusive_zone, state.layer);
     }
 }
 

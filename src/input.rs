@@ -319,7 +319,7 @@ impl Catacomb {
         self.touch_state.slot = Some(slot);
 
         // Initialize the touch state.
-        self.touch_state.start(&self.windows.output, position);
+        self.touch_state.start(self.windows.output(), position);
 
         // Only send touch start if there's no gesture in progress.
         if !self.touch_state.start.is_gesture {
@@ -339,7 +339,7 @@ impl Catacomb {
         }
         self.touch_state.slot = None;
 
-        match self.touch_state.action(&self.windows.output) {
+        match self.touch_state.action(self.windows.output()) {
             Some(TouchAction::Tap) => {
                 self.windows.on_tap(self.touch_state.position);
             },
@@ -371,7 +371,7 @@ impl Catacomb {
     /// them instead of creating a loop which continuously triggers these
     /// actions.
     fn update_position(&mut self, position: Point<f64, Logical>) {
-        match self.touch_state.action(&self.windows.output) {
+        match self.touch_state.action(self.windows.output()) {
             Some(TouchAction::Drag) => {
                 self.windows.on_drag(&mut self.touch_state, position);
 
@@ -409,7 +409,7 @@ impl Catacomb {
         // other refresh rates.
         let velocity = &mut self.touch_state.velocity;
         let position = &mut self.touch_state.position;
-        let animation_speed = self.windows.output.frame_interval().as_millis() as f64 / 16.;
+        let animation_speed = self.windows.output().frame_interval().as_millis() as f64 / 16.;
         velocity.x -= velocity.x.signum()
             * (velocity.x.abs() * FRICTION * animation_speed + 1.).min(velocity.x.abs());
         velocity.y -= velocity.y.signum()
@@ -425,7 +425,7 @@ impl Catacomb {
 
         // Schedule another velocity tick.
         if self.touch_state.has_velocity() {
-            TimeoutAction::ToDuration(self.windows.output.frame_interval())
+            TimeoutAction::ToDuration(self.windows.output().frame_interval())
         } else {
             TimeoutAction::Drop
         }
@@ -443,7 +443,7 @@ impl Catacomb {
         }
 
         // Stage new velocity timer.
-        let timer = Timer::from_duration(self.windows.output.frame_interval());
+        let timer = Timer::from_duration(self.windows.output().frame_interval());
         let velocity_timer = self
             .event_loop
             .insert_source(timer, |_, _, catacomb| catacomb.on_velocity_tick())
@@ -535,12 +535,12 @@ impl Catacomb {
         E: AbsolutePositionEvent<I>,
         I: InputBackend,
     {
-        let screen_size = self.windows.output.resolution();
+        let screen_size = self.windows.output().resolution();
         let (mut x, mut y) = event.position_transformed(screen_size).into();
         let (width, height) = screen_size.to_f64().into();
 
         // Transform X/Y according to output rotation.
-        (x, y) = match self.windows.output.orientation() {
+        (x, y) = match self.windows.output().orientation() {
             Orientation::Portrait => (x, y),
             Orientation::Landscape => (y, width - x),
             Orientation::InversePortrait => (width - x, height - y),

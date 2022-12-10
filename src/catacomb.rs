@@ -268,7 +268,7 @@ impl Catacomb {
             self.backend.render(&mut self.windows, &mut self.damage);
         } else if self.windows.transaction_active() {
             // Keep redrawing during transaction, to handle liveliness changes or timeout.
-            self.backend.schedule_redraw(self.windows.output.frame_interval());
+            self.backend.schedule_redraw(self.windows.output().frame_interval());
         } else {
             // Indicate rendering was stalled.
             self.stalled = true;
