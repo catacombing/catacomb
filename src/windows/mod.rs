@@ -779,6 +779,7 @@ impl Windows {
         for window in active_layout.primary().iter().chain(&active_layout.secondary()) {
             let window_ref = window.borrow();
             if window_ref.contains(position) {
+                self.layouts.focus = Some(Rc::downgrade(window));
                 self.layers.focus = None;
                 return window_ref.surface_at(position);
             }
