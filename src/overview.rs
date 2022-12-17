@@ -14,7 +14,7 @@ use crate::catacomb::Catacomb;
 use crate::drawing::Graphics;
 use crate::geometry::Vector;
 use crate::input::HOLD_DURATION;
-use crate::output::Canvas;
+use crate::output::{Canvas, Output};
 use crate::windows::layout::{LayoutPosition, Layouts};
 use crate::windows::window::Window;
 
@@ -137,7 +137,7 @@ impl Overview {
     /// Clamp the X/Y offsets.
     ///
     /// This takes overdrag into account and will animate the bounce-back.
-    fn clamp_offset(&mut self, window_count: i32) {
+    fn clamp_offset(&mut self, canvas: &Canvas, window_count: i32) {
         // Limit maximum overdrag.
         let min_offset = -window_count as f64 + 1.;
         self.x_offset = self.x_offset.clamp(min_offset - OVERDRAG_LIMIT, OVERDRAG_LIMIT);
@@ -163,19 +163,32 @@ impl Overview {
             self.x_offset = (self.x_offset + horizontal_delta).min(target);
         }
 
-        // Close window bounce-back.
-        self.y_offset -= vertical_delta.min(self.y_offset.abs()).copysign(self.y_offset);
+        // Check if window is past the point of no return for closing.
+        let close_distance = canvas.available_overview().size.h as f64 * OVERVIEW_CLOSE_DISTANCE;
+        let is_closing = self.y_offset.abs() >= close_distance;
+
+        if is_closing {
+            // Continue animation until window is offscreen.
+            self.y_offset += vertical_delta.copysign(self.y_offset);
+        } else {
+            // Close window bounce-back.
+            self.y_offset -= vertical_delta.min(self.y_offset.abs()).copysign(self.y_offset);
+        }
 
         *last_animation_step = Instant::now();
     }
 
     /// Render the overview.
-    pub fn draw(&mut self, frame: &mut Gles2Frame, canvas: &Canvas, layouts: &Layouts) {
+    pub fn draw(
+        &mut self,
+        frame: &mut Gles2Frame,
+        output: &Output,
+        canvas: &Canvas,
+        layouts: &Layouts,
+    ) {
         let layout_count = layouts.len() as i32;
-        self.clamp_offset(layout_count);
+        self.clamp_offset(canvas, layout_count);
 
-        // TODO: Need to use cached size rather than computing from scratch because of
-        // possible transaction.
         let available = canvas.available_overview();
 
         // Draw up to three visible windows (center and one to each side).
@@ -193,47 +206,64 @@ impl Overview {
             };
 
             let position = OverviewPosition::new(available, self.x_offset, offset);
-            let closing_window = self.drag_action.closing_window();
 
             // Draw the primary window.
             if let Some(primary) = layout.primary() {
-                // Offset window if it's in the process of being closed.
+                // Offset bounds for closing windows.
                 let mut bounds = position.bounds;
-                if Weak::ptr_eq(&closing_window, &Rc::downgrade(primary)) {
-                    // Prevent dragging primary/secondary across from each other.
-                    self.y_offset = self.y_offset.min(0.);
+                self.handle_closing(output, canvas, layouts, primary, &mut bounds, true);
 
-                    bounds.loc.y += self.y_offset.round() as i32;
-                }
-
-                let mut primary = primary.borrow_mut();
-                primary.draw(frame, canvas, position.scale, bounds, None);
+                primary.borrow_mut().draw(frame, canvas, position.scale, bounds, None);
             }
 
             // Draw the secondary window.
             if let Some(secondary) = layout.secondary() {
+                // Offset bounds for closing windows.
                 let mut bounds = position.secondary_bounds();
+                self.handle_closing(output, canvas, layouts, secondary, &mut bounds, false);
 
-                // Offset window if it's in the process of being closed.
-                if Weak::ptr_eq(&closing_window, &Rc::downgrade(secondary)) {
-                    // Prevent dragging primary/secondary across from each other.
-                    self.y_offset = self.y_offset.max(0.);
-
-                    bounds.loc.y += self.y_offset.round() as i32;
-                }
-
-                let mut secondary = secondary.borrow_mut();
-                secondary.draw(frame, canvas, position.scale, bounds, None);
+                secondary.borrow_mut().draw(frame, canvas, position.scale, bounds, None);
             }
 
             offset += 1.;
         }
     }
 
-    /// Check if the active window has exceeded the minimum close distance.
-    pub fn should_close(&self, canvas: &Canvas) -> bool {
-        let close_distance = canvas.available_overview().size.h as f64 * OVERVIEW_CLOSE_DISTANCE;
-        self.y_offset.abs() >= close_distance
+    /// Handle closing window for drawing the overview.
+    fn handle_closing(
+        &mut self,
+        output: &Output,
+        canvas: &Canvas,
+        layouts: &Layouts,
+        window: &Rc<RefCell<Window>>,
+        bounds: &mut Rectangle<i32, Logical>,
+        is_primary: bool,
+    ) {
+        // Check if this window is being closed.
+        let closing_window = self.drag_action.closing_window();
+        if !Weak::ptr_eq(&closing_window, &Rc::downgrade(window)) {
+            return;
+        }
+
+        // Prevent dragging primary/secondary across from each other.
+        if is_primary {
+            self.y_offset = self.y_offset.min(0.);
+        } else {
+            self.y_offset = self.y_offset.max(0.);
+        }
+
+        // Offset window position vertically while getting dragged to close.
+        bounds.loc.y += self.y_offset.round() as i32;
+
+        // Kill the window if it has moved completely offscreen.
+        if !Rectangle::from_loc_and_size((0, 0), canvas.size()).overlaps(*bounds) {
+            let surface = {
+                let mut window = window.borrow_mut();
+                window.kill();
+                window.surface.clone()
+            };
+            layouts.reap(output, &surface);
+        }
     }
 
     /// Check if the overdrag has run into a hard limit.

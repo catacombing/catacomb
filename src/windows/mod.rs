@@ -282,7 +282,7 @@ impl Windows {
                 dnd.draw(frame, &self.canvas, graphics);
             },
             View::Overview(ref mut overview) => {
-                overview.draw(frame, &self.canvas, &self.layouts);
+                overview.draw(frame, &self.output, &self.canvas, &self.layouts);
 
                 // Stage immediate redraw while overview animations are active.
                 if overview.animating_drag(self.layouts.len()) {
@@ -681,7 +681,7 @@ impl Windows {
         }
 
         // Cancel velocity once drag actions are completed.
-        if overview.should_close(&self.output) || overview.overdrag_limited(self.layouts.len()) {
+        if overview.overdrag_limited(self.layouts.len()) {
             touch_state.cancel_velocity();
         }
 
@@ -695,23 +695,7 @@ impl Windows {
     /// Handle touch drag release.
     pub fn on_drag_release(&mut self) {
         match &mut self.view {
-            View::Overview(overview) => {
-                let should_close = overview.should_close(&self.output);
-
-                overview.last_animation_step = Some(Instant::now());
-                overview.y_offset = 0.;
-
-                // Close window if y offset exceeds the threshold.
-                let closing_window = overview.drag_action.closing_window().upgrade();
-                if let Some(closing_window) = closing_window.filter(|_| should_close) {
-                    let surface = {
-                        let mut window = closing_window.borrow_mut();
-                        window.kill();
-                        window.surface.clone()
-                    };
-                    self.layouts.reap(&self.output, &surface);
-                }
-            },
+            View::Overview(overview) => overview.last_animation_step = Some(Instant::now()),
             View::DragAndDrop(dnd) => {
                 let (primary_bounds, secondary_bounds) = dnd.drop_bounds(&self.output);
                 if primary_bounds.to_f64().contains(dnd.touch_position) {
