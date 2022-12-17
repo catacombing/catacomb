@@ -14,6 +14,7 @@ use smithay::backend::renderer::ImportDma;
 use smithay::input::keyboard::XkbConfig;
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::calloop::generic::Generic;
+use smithay::reexports::calloop::signals::{Signal, Signals};
 use smithay::reexports::calloop::{
     Interest, LoopHandle, Mode as TriggerMode, PostAction, RegistrationToken,
 };
@@ -73,6 +74,7 @@ pub struct Catacomb {
     pub seat_name: String,
     pub windows: Windows,
     pub seat: Seat<Self>,
+    pub terminated: bool,
     pub sleeping: bool,
     pub backend: Udev,
 
@@ -86,17 +88,16 @@ pub struct Catacomb {
     seat_state: SeatState<Self>,
     shm_state: ShmState,
 
+    post_start_child: Option<Child>,
+    last_focus: Option<WlSurface>,
+    damage: Damage,
+
     // Indicates if rendering was intentionally stalled.
     //
     // This will occur when rendering on a VBlank detects no damage is present, thus stopping
     // rendering and further VBlank. If this is `true`, rendering needs to be kicked of manually
     // again when damage is received.
     stalled: bool,
-
-    last_focus: Option<WlSurface>,
-    damage: Damage,
-
-    post_start_child: Option<Child>,
 
     // NOTE: Must be last field to ensure it's dropped after any global.
     pub display: Rc<RefCell<Display<Self>>>,
@@ -115,6 +116,12 @@ impl Catacomb {
     pub fn new(event_loop: LoopHandle<'static, Self>, backend: Udev) -> Self {
         let mut display = Display::new().expect("Wayland display creation");
         let display_handle = display.handle();
+
+        // Setup SIGTERM handler for clean shutdown.
+        let signals = Signals::new(&[Signal::SIGTERM]).expect("masking unix signals");
+        event_loop
+            .insert_source(signals, |_, _, catacomb| catacomb.terminated = true)
+            .expect("register unix signal source");
 
         // Create and register Wayland socket.
         let socket_source = ListeningSocketSource::new_auto(None).expect("create Wayland socket");
@@ -232,6 +239,7 @@ impl Catacomb {
             suspend_timer: Default::default(),
             button_state: Default::default(),
             last_focus: Default::default(),
+            terminated: Default::default(),
             sleeping: Default::default(),
             stalled: Default::default(),
             damage: Default::default(),

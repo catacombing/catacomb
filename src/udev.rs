@@ -89,7 +89,7 @@ pub fn run() {
         .expect("spawn IPC socket");
 
     // Continously dispatch event loop.
-    loop {
+    while !catacomb.terminated {
         if let Err(error) = event_loop.dispatch(None, &mut catacomb) {
             eprintln!("Event loop error: {error}");
             break;
