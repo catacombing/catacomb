@@ -499,8 +499,7 @@ impl Catacomb {
                 (keysyms::KEY_XF86PowerOff, KeyState::Released) => {
                     // Toggle screen DPMS status on short press.
                     if catacomb.button_state.power.take().is_some() {
-                        catacomb.sleeping = !catacomb.sleeping;
-                        catacomb.backend.set_sleep(catacomb.sleeping);
+                        catacomb.toggle_sleep();
 
                         // Remove timer on wakeup or if it was already staged.
                         if let Some(suspend_timer) = catacomb.suspend_timer.take() {

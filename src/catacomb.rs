@@ -88,6 +88,7 @@ pub struct Catacomb {
     seat_state: SeatState<Self>,
     shm_state: ShmState,
 
+    accelerometer_token: RegistrationToken,
     post_start_child: Option<Child>,
     last_focus: Option<WlSurface>,
     damage: Damage,
@@ -191,7 +192,7 @@ impl Catacomb {
         let touch_state = TouchState::new(event_loop.clone(), touch);
 
         // Subscribe to device orientation changes.
-        Accelerometer::new().subscribe(&event_loop, |orientation, catacomb| {
+        let accel_token = Accelerometer::new().subscribe(&event_loop, |orientation, catacomb| {
             catacomb.handle_orientation(orientation);
         });
 
@@ -236,6 +237,7 @@ impl Catacomb {
             backend,
             seat,
             display: Rc::new(RefCell::new(display)),
+            accelerometer_token: accel_token,
             suspend_timer: Default::default(),
             button_state: Default::default(),
             last_focus: Default::default(),
@@ -253,9 +255,7 @@ impl Catacomb {
         display.dispatch_clients(self).expect("Wayland dispatch error");
         Ok(PostAction::Continue)
     }
-}
 
-impl Catacomb {
     /// Handle everything necessary to draw a single frame.
     pub fn create_frame(&mut self) {
         // Clear rendering stall status.
@@ -305,6 +305,20 @@ impl Catacomb {
         if self.stalled {
             self.create_frame();
         }
+    }
+
+    /// Toggle the output's sleep state.
+    pub fn toggle_sleep(&mut self) {
+        self.sleeping = !self.sleeping;
+
+        // Disable accelerometer timer while sleeping.
+        if self.sleeping {
+            let _ = self.event_loop.disable(&self.accelerometer_token);
+        } else {
+            let _ = self.event_loop.enable(&self.accelerometer_token);
+        }
+
+        self.backend.set_sleep(self.sleeping);
     }
 }
 

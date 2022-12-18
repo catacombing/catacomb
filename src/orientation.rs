@@ -8,7 +8,7 @@ use std::time::Duration;
 // Orientation is in IPC for our lib target, reexport here for a more sensible path.
 pub use catacomb_ipc::Orientation;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
-use smithay::reexports::calloop::LoopHandle;
+use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
 use udev::{Device, Enumerator};
 
 use crate::catacomb::Catacomb;
@@ -25,7 +25,11 @@ const DEADZONE: f32 = 5.;
 
 pub trait AccelerometerSource {
     /// Subscribe to orientation change events.
-    fn subscribe<'a, F: 'a>(self, loop_handle: &LoopHandle<'a, Catacomb>, fun: F)
+    fn subscribe<'a, F: 'a>(
+        self,
+        loop_handle: &LoopHandle<'a, Catacomb>,
+        fun: F,
+    ) -> RegistrationToken
     where
         F: FnMut(Orientation, &mut Catacomb);
 }
@@ -46,7 +50,11 @@ impl Accelerometer {
 }
 
 impl AccelerometerSource for Accelerometer {
-    fn subscribe<'a, F: 'a>(self, loop_handle: &LoopHandle<'a, Catacomb>, fun: F)
+    fn subscribe<'a, F: 'a>(
+        self,
+        loop_handle: &LoopHandle<'a, Catacomb>,
+        fun: F,
+    ) -> RegistrationToken
     where
         F: FnMut(Orientation, &mut Catacomb),
     {
@@ -145,7 +153,11 @@ impl SensorAccelerometer {
 }
 
 impl AccelerometerSource for SensorAccelerometer {
-    fn subscribe<'a, F: 'a>(mut self, loop_handle: &LoopHandle<'a, Catacomb>, mut fun: F)
+    fn subscribe<'a, F: 'a>(
+        mut self,
+        loop_handle: &LoopHandle<'a, Catacomb>,
+        mut fun: F,
+    ) -> RegistrationToken
     where
         F: FnMut(Orientation, &mut Catacomb),
     {
@@ -160,7 +172,7 @@ impl AccelerometerSource for SensorAccelerometer {
 
                 TimeoutAction::ToDuration(POLL_RATE)
             })
-            .expect("insert orientation timer");
+            .expect("insert orientation timer")
     }
 }
 
@@ -171,7 +183,11 @@ impl AccelerometerSource for SensorAccelerometer {
 pub struct DummyAccelerometer;
 
 impl AccelerometerSource for DummyAccelerometer {
-    fn subscribe<'a, F: 'a>(self, loop_handle: &LoopHandle<'a, Catacomb>, mut fun: F)
+    fn subscribe<'a, F: 'a>(
+        self,
+        loop_handle: &LoopHandle<'a, Catacomb>,
+        mut fun: F,
+    ) -> RegistrationToken
     where
         F: FnMut(Orientation, &mut Catacomb),
     {
@@ -180,7 +196,7 @@ impl AccelerometerSource for DummyAccelerometer {
                 fun(Orientation::Portrait, catacomb);
                 TimeoutAction::Drop
             })
-            .expect("insert dummy orientation timer");
+            .expect("insert dummy orientation timer")
     }
 }
 
