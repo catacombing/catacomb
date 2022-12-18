@@ -108,6 +108,7 @@ fn add_device(catacomb: &mut Catacomb, path: PathBuf) {
 
 /// Udev backend shared state.
 pub struct Udev {
+    scheduled_redraws: Vec<RegistrationToken>,
     event_loop: LoopHandle<'static, Catacomb>,
     output_device: Option<OutputDevice>,
     signaler: Signaler<Signal>,
@@ -127,7 +128,14 @@ impl Udev {
         // Find active GPUs for hardware acceleration.
         let gpu = udev::primary_gpu(session.seat()).ok().flatten();
 
-        Self { signaler, session, event_loop, gpu, output_device: None }
+        Self {
+            signaler,
+            session,
+            event_loop,
+            gpu,
+            scheduled_redraws: Default::default(),
+            output_device: Default::default(),
+        }
     }
 
     /// Get Wayland seat name.
@@ -163,13 +171,22 @@ impl Udev {
     }
 
     /// Request a redraw once `duration` has passed.
-    pub fn schedule_redraw(&self, duration: Duration) {
-        self.event_loop
+    pub fn schedule_redraw(&mut self, duration: Duration) {
+        let token = self
+            .event_loop
             .insert_source(Timer::from_duration(duration), move |_, _, catacomb| {
                 catacomb.create_frame();
                 TimeoutAction::Drop
             })
             .expect("insert render timer");
+        self.scheduled_redraws.push(token);
+    }
+
+    /// Cancel all pending redraws.
+    pub fn cancel_scheduled_redraws(&mut self) {
+        for scheduled_redraw in self.scheduled_redraws.drain(..) {
+            self.event_loop.remove(scheduled_redraw);
+        }
     }
 
     /// Get the current output device.

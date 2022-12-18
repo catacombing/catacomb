@@ -261,8 +261,11 @@ impl Catacomb {
         // Clear rendering stall status.
         self.stalled = false;
 
+        // Ensure no redraws are queued beyond this one.
+        self.backend.cancel_scheduled_redraws();
+
         // Update transaction before rendering to update device orientation.
-        self.windows.update_transaction();
+        let transaction_deadline = self.windows.update_transaction();
 
         // Update surface focus.
         let focus = self.windows.focus();
@@ -274,9 +277,10 @@ impl Catacomb {
         // Redraw only when there is damage present.
         if self.windows.damaged() {
             self.backend.render(&mut self.windows, &mut self.damage);
-        } else if self.windows.transaction_active() {
-            // Keep redrawing during transaction, to handle liveliness changes or timeout.
-            self.backend.schedule_redraw(self.windows.output().frame_interval());
+        } else if let Some(deadline) = transaction_deadline {
+            // Force a redraw after the transaction has timed out.
+            self.backend.schedule_redraw(deadline);
+            self.stalled = true;
         } else {
             // Indicate rendering was stalled.
             self.stalled = true;

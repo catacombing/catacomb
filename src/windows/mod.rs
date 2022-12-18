@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::cell::{RefCell, RefMut};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 use std::{cmp, mem};
 
 use smithay::backend::renderer::gles2::ffi::{self as gl, Gles2};
@@ -35,7 +35,7 @@ pub mod surface;
 pub mod window;
 
 /// Maximum time before a transaction is cancelled.
-const MAX_TRANSACTION_SECS: u64 = 1;
+const MAX_TRANSACTION_MILLIS: u64 = 1000;
 
 /// Horizontal sensitivity of the application overview.
 const OVERVIEW_HORIZONTAL_SENSITIVITY: f64 = 250.;
@@ -49,7 +49,7 @@ const GESTURE_HANDLE_NOTCH_COLOR: [f32; 4] = [1., 1., 1., 1.];
 /// Gesture handle background color.
 const GESTURE_HANDLE_COLOR: [f32; 4] = [0., 0., 0., 1.];
 
-/// Global transaction timer.
+/// Global transaction timer in milliseconds.
 static TRANSACTION_START: AtomicU64 = AtomicU64::new(0);
 
 /// Start a new transaction.
@@ -62,7 +62,7 @@ pub fn start_transaction() {
         return;
     }
 
-    let now = UNIX_EPOCH.elapsed().unwrap().as_secs();
+    let now = UNIX_EPOCH.elapsed().unwrap().as_millis() as u64;
     TRANSACTION_START.store(now, Ordering::Relaxed);
 }
 
@@ -463,28 +463,32 @@ impl Windows {
     }
 
     /// Check if there's an active transaction.
-    pub fn transaction_active(&self) -> bool {
+    fn transaction_active(&self) -> bool {
         TRANSACTION_START.load(Ordering::Relaxed) != 0
     }
 
     /// Attempt to execute pending transactions.
-    pub fn update_transaction(&mut self) {
+    ///
+    /// This will return the duration until the transaction should be timed out
+    /// when there is an active transaction but it cannot be completed yet.
+    pub fn update_transaction(&mut self) -> Option<Duration> {
         // Skip update if no transaction is active.
         let start = TRANSACTION_START.load(Ordering::Relaxed);
         if start == 0 {
-            return;
+            return None;
         }
 
         // Check if the transaction requires updating.
-        let now = UNIX_EPOCH.elapsed().unwrap().as_secs();
-        if now - start <= MAX_TRANSACTION_SECS {
+        let elapsed = UNIX_EPOCH.elapsed().unwrap().as_millis() as u64 - start;
+        if elapsed <= MAX_TRANSACTION_MILLIS {
             // Check if all participants are ready.
             let finished = self.layouts.windows().all(|window| window.transaction_done())
                 && self.layers.iter().all(|window| window.transaction_done());
 
             // Abort if the transaction is still pending.
             if !finished {
-                return;
+                let delta = MAX_TRANSACTION_MILLIS - elapsed;
+                return Some(Duration::from_millis(delta));
             }
         }
 
@@ -509,6 +513,8 @@ impl Windows {
         }
 
         self.fully_damaged = true;
+
+        None
     }
 
     /// Resize all windows to their expected size.
