@@ -85,7 +85,7 @@ impl Texture {
                     0,
                     ffi::RGBA,
                     ffi::UNSIGNED_BYTE,
-                    buffer.as_ptr() as *const _,
+                    buffer.as_ptr().cast(),
                 );
                 gl.BindTexture(ffi::TEXTURE_2D, 0);
 

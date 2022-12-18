@@ -61,7 +61,7 @@ impl Surface for ToplevelSurface {
     }
 
     fn send_close(&self) {
-        self.send_close()
+        self.send_close();
     }
 
     fn set_state<F: FnMut(&mut Self::State)>(&self, f: F) {
@@ -153,7 +153,7 @@ impl Surface for CatacombLayerSurface {
     }
 
     fn send_close(&self) {
-        self.surface.send_close()
+        self.surface.send_close();
     }
 
     fn set_state<F: FnMut(&mut Self::State)>(&self, f: F) {

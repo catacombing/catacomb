@@ -241,7 +241,7 @@ impl Catacomb {
     /// Process new input events.
     pub fn handle_input<I: InputBackend>(&mut self, event: InputEvent<I>) {
         match event {
-            InputEvent::Keyboard { event, .. } => self.on_keyboard_input(event),
+            InputEvent::Keyboard { event, .. } => self.on_keyboard_input(&event),
             InputEvent::PointerButton { event } if event.button() == Some(MouseButton::Left) => {
                 let slot = TouchSlot::from(POINTER_TOUCH_SLOT);
                 let position = self.touch_state.position;
@@ -452,13 +452,13 @@ impl Catacomb {
     }
 
     /// Handle new keyboard input events.
-    fn on_keyboard_input<I: InputBackend>(&mut self, event: impl KeyboardKeyEvent<I>) {
+    fn on_keyboard_input<I: InputBackend>(&mut self, event: &impl KeyboardKeyEvent<I>) {
         let keyboard = match self.seat.get_keyboard() {
             Some(keyboard) => keyboard,
             None => return,
         };
         let serial = SERIAL_COUNTER.next_serial();
-        let time = Event::time(&event);
+        let time = Event::time(event);
         let keycode = event.key_code();
         let state = event.state();
 

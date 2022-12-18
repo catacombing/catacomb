@@ -15,14 +15,14 @@ impl<T: Copy> TryFrom<Vec<T>> for Matrix3x3<T> {
     type Error = Box<dyn Error>;
 
     fn try_from(storage: Vec<T>) -> Result<Self, Self::Error> {
-        if storage.len() != 9 {
+        if storage.len() == 9 {
+            Ok(Self { storage })
+        } else {
             let error = format!(
                 "Mismatched size when creating Matrix3x3 from Vec, expected length 9, got {}",
                 storage.len()
             );
             Err(error.into())
-        } else {
-            Ok(Self { storage })
         }
     }
 }

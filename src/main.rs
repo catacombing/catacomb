@@ -32,7 +32,7 @@ pub enum Subcommands {
 
 pub fn main() {
     match Options::parse().subcommands {
-        Some(Subcommands::Msg(msg)) => catacomb_ipc::send_message(msg).expect("send IPC message"),
+        Some(Subcommands::Msg(msg)) => catacomb_ipc::send_message(&msg).expect("send IPC message"),
         None => udev::run(),
     }
 }

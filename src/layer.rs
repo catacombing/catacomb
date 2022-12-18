@@ -70,11 +70,11 @@ impl Layers {
         canvas: &Canvas,
         damage: &[Rectangle<i32, Physical>],
     ) {
-        for window in self.top.iter_mut() {
+        for window in &mut self.top {
             window.draw(frame, canvas, 1., None, damage);
         }
 
-        for window in self.overlay.iter_mut() {
+        for window in &mut self.overlay {
             window.draw(frame, canvas, 1., None, damage);
         }
     }

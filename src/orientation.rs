@@ -44,8 +44,7 @@ impl Accelerometer {
     /// Create a new accelerometer handle.
     pub fn new() -> Self {
         SensorAccelerometer::new()
-            .map(Accelerometer::Sensor)
-            .unwrap_or(Accelerometer::Dummy(DummyAccelerometer))
+            .map_or(Accelerometer::Dummy(DummyAccelerometer), Accelerometer::Sensor)
     }
 }
 

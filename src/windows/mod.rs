@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 use std::cell::{RefCell, RefMut};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use std::{cmp, mem};
@@ -64,6 +64,11 @@ pub fn start_transaction() {
 
     let now = UNIX_EPOCH.elapsed().unwrap().as_millis() as u64;
     TRANSACTION_START.store(now, Ordering::Relaxed);
+}
+
+/// Check if there's an active transaction.
+fn transaction_active() -> bool {
+    TRANSACTION_START.load(Ordering::Relaxed) != 0
 }
 
 /// Container tracking all known clients.
@@ -223,7 +228,7 @@ impl Windows {
     /// Import pending buffers for all windows.
     pub fn import_buffers(&mut self, renderer: &mut Gles2Renderer) {
         // Do not import buffers during a transaction.
-        if self.transaction_active() {
+        if transaction_active() {
             return;
         }
 
@@ -370,13 +375,13 @@ impl Windows {
     }
 
     /// Stage dead layer shell window for reaping.
-    pub fn reap_layer(&mut self, surface: LayerSurface) {
+    pub fn reap_layer(&mut self, surface: &LayerSurface) {
         // Start transaction to ensure window is reaped even without any resize.
         start_transaction();
 
         // Handle layer shell death.
         let old_exclusive = *self.output.exclusive();
-        if let Some(window) = self.layers.iter().find(|layer| layer.surface.eq(&surface)) {
+        if let Some(window) = self.layers.iter().find(|layer| layer.surface.eq(surface)) {
             self.output.exclusive().reset(window.surface.anchor, window.surface.exclusive_zone);
         }
 
@@ -413,7 +418,7 @@ impl Windows {
 
     /// Current window focus.
     pub fn focus(&mut self) -> Option<WlSurface> {
-        let surface = match self.layouts.focus.as_ref().map(|window| window.upgrade()) {
+        let surface = match self.layouts.focus.as_ref().map(Weak::upgrade) {
             // Use focused surface if the window is still alive.
             Some(Some(window)) => Some(window.borrow().surface.clone()),
             // Fallback to primary if secondary perished.
@@ -462,11 +467,6 @@ impl Windows {
         self.transaction.get_or_insert(Transaction::new())
     }
 
-    /// Check if there's an active transaction.
-    fn transaction_active(&self) -> bool {
-        TRANSACTION_START.load(Ordering::Relaxed) != 0
-    }
-
     /// Attempt to execute pending transactions.
     ///
     /// This will return the duration until the transaction should be timed out
@@ -483,7 +483,7 @@ impl Windows {
         if elapsed <= MAX_TRANSACTION_MILLIS {
             // Check if all participants are ready.
             let finished = self.layouts.windows().all(|window| window.transaction_done())
-                && self.layers.iter().all(|window| window.transaction_done());
+                && self.layers.iter().all(Window::transaction_done);
 
             // Abort if the transaction is still pending.
             if !finished {
@@ -571,7 +571,7 @@ impl Windows {
     /// Check if any window was damaged since the last redraw.
     pub fn damaged(&mut self) -> bool {
         self.fully_damaged
-            || self.layers.iter().any(|window| window.damaged())
+            || self.layers.iter().any(Window::damaged)
             || self.layouts.windows().any(|window| window.damaged())
     }
 
@@ -587,7 +587,7 @@ impl Windows {
 
         let primary_damage = primary.and_then(|window| window.borrow().damage());
         let secondary_damage = secondary.and_then(|window| window.borrow().damage());
-        let layer_damage = self.layers.iter().filter_map(|window| window.damage());
+        let layer_damage = self.layers.iter().filter_map(Window::damage);
 
         for window_damage in layer_damage.chain(primary_damage).chain(secondary_damage) {
             damage.push(window_damage);
@@ -661,7 +661,7 @@ impl Windows {
 
                 return;
             },
-            _ => return,
+            View::Workspace => return,
         };
 
         let delta = point - mem::replace(&mut overview.last_drag_point, point);

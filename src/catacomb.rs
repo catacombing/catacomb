@@ -5,7 +5,7 @@ use std::os::unix::io::AsRawFd;
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::{env, io, mem};
+use std::{env, mem};
 
 use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use _server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as ManagerMode;
@@ -145,7 +145,7 @@ impl Catacomb {
                     Interest::READ,
                     TriggerMode::Level,
                 ),
-                |_, _, catacomb| catacomb.handle_socket_readiness(),
+                |_, _, catacomb| Ok(catacomb.handle_socket_readiness()),
             )
             .expect("register display");
 
@@ -249,11 +249,11 @@ impl Catacomb {
     }
 
     /// Handle Wayland event socket read readiness.
-    fn handle_socket_readiness(&mut self) -> io::Result<PostAction> {
+    fn handle_socket_readiness(&mut self) -> PostAction {
         let display = self.display.clone();
         let mut display = display.borrow_mut();
         display.dispatch_clients(self).expect("Wayland dispatch error");
-        Ok(PostAction::Continue)
+        PostAction::Continue
     }
 
     /// Handle everything necessary to draw a single frame.
@@ -418,7 +418,7 @@ impl WlrLayerShellHandler for Catacomb {
     }
 
     fn layer_destroyed(&mut self, surface: LayerSurface) {
-        self.windows.reap_layer(surface);
+        self.windows.reap_layer(&surface);
         self.unstall();
     }
 }
@@ -434,7 +434,7 @@ impl SeatHandler for Catacomb {
 
     fn focus_changed(&mut self, seat: &Seat<Self>, surface: Option<&Self::KeyboardFocus>) {
         let client = surface.and_then(|surface| self.display_handle.get_client(surface.id()).ok());
-        data_device::set_data_device_focus(&self.display_handle, seat, client)
+        data_device::set_data_device_focus(&self.display_handle, seat, client);
     }
 }
 delegate_seat!(Catacomb);

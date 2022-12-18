@@ -48,7 +48,7 @@ pub fn run() {
 
     // Setup hardware acceleration.
     let output_device = catacomb.backend.output_device.as_ref();
-    let formats = output_device.map(|device| device.renderer.dmabuf_formats().cloned().collect());
+    let formats = output_device.map(|device| device.renderer.dmabuf_formats().copied().collect());
     catacomb.dmabuf_state.create_global::<Catacomb, _>(
         &catacomb.display_handle,
         formats.unwrap_or_default(),
@@ -85,7 +85,7 @@ pub fn run() {
         .expect("insert udev source");
 
     // Start IPC socket listener.
-    ipc_server::spawn_ipc_socket(event_loop.handle(), &catacomb.socket_name)
+    ipc_server::spawn_ipc_socket(&event_loop.handle(), &catacomb.socket_name)
         .expect("spawn IPC socket");
 
     // Continously dispatch event loop.
@@ -226,7 +226,7 @@ impl Udev {
         let handle = self.event_loop.clone();
         let restart_token = self.signaler.register(move |signal| match signal {
             Signal::ActivateSession | Signal::ActivateDevice { .. } => {
-                handle.insert_idle(move |catacomb| catacomb.create_frame());
+                handle.insert_idle(Catacomb::create_frame);
             },
             _ => {},
         });

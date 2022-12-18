@@ -76,6 +76,7 @@ impl FromStr for Orientation {
 #[cfg(feature = "smithay")]
 impl Orientation {
     /// Display rendering transform for this orientation.
+    #[must_use]
     pub fn transform(&self) -> Transform {
         match self {
             Self::Portrait => Transform::Normal,
@@ -87,7 +88,7 @@ impl Orientation {
 }
 
 /// Send a message to the Catacomb IPC socket.
-pub fn send_message(message: IpcMessage) -> Result<(), Box<dyn Error>> {
+pub fn send_message(message: &IpcMessage) -> Result<(), Box<dyn Error>> {
     let socket_name = match env::var("WAYLAND_DISPLAY") {
         Ok(socket_name) => socket_name,
         Err(_) => {

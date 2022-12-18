@@ -14,7 +14,7 @@ use crate::socket::SocketSource;
 
 /// Create an IPC socket.
 pub fn spawn_ipc_socket(
-    event_loop: LoopHandle<'static, Catacomb>,
+    event_loop: &LoopHandle<'static, Catacomb>,
     socket_name: &str,
 ) -> Result<PathBuf, Box<dyn Error>> {
     let socket_path = catacomb_ipc::socket_path(socket_name);
@@ -31,7 +31,7 @@ pub fn spawn_ipc_socket(
     // Add source to calloop loop.
     let mut message_buffer = String::new();
     event_loop.insert_source(socket, move |stream, _, catacomb| {
-        handle_message(&mut message_buffer, stream, catacomb)
+        handle_message(&mut message_buffer, stream, catacomb);
     })?;
 
     Ok(socket_path)
