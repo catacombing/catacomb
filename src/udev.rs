@@ -1,3 +1,5 @@
+//! Udev backend.
+
 use std::error::Error;
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
@@ -9,8 +11,8 @@ use smithay::backend::drm::{DevPath, DrmDevice, DrmEvent, GbmBufferedSurface};
 use smithay::backend::egl::context::EGLContext;
 use smithay::backend::egl::display::EGLDisplay;
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
-use smithay::backend::renderer::gles2::Gles2Renderer;
-use smithay::backend::renderer::{Bind, Frame, ImportDma, ImportEgl, Renderer};
+use smithay::backend::renderer::gles2::{ffi, Gles2Renderer};
+use smithay::backend::renderer::{self, Bind, BufferType, Frame, ImportDma, ImportEgl, Renderer};
 use smithay::backend::session::auto::AutoSession;
 use smithay::backend::session::{Session, Signal};
 use smithay::backend::udev;
@@ -26,8 +28,12 @@ use smithay::reexports::drm::control::Device;
 use smithay::reexports::input::Libinput;
 use smithay::reexports::nix::fcntl::OFlag;
 use smithay::reexports::nix::sys::stat::dev_t as DeviceId;
+use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
+use smithay::reexports::wayland_server::protocol::wl_shm;
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::utils::signaling::{Linkable, SignalToken, Signaler};
+use smithay::utils::{Physical, Rectangle, Size};
+use smithay::wayland::shm;
 
 use crate::catacomb::{Catacomb, Damage};
 use crate::drawing::Graphics;
@@ -168,6 +174,19 @@ impl Udev {
         if let Some(output_device) = &mut self.output_device {
             let _ = output_device.render(windows, damage);
         }
+    }
+
+    /// Copy framebuffer region into another buffer.
+    pub fn copy_framebuffer(
+        &mut self,
+        buffer: &WlBuffer,
+        output_size: Size<i32, Physical>,
+        rect: Rectangle<i32, Physical>,
+    ) -> Result<(), Box<dyn Error>> {
+        if let Some(output_device) = &mut self.output_device {
+            output_device.copy_framebuffer(buffer, output_size, rect)?;
+        }
+        Ok(())
     }
 
     /// Request a redraw once `duration` has passed.
@@ -417,5 +436,59 @@ impl OutputDevice {
         self.gbm_surface.queue_buffer(())?;
 
         Ok(())
+    }
+
+    /// Copy framebuffer region into a Wayland buffer.
+    fn copy_framebuffer(
+        &mut self,
+        buffer: &WlBuffer,
+        output_size: Size<i32, Physical>,
+        rect: Rectangle<i32, Physical>,
+    ) -> Result<(), Box<dyn Error>> {
+        match renderer::buffer_type(buffer) {
+            Some(BufferType::Shm) => self.copy_framebuffer_shm(buffer, output_size, rect),
+            Some(format) => Err(format!("unsupported buffer format: {format:?}").into()),
+            None => Err("invalid target buffer".into()),
+        }
+    }
+
+    /// Copy framebuffer region into a SHM buffer.
+    fn copy_framebuffer_shm(
+        &mut self,
+        buffer: &WlBuffer,
+        output_size: Size<i32, Physical>,
+        rect: Rectangle<i32, Physical>,
+    ) -> Result<(), Box<dyn Error>> {
+        // Manually copy array to SHM buffer to account for stride.
+        shm::with_buffer_contents_mut(buffer, |shm_buffer, buffer_data| {
+            // Ensure buffer is in an acceptable format.
+            if buffer_data.format != wl_shm::Format::Argb8888
+                || buffer_data.stride != rect.size.w * 4
+                || buffer_data.height != rect.size.h
+                || shm_buffer.len() as i32 != buffer_data.stride * buffer_data.height
+            {
+                return Err::<(), Box<dyn Error>>("Invalid buffer format".into());
+            }
+
+            // Copy framebuffer data to the SHM buffer.
+            self.renderer.with_context(|gl| unsafe {
+                gl.ReadPixels(
+                    rect.loc.x,
+                    output_size.h - rect.loc.y - rect.size.h,
+                    rect.size.w,
+                    rect.size.h,
+                    ffi::RGBA,
+                    ffi::UNSIGNED_BYTE,
+                    shm_buffer.as_mut_ptr().cast(),
+                );
+            })?;
+
+            // Convert from OpenGL's ABGR (RGBA in little-endian) to ARGB.
+            for i in 0..(rect.size.w * rect.size.h) as usize {
+                shm_buffer.swap(i * 4, i * 4 + 2);
+            }
+
+            Ok(())
+        })?
     }
 }

@@ -11,6 +11,7 @@ mod layer;
 mod orientation;
 mod output;
 mod overview;
+mod protocols;
 mod socket;
 mod udev;
 mod windows;

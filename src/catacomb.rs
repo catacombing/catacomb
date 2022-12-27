@@ -1,6 +1,7 @@
 //! Catacomb compositor state.
 
 use std::cell::RefCell;
+use std::error::Error;
 use std::os::unix::io::AsRawFd;
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
@@ -25,7 +26,7 @@ use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Display, DisplayHandle, Resource};
-use smithay::utils::{Physical, Rectangle, Serial, SERIAL_COUNTER};
+use smithay::utils::{Physical, Rectangle, Serial, Size, SERIAL_COUNTER};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{CompositorHandler, CompositorState};
 use smithay::wayland::data_device::{
@@ -54,9 +55,11 @@ use smithay::{
     delegate_xdg_shell,
 };
 
+use crate::delegate_screencopy_manager;
 use crate::drawing::MAX_DAMAGE_AGE;
 use crate::input::{PhysicalButtonState, TouchState};
 use crate::orientation::{Accelerometer, AccelerometerSource};
+use crate::protocols::screencopy::{ScreencopyHandler, ScreencopyManagerState};
 use crate::udev::Udev;
 use crate::windows::Windows;
 
@@ -171,6 +174,9 @@ impl Catacomb {
         XdgDecorationState::new::<Self, _>(&display_handle, None);
         let kde_decoration_state =
             KdeDecorationState::new::<Self, _>(&display_handle, ManagerMode::Server, None);
+
+        // Initialize screencopy protocol.
+        ScreencopyManagerState::new::<Self>(&display_handle);
 
         // Initialize seat.
         let seat_name = backend.seat_name();
@@ -478,6 +484,29 @@ delegate_kde_decoration!(Catacomb);
 impl BufferHandler for Catacomb {
     fn buffer_destroyed(&mut self, _buffer: &WlBuffer) {}
 }
+
+impl ScreencopyHandler for Catacomb {
+    fn output_size(&mut self, _output: &WlOutput) -> Size<i32, Physical> {
+        self.windows.output().physical_resolution()
+    }
+
+    fn copy(
+        &mut self,
+        buffer: &WlBuffer,
+        rect: Rectangle<i32, Physical>,
+        _overlay_cursor: bool,
+    ) -> Result<Vec<Rectangle<i32, Physical>>, Box<dyn Error>> {
+        // Copy the framebuffer to the target buffer.
+        let output_size = self.windows.output().physical_resolution();
+        self.backend.copy_framebuffer(buffer, output_size, rect)?;
+
+        // Always mark entire buffer as damaged.
+        let damage = vec![rect];
+
+        Ok(damage)
+    }
+}
+delegate_screencopy_manager!(Catacomb);
 
 #[derive(Default, Debug)]
 pub struct Damage {
