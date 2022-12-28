@@ -171,6 +171,11 @@ impl<S: Surface> Window<S> {
 
     /// Import the buffers of all surfaces into the renderer.
     pub fn import_buffers(&mut self, renderer: &mut Gles2Renderer) {
+        // Import buffers for all popup windows.
+        for popup in &mut self.popups {
+            popup.import_buffers(renderer);
+        }
+
         // Short-circuit if we know no new buffer is waiting for import.
         if !self.buffers_pending {
             return;
