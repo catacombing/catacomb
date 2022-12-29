@@ -1,20 +1,21 @@
 //! Udev backend.
 
 use std::error::Error;
-use std::os::unix::io::RawFd;
+use std::os::fd::FromRawFd;
 use std::path::PathBuf;
+use std::process;
 use std::time::Duration;
 
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::gbm::GbmDevice;
-use smithay::backend::drm::{DevPath, DrmDevice, DrmEvent, GbmBufferedSurface};
+use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent, GbmBufferedSurface};
 use smithay::backend::egl::context::EGLContext;
 use smithay::backend::egl::display::EGLDisplay;
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::gles2::{ffi, Gles2Renderer};
 use smithay::backend::renderer::{self, Bind, BufferType, Frame, ImportDma, ImportEgl, Renderer};
-use smithay::backend::session::auto::AutoSession;
-use smithay::backend::session::{Session, Signal};
+use smithay::backend::session::libseat::LibSeatSession;
+use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev;
 use smithay::backend::udev::{UdevBackend, UdevEvent};
 use smithay::output::{Mode, PhysicalProperties, Subpixel};
@@ -31,8 +32,7 @@ use smithay::reexports::nix::sys::stat::dev_t as DeviceId;
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_shm;
 use smithay::reexports::wayland_server::DisplayHandle;
-use smithay::utils::signaling::{Linkable, SignalToken, Signaler};
-use smithay::utils::{Physical, Rectangle, Size};
+use smithay::utils::{DevPath, DeviceFd, Physical, Rectangle, Size};
 use smithay::wayland::shm;
 
 use crate::catacomb::{Catacomb, Damage};
@@ -67,8 +67,7 @@ pub fn run() {
     let mut context = Libinput::new_with_udev::<LibinputSessionInterface<_>>(session.into());
     context.udev_assign_seat(&catacomb.seat_name).expect("assign seat");
 
-    let mut input_backend = LibinputInputBackend::new(context, None);
-    input_backend.link(catacomb.backend.signaler.clone());
+    let input_backend = LibinputInputBackend::new(context, None);
     event_loop
         .handle()
         .insert_source(input_backend, |event, _, catacomb| catacomb.handle_input(event))
@@ -117,25 +116,38 @@ pub struct Udev {
     scheduled_redraws: Vec<RegistrationToken>,
     event_loop: LoopHandle<'static, Catacomb>,
     output_device: Option<OutputDevice>,
-    signaler: Signaler<Signal>,
-    session: AutoSession,
+    session: LibSeatSession,
     gpu: Option<PathBuf>,
 }
 
 impl Udev {
     fn new(event_loop: LoopHandle<'static, Catacomb>) -> Self {
         // Initialize the VT session.
-        let (session, notifier) = AutoSession::new(None).expect("init session");
-        let signaler = notifier.signaler();
+        let (session, notifier) = match LibSeatSession::new(None) {
+            Ok(session) => session,
+            Err(_) => {
+                eprintln!(
+                    "[error] Unable to start libseat session: Ensure logind/seatd service is \
+                     running with no active session"
+                );
+                process::exit(666);
+            },
+        };
 
-        // Register session with the event loop so objects can link to the signaler.
-        event_loop.insert_source(notifier, |_, _, _| {}).expect("insert notifier source");
+        // Register notifier for handling session events.
+        event_loop
+            .insert_source(notifier, |event, _, catacomb| match event {
+                SessionEvent::ActivateSession => {
+                    catacomb.event_loop.insert_idle(Catacomb::create_frame);
+                },
+                SessionEvent::PauseSession => (),
+            })
+            .expect("insert notifier source");
 
         // Find active GPUs for hardware acceleration.
         let gpu = udev::primary_gpu(session.seat()).ok().flatten();
 
         Self {
-            signaler,
             session,
             event_loop,
             gpu,
@@ -220,12 +232,13 @@ impl Udev {
         path: PathBuf,
     ) -> Result<(), Box<dyn Error>> {
         let open_flags = OFlag::O_RDWR | OFlag::O_CLOEXEC | OFlag::O_NOCTTY | OFlag::O_NONBLOCK;
-        let device_fd = self.session.open(&path, open_flags)?;
+        let fd = self.session.open(&path, open_flags)?;
+        let device_fd = unsafe { DrmDeviceFd::new(DeviceFd::from_raw_fd(fd), None) };
 
-        let mut drm = DrmDevice::new(device_fd, true, None)?;
+        let drm = DrmDevice::new(device_fd.clone(), true, None)?;
         let gbm = GbmDevice::new(device_fd)?;
 
-        let display = unsafe { EGLDisplay::new(&gbm, None)? };
+        let display = EGLDisplay::new(gbm.clone(), None)?;
         let context = EGLContext::new(&display, None)?;
 
         let mut renderer = unsafe { Gles2Renderer::new(context, None).expect("create renderer") };
@@ -240,18 +253,8 @@ impl Udev {
             .create_gbm_surface(display_handle, windows, &renderer, &drm, &gbm)
             .ok_or("gbm surface")?;
 
-        // Redraw when VT is focused.
-        let device_id = drm.device_id();
-        let handle = self.event_loop.clone();
-        let restart_token = self.signaler.register(move |signal| match signal {
-            Signal::ActivateSession | Signal::ActivateDevice { .. } => {
-                handle.insert_idle(Catacomb::create_frame);
-            },
-            _ => {},
-        });
-
         // Listen for VBlanks.
-        drm.link(self.signaler.clone());
+        let device_id = drm.device_id();
         let dispatcher = Dispatcher::new(drm, move |event, _, catacomb: &mut Catacomb| {
             match event {
                 DrmEvent::VBlank(_crtc) => catacomb.create_frame(),
@@ -269,7 +272,6 @@ impl Udev {
             renderer,
             token,
             gbm,
-            _restart_token: restart_token,
             drm: dispatcher,
             id: device_id,
         });
@@ -311,9 +313,9 @@ impl Udev {
         display: &DisplayHandle,
         windows: &mut Windows,
         renderer: &Gles2Renderer,
-        drm: &DrmDevice<RawFd>,
-        gbm: &GbmDevice<RawFd>,
-    ) -> Option<GbmBufferedSurface<GbmDevice<RawFd>, RawFd, ()>> {
+        drm: &DrmDevice,
+        gbm: &GbmDevice<DrmDeviceFd>,
+    ) -> Option<GbmBufferedSurface<GbmDevice<DrmDeviceFd>, ()>> {
         let formats = Bind::<Dmabuf>::supported_formats(renderer)?;
         let resources = drm.resource_handles().ok()?;
 
@@ -335,8 +337,7 @@ impl Udev {
             // Try to create a DRM surface.
             .flat_map(|crtc| drm.create_surface(crtc, connector_mode, &[connector.handle()]))
             // Yield the first successful GBM buffer creation.
-            .find_map(|mut surface| {
-                surface.link(self.signaler.clone());
+            .find_map(|surface| {
                 GbmBufferedSurface::new(surface, gbm.clone(), formats.clone(), None).ok()
             })?;
 
@@ -362,14 +363,13 @@ impl Udev {
 
 /// Target device for rendering.
 pub struct OutputDevice {
-    gbm_surface: GbmBufferedSurface<GbmDevice<RawFd>, RawFd, ()>,
-    drm: Dispatcher<'static, DrmDevice<i32>, Catacomb>,
+    gbm_surface: GbmBufferedSurface<GbmDevice<DrmDeviceFd>, ()>,
+    drm: Dispatcher<'static, DrmDevice, Catacomb>,
     renderer: Gles2Renderer,
-    gbm: GbmDevice<RawFd>,
+    gbm: GbmDevice<DrmDeviceFd>,
     graphics: Graphics,
     id: DeviceId,
 
-    _restart_token: SignalToken,
     token: RegistrationToken,
 }
 

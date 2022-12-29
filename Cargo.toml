@@ -11,11 +11,6 @@ edition = "2021"
 [workspace]
 members = ["catacomb_ipc"]
 
-[features]
-default = ["systemd"]
-libseat = ["smithay/backend_session_libseat"]
-systemd = ["smithay/backend_session_logind"]
-
 [dependencies.smithay]
 git = "https://github.com/smithay/smithay"
 default-features = false
@@ -25,7 +20,7 @@ features = [
     "backend_gbm",
     "backend_libinput",
     "backend_udev",
-    "backend_session",
+    "backend_session_libseat",
     "renderer_gl",
     "renderer_multi",
     "slog-stdlog"
