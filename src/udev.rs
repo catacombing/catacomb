@@ -1,7 +1,7 @@
 //! Udev backend.
 
 use std::error::Error;
-use std::os::fd::FromRawFd;
+use std::os::unix::io::FromRawFd;
 use std::path::PathBuf;
 use std::process;
 use std::time::Duration;
