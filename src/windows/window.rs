@@ -10,7 +10,7 @@ use smithay::backend::renderer::{self, BufferType, ImportAll};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Physical, Point, Rectangle, Size};
 use smithay::wayland::compositor::{
-    self, SubsurfaceCachedState, SurfaceAttributes, SurfaceData, TraversalAction,
+    self, RectangleKind, SubsurfaceCachedState, SurfaceAttributes, SurfaceData, TraversalAction,
 };
 use smithay::wayland::shell::wlr_layer::{
     Anchor, ExclusiveZone, KeyboardInteractivity, Layer, LayerSurfaceCachedState,
@@ -18,10 +18,10 @@ use smithay::wayland::shell::wlr_layer::{
 use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface, XdgPopupSurfaceRoleAttributes};
 
 use crate::drawing::{SurfaceBuffer, Texture};
-use crate::geometry::Vector;
+use crate::geometry::{SubtractRectFast, Vector};
 use crate::output::{Canvas, ExclusiveSpace, Output};
-use crate::windows;
 use crate::windows::surface::{CatacombLayerSurface, OffsetSurface, Surface};
+use crate::windows::{self, OpaqueRegions};
 
 /// Wayland client window state.
 #[derive(Debug)]
@@ -59,6 +59,9 @@ pub struct Window<S = ToplevelSurface> {
     /// Pending window damage.
     damage: Option<Rectangle<i32, Physical>>,
 
+    /// Opaque window region.
+    opaque_region: Vec<Rectangle<i32, Physical>>,
+
     /// Window liveliness override.
     dead: bool,
 }
@@ -70,6 +73,7 @@ impl<S: Surface> Window<S> {
             surface,
             initial_configure_sent: Default::default(),
             buffers_pending: Default::default(),
+            opaque_region: Default::default(),
             texture_cache: Default::default(),
             transaction: Default::default(),
             deny_focus: Default::default(),
@@ -83,7 +87,7 @@ impl<S: Surface> Window<S> {
     }
 
     /// Send a frame request to the window.
-    pub fn request_frame(&mut self, runtime: u32) {
+    pub fn request_frame(&self, runtime: u32) {
         self.with_surfaces(|_, surface_data| {
             let mut attributes = surface_data.cached_state.current::<SurfaceAttributes>();
             for callback in attributes.frame_callbacks.drain(..) {
@@ -92,7 +96,7 @@ impl<S: Surface> Window<S> {
         });
 
         // Request new frames from all popups.
-        for window in &mut self.popups {
+        for window in &self.popups {
             window.request_frame(runtime);
         }
     }
@@ -122,6 +126,7 @@ impl<S: Surface> Window<S> {
         scale: f64,
         bounds: impl Into<Option<Rectangle<i32, Logical>>>,
         damage: impl Into<Option<&'a [Rectangle<i32, Physical>]>>,
+        opaque_regions: impl Into<Option<&'a mut OpaqueRegions>>,
     ) {
         let bounds = bounds.into().unwrap_or_else(|| self.bounds());
         let physical_bounds = bounds.to_physical(canvas.scale());
@@ -131,12 +136,20 @@ impl<S: Surface> Window<S> {
         let damage = damage.into().unwrap_or(&full_damage);
 
         // Calculate damage overlapping this window.
-        let mut window_damage = None;
-        for damage in damage.iter().filter_map(|damage| damage.intersection(physical_bounds)) {
-            window_damage = Some(match window_damage {
-                Some(window_damage) => damage.merge(window_damage),
-                None => damage,
-            });
+        let mut window_damage = damage
+            .iter()
+            .filter_map(|damage| damage.intersection(physical_bounds))
+            .reduce(Rectangle::merge);
+
+        // Handle opaque regions.
+        let mut opaque_regions = opaque_regions.into();
+        if let Some((damage, opaque_regions)) = window_damage.zip(opaque_regions.as_mut()) {
+            // Remove this window's region from opaque regions.
+            opaque_regions.popn(self.opaque_region().len());
+
+            // Filter out occluded damage.
+            let unoccluded_damage = opaque_regions.filter_damage(&[damage]);
+            window_damage = unoccluded_damage.iter().copied().reduce(Rectangle::merge);
         }
 
         // Skip rendering without damage.
@@ -156,7 +169,7 @@ impl<S: Surface> Window<S> {
         for popup in &mut self.popups {
             let loc = bounds.loc + popup.rectangle.loc;
             let popup_bounds = Rectangle::from_loc_and_size(loc, (i32::MAX, i32::MAX));
-            popup.draw(frame, canvas, scale, popup_bounds, damage);
+            popup.draw(frame, canvas, scale, popup_bounds, damage, opaque_regions.as_deref_mut());
         }
     }
 
@@ -208,7 +221,7 @@ impl<S: Surface> Window<S> {
                     return TraversalAction::DoChildren(location);
                 }
 
-                // Retrieve and clear damage.
+                // Retrieve buffer damage.
                 let damage = data.damage.buffer();
 
                 let buffer = match &data.buffer {
@@ -239,7 +252,7 @@ impl<S: Surface> Window<S> {
                     },
                 };
 
-                // Ensure damage is cleared after import.
+                // Ensure damage is cleared after successful import.
                 data.damage.clear_buffer();
 
                 action
@@ -316,23 +329,40 @@ impl<S: Surface> Window<S> {
 
     /// Handle common surface commit logic for surfaces of any kind.
     pub fn surface_commit_common(&mut self, surface: &WlSurface, output: &Output) {
+        let output_rect = Rectangle::from_loc_and_size((0, 0), output.physical_resolution());
+        let output_scale = output.scale();
+
         // Cancel transactions on the commit after the configure was acked.
         self.acked_size = self.surface.acked_size();
 
         // Handle surface buffer changes.
         compositor::with_surface_tree_upward(
             surface,
-            self.bounds().loc,
+            self.bounds().loc.to_physical(output_scale),
             |_, data, location| {
                 // Compute absolute surface location.
                 let mut location = *location;
                 if data.role == Some("subsurface") {
                     let current = data.cached_state.current::<SubsurfaceCachedState>();
-                    location += current.location;
+                    location += current.location.to_physical(output_scale);
+                }
+
+                // Update opaque regions.
+                self.opaque_region.clear();
+                let mut attributes = data.cached_state.current::<SurfaceAttributes>();
+                if let Some(region) = &attributes.opaque_region {
+                    for (kind, rect) in &region.rects {
+                        let mut rect = rect.to_physical(output_scale);
+                        rect.loc += location;
+
+                        match kind {
+                            RectangleKind::Add => self.opaque_region.push(rect),
+                            RectangleKind::Subtract => self.opaque_region.subtract_rect(rect),
+                        }
+                    }
                 }
 
                 // Retrieve new buffer updates.
-                let mut attributes = data.cached_state.current::<SurfaceAttributes>();
                 let assignment = match attributes.buffer.take() {
                     Some(assignment) => assignment,
                     None => return TraversalAction::DoChildren(location),
@@ -342,17 +372,15 @@ impl<S: Surface> Window<S> {
                 data.data_map.insert_if_missing(|| RefCell::new(SurfaceBuffer::new()));
                 let mut buffer =
                     data.data_map.get::<RefCell<SurfaceBuffer>>().unwrap().borrow_mut();
-                buffer.update_buffer(&mut attributes, assignment, output.scale());
+                buffer.update_buffer(&mut attributes, assignment, output_scale);
                 self.buffers_pending = true;
 
                 // Update window damage.
-                for mut damage in buffer.damage.drain_physical() {
-                    damage.loc += location.to_physical(output.scale());
-                    self.damage = Some(match self.damage {
-                        Some(window_damage) => window_damage.merge(damage),
-                        None => damage,
-                    });
-                }
+                let new_damage = buffer.damage.drain_physical().flat_map(|mut damage| {
+                    damage.loc += location;
+                    damage.intersection(output_rect)
+                });
+                self.damage = new_damage.chain(self.damage).reduce(Rectangle::merge);
 
                 TraversalAction::DoChildren(location)
             },
@@ -365,7 +393,7 @@ impl<S: Surface> Window<S> {
         let old_size = self.texture_cache.size;
         if let Some(damage) = self.damage.as_mut().filter(|_| new_size != old_size) {
             let mut moved_damage = *damage;
-            moved_damage.loc += old_size.sub(new_size).to_physical(output.scale()).to_point();
+            moved_damage.loc += old_size.sub(new_size).to_physical(output_scale).to_point();
             *damage = damage.merge(moved_damage);
         }
 
@@ -490,6 +518,10 @@ impl<S: Surface> Window<S> {
     /// Get pending window damage.
     pub fn damage(&self) -> Option<Rectangle<i32, Physical>> {
         self.damage.filter(|_| self.transaction.is_none())
+    }
+
+    pub fn opaque_region(&self) -> &[Rectangle<i32, Physical>] {
+        &self.opaque_region
     }
 
     /// Get primary window surface.

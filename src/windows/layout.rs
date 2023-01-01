@@ -377,11 +377,19 @@ impl Layouts {
 
     /// Send leave event to active layout's windows.
     fn send_active_leave(&mut self, output: &Output) {
-        self.with_visible(|window| window.leave(output));
+        self.with_visible_mut(|window| window.leave(output));
     }
 
     /// Execute a function for all visible windows.
-    pub fn with_visible<F: FnMut(&mut Window)>(&mut self, mut fun: F) {
+    pub fn with_visible<F: FnMut(&Window)>(&self, mut fun: F) {
+        let layout = self.active();
+        for window in layout.primary.iter().chain(&layout.secondary) {
+            fun(&window.borrow());
+        }
+    }
+
+    /// Execute a function for all visible windows mutably.
+    pub fn with_visible_mut<F: FnMut(&mut Window)>(&mut self, mut fun: F) {
         let layout = self.active();
         for window in layout.primary.iter().chain(&layout.secondary) {
             fun(&mut window.borrow_mut());

@@ -8,6 +8,7 @@ use smithay::wayland::shell::wlr_layer::Layer;
 use crate::output::Canvas;
 use crate::windows::surface::CatacombLayerSurface;
 use crate::windows::window::Window;
+use crate::windows::OpaqueRegions;
 
 type LayerWindow = Window<CatacombLayerSurface>;
 
@@ -33,12 +34,12 @@ impl Layers {
         }
     }
 
-    /// Request new frames for all layer windows.
+    /// Iterate over all layer shell windows.
     pub fn iter(&self) -> impl Iterator<Item = &LayerWindow> {
         self.background.iter().chain(&self.bottom).chain(&self.top).chain(&self.overlay)
     }
 
-    /// Request new frames for all layer windows.
+    /// Iterate mutably over all layer shell windows.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut LayerWindow> {
         self.background
             .iter_mut()
@@ -47,19 +48,30 @@ impl Layers {
             .chain(&mut self.overlay)
     }
 
+    /// Iterate over layer shell background windows, bottom to top.
+    pub fn background(&self) -> impl Iterator<Item = &LayerWindow> {
+        self.background.iter().chain(&self.bottom)
+    }
+
+    /// Iterate over layer shell foreground windows, bottom to top.
+    pub fn foreground(&self) -> impl Iterator<Item = &LayerWindow> {
+        self.top.iter().chain(&self.overlay)
+    }
+
     /// Draw background/bottom layer windows.
     pub fn draw_background(
         &mut self,
         frame: &mut Gles2Frame,
         canvas: &Canvas,
         damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &mut OpaqueRegions,
     ) {
         for window in &mut self.background {
-            window.draw(frame, canvas, 1., None, damage);
+            window.draw(frame, canvas, 1., None, damage, &mut *opaque_regions);
         }
 
         for window in &mut self.bottom {
-            window.draw(frame, canvas, 1., None, damage);
+            window.draw(frame, canvas, 1., None, damage, &mut *opaque_regions);
         }
     }
 
@@ -69,13 +81,14 @@ impl Layers {
         frame: &mut Gles2Frame,
         canvas: &Canvas,
         damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &mut OpaqueRegions,
     ) {
         for window in &mut self.top {
-            window.draw(frame, canvas, 1., None, damage);
+            window.draw(frame, canvas, 1., None, damage, &mut *opaque_regions);
         }
 
         for window in &mut self.overlay {
-            window.draw(frame, canvas, 1., None, damage);
+            window.draw(frame, canvas, 1., None, damage, &mut *opaque_regions);
         }
     }
 

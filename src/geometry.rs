@@ -4,7 +4,7 @@ use std::error::Error;
 use std::str::FromStr;
 use std::{cmp, ops};
 
-use smithay::utils::{Point, Size};
+use smithay::utils::{Coordinate, Point, Rectangle, Size};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Matrix3x3<T: Copy> {
@@ -164,6 +164,73 @@ where
         let lhs = self.as_vector();
         let rhs = other.into().as_vector();
         Self::from((lhs.0 - rhs.0, lhs.1 - rhs.1))
+    }
+}
+
+/// Subtract a rect from all rectangles in a vec.
+///
+/// This is an potentially allocation-free implementation for subtracting one
+/// rectangle from all rectangles in a vec.
+///
+/// The `subtract_rect` method will not allocate unless the storage vec itself
+/// is too small for all original rectangles and all output rectangles.
+pub trait SubtractRectFast<N, K> {
+    /// Subtract a rectangle.
+    fn subtract_rect(&mut self, sub_rect: Rectangle<N, K>);
+}
+
+impl<N: Coordinate, K> SubtractRectFast<N, K> for Vec<Rectangle<N, K>> {
+    fn subtract_rect(&mut self, sub_rect: Rectangle<N, K>) {
+        let initial_len = self.len();
+
+        // Add all subtraction result rectangles to self.
+        for i in 0..initial_len {
+            let rect = self[i];
+
+            // Re-add the rect as-is if nothing can be subtracted.
+            if !rect.overlaps(sub_rect) {
+                self.push(rect);
+                continue;
+            }
+
+            // Remove rect if it is contained completely.
+            if sub_rect.contains_rect(rect) {
+                continue;
+            }
+
+            // Calculate intersection of the two rectangles.
+            //
+            // Unwrap is safe since we have checked for an overlap before.
+            let overlap = rect.intersection(sub_rect).unwrap();
+
+            // Push rectangle if it is bigger than 0x0.
+            let mut push_nonempty = |rect: Rectangle<N, K>| {
+                if !rect.is_empty() {
+                    self.push(rect);
+                }
+            };
+
+            // Push all the resulting non-empty rectangles.
+
+            let top_size = (rect.size.w, overlap.loc.y.saturating_sub(rect.loc.y));
+            push_nonempty(Rectangle::from_loc_and_size(rect.loc, top_size));
+
+            let left_loc = (rect.loc.x, overlap.loc.y);
+            let left_size = (overlap.loc.x.saturating_sub(rect.loc.x), overlap.size.h);
+            push_nonempty(Rectangle::from_loc_and_size(left_loc, left_size));
+
+            let right_loc = (overlap.loc.x.saturating_add(overlap.size.w), overlap.loc.y);
+            let right_width = rect.loc.x.saturating_add(rect.size.w).saturating_sub(right_loc.0);
+            push_nonempty(Rectangle::from_loc_and_size(right_loc, (right_width, overlap.size.h)));
+
+            let bottom_loc = (rect.loc.x, overlap.loc.y.saturating_add(overlap.size.h));
+            let bottom_height = rect.loc.y.saturating_add(rect.size.h).saturating_sub(bottom_loc.1);
+            push_nonempty(Rectangle::from_loc_and_size(bottom_loc, (rect.size.w, bottom_height)));
+        }
+
+        // Efficiently remove all processed rects from the front of the vec.
+        self.rotate_left(initial_len);
+        self.truncate(self.len() - initial_len);
     }
 }
 

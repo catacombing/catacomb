@@ -385,7 +385,7 @@ impl XdgShellHandler for Catacomb {
     fn ack_configure(&mut self, surface: WlSurface, _configure: Configure) {
         // Request new frames after each resize.
         let runtime = self.windows.runtime();
-        if let Some(mut window) = self.windows.find_xdg(&surface) {
+        if let Some(window) = self.windows.find_xdg(&surface) {
             window.request_frame(runtime);
         }
     }

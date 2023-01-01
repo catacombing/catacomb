@@ -213,7 +213,7 @@ impl Overview {
                 let mut bounds = position.bounds;
                 self.handle_closing(output, canvas, layouts, primary, &mut bounds, true);
 
-                primary.borrow_mut().draw(frame, canvas, position.scale, bounds, None);
+                primary.borrow_mut().draw(frame, canvas, position.scale, bounds, None, None);
             }
 
             // Draw the secondary window.
@@ -222,7 +222,7 @@ impl Overview {
                 let mut bounds = position.secondary_bounds();
                 self.handle_closing(output, canvas, layouts, secondary, &mut bounds, false);
 
-                secondary.borrow_mut().draw(frame, canvas, position.scale, bounds, None);
+                secondary.borrow_mut().draw(frame, canvas, position.scale, bounds, None, None);
             }
 
             offset += 1.;
@@ -330,7 +330,7 @@ impl DragAndDrop {
 
         // Render the window being drag-and-dropped.
         let mut window = self.window.borrow_mut();
-        window.draw(frame, canvas, self.scale, bounds, None);
+        window.draw(frame, canvas, self.scale, bounds, None, None);
 
         // Set custom OpenGL blending function.
         let _ = frame.with_context(|gl| unsafe {

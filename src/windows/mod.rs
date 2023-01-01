@@ -2,10 +2,10 @@
 
 use std::borrow::Cow;
 use std::cell::{RefCell, RefMut};
+use std::mem;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, UNIX_EPOCH};
-use std::{cmp, mem};
 
 use smithay::backend::renderer::gles2::ffi::{self as gl, Gles2};
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
@@ -21,6 +21,7 @@ use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface};
 
 use crate::catacomb::{Catacomb, Damage};
 use crate::drawing::{Graphics, MAX_DAMAGE_AGE};
+use crate::geometry::SubtractRectFast;
 use crate::input::{Gesture, TouchState};
 use crate::layer::Layers;
 use crate::orientation::Orientation;
@@ -82,6 +83,7 @@ pub struct Windows {
     event_loop: LoopHandle<'static, Catacomb>,
     activated: Option<ToplevelSurface>,
     transaction: Option<Transaction>,
+    opaque_regions: OpaqueRegions,
     start_time: Instant,
     output: Output,
 
@@ -114,6 +116,7 @@ impl Windows {
             orientation_locked: true,
             fully_damaged: true,
             unlocked_orientation: Default::default(),
+            opaque_regions: Default::default(),
             orphan_popups: Default::default(),
             transaction: Default::default(),
             activated: Default::default(),
@@ -259,30 +262,35 @@ impl Windows {
             || fully_damaged
             || !matches!(self.view, View::Workspace)
         {
-            // Use maximum dimension as damage square to account for possible rotation.
-            let resolution = self.output.physical_resolution();
-            let max_dimension = cmp::max(resolution.w, resolution.h);
-            damage.push(Rectangle::from_loc_and_size((0, 0), (max_dimension, max_dimension)));
+            let resolution = self.output.size().to_physical(self.output.scale());
+            damage.push(Rectangle::from_loc_and_size((0, 0), resolution));
             damage.take_since(1)
         } else {
             self.window_damage(damage);
             damage.take_since(buffer_age)
         };
 
-        // Clear the screen.
-        let _ = frame.clear([1., 0., 1., 1.], damage);
+        // Update the opaque regions.
+        let workspace_active = matches!(self.view, View::Workspace);
+        self.opaque_regions.update(&self.layouts, &self.layers, &self.canvas, workspace_active);
 
-        self.layers.draw_background(frame, &self.canvas, damage);
+        // Clear the screen.
+        let clear_damage = self.opaque_regions.filter_damage(damage);
+        if !clear_damage.is_empty() {
+            let _ = frame.clear([1., 0., 1., 1.], &clear_damage);
+        }
+
+        self.layers.draw_background(frame, &self.canvas, damage, &mut self.opaque_regions);
 
         match self.view {
             View::Workspace => {
-                self.layouts.with_visible(|window| {
-                    window.draw(frame, &self.canvas, 1., None, damage);
+                self.layouts.with_visible_mut(|window| {
+                    window.draw(frame, &self.canvas, 1., None, damage, &mut self.opaque_regions);
                 });
             },
             View::DragAndDrop(ref dnd) => {
-                self.layouts.with_visible(|window| {
-                    window.draw(frame, &self.canvas, 1., None, damage);
+                self.layouts.with_visible_mut(|window| {
+                    window.draw(frame, &self.canvas, 1., None, damage, None);
                 });
                 dnd.draw(frame, &self.canvas, graphics);
             },
@@ -297,8 +305,8 @@ impl Windows {
         }
 
         // Only draw top/overlay windows in workspace view.
-        if matches!(self.view, View::Workspace) {
-            self.layers.draw_foreground(frame, &self.canvas, damage);
+        if workspace_active {
+            self.layers.draw_foreground(frame, &self.canvas, damage, &mut self.opaque_regions);
         }
 
         // Draw gesture handle in workspace view.
@@ -844,5 +852,72 @@ enum View {
 impl Default for View {
     fn default() -> Self {
         View::Workspace
+    }
+}
+
+/// List with all windows' opaque regions.
+#[derive(Default, Debug)]
+pub struct OpaqueRegions {
+    opaque_regions: Vec<Rectangle<i32, Physical>>,
+
+    /// Damage cache, to reduce allocations.
+    ///
+    /// This is only useful when the `OpaqueRegions` struct is also stored
+    /// somewhere permanently, otherwise it will still reallocate.
+    damage_cache: Vec<Rectangle<i32, Physical>>,
+}
+
+impl OpaqueRegions {
+    /// Update the currently occluded regions.
+    fn update(
+        &mut self,
+        layouts: &Layouts,
+        layers: &Layers,
+        canvas: &Canvas,
+        workspace_active: bool,
+    ) {
+        self.opaque_regions.clear();
+
+        for window in layers.background() {
+            self.opaque_regions.extend_from_slice(window.opaque_region());
+        }
+
+        // Ignore layouts/foreground layer regions in overview and DnD.
+        if workspace_active {
+            layouts.with_visible(|window| {
+                self.opaque_regions.extend_from_slice(window.opaque_region());
+            });
+
+            for window in layers.foreground() {
+                self.opaque_regions.extend_from_slice(window.opaque_region());
+            }
+        }
+
+        let canvas_size = canvas.physical_resolution();
+        let handle_size = (canvas_size.w, GESTURE_HANDLE_HEIGHT * canvas.scale());
+        let handle_loc = (0, canvas_size.h - handle_size.1);
+        self.opaque_regions.push(Rectangle::from_loc_and_size(handle_loc, handle_size));
+    }
+
+    /// Filter out occluded damage rectangles.
+    pub fn filter_damage(
+        &mut self,
+        damage: &[Rectangle<i32, Physical>],
+    ) -> &[Rectangle<i32, Physical>] {
+        self.damage_cache.clear();
+        self.damage_cache.extend_from_slice(damage);
+
+        for opaque_region in &self.opaque_regions {
+            self.damage_cache.subtract_rect(*opaque_region);
+        }
+
+        &self.damage_cache
+    }
+
+    /// Pop `N` opaque region rectangles from the bottom of the stack.
+    pub fn popn(&mut self, n: usize) {
+        let original_len = self.opaque_regions.len();
+        self.opaque_regions.rotate_left(n);
+        self.opaque_regions.truncate(original_len.saturating_sub(n));
     }
 }
