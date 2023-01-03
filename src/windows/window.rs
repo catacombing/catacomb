@@ -154,8 +154,8 @@ impl<S: Surface> Window<S> {
 
         // Skip rendering without damage.
         let window_damage = match window_damage {
-            Some(window_damage) => window_damage,
-            None => return,
+            Some(window_damage) if !window_damage.is_empty() => window_damage,
+            _ => return,
         };
 
         // Clear window damage.
