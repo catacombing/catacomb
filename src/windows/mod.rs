@@ -67,11 +67,6 @@ pub fn start_transaction() {
     TRANSACTION_START.store(now, Ordering::Relaxed);
 }
 
-/// Check if there's an active transaction.
-fn transaction_active() -> bool {
-    TRANSACTION_START.load(Ordering::Relaxed) != 0
-}
-
 /// Container tracking all known clients.
 #[derive(Debug)]
 pub struct Windows {
@@ -230,11 +225,6 @@ impl Windows {
 
     /// Import pending buffers for all windows.
     pub fn import_buffers(&mut self, renderer: &mut Gles2Renderer) {
-        // Do not import buffers during a transaction.
-        if transaction_active() {
-            return;
-        }
-
         for mut window in self.layouts.windows_mut() {
             window.import_buffers(renderer);
         }

@@ -184,6 +184,11 @@ impl<S: Surface> Window<S> {
 
     /// Import the buffers of all surfaces into the renderer.
     pub fn import_buffers(&mut self, renderer: &mut Gles2Renderer) {
+        // Do not import buffers during a transaction.
+        if !self.transaction_done() {
+            return;
+        }
+
         // Import buffers for all popup windows.
         for popup in &mut self.popups {
             popup.import_buffers(renderer);
