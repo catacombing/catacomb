@@ -188,6 +188,11 @@ impl Udev {
         }
     }
 
+    /// Get the current output's renderer.
+    pub fn renderer(&mut self) -> Option<&mut Gles2Renderer> {
+        self.output_device.as_mut().map(|output_device| &mut output_device.renderer)
+    }
+
     /// Copy framebuffer region into another buffer.
     pub fn copy_framebuffer(
         &mut self,
@@ -218,11 +223,6 @@ impl Udev {
         for scheduled_redraw in self.scheduled_redraws.drain(..) {
             self.event_loop.remove(scheduled_redraw);
         }
-    }
-
-    /// Get the current output device.
-    pub fn output(&mut self) -> &mut Option<OutputDevice> {
-        &mut self.output_device
     }
 
     fn add_device(
@@ -392,11 +392,6 @@ impl OutputDevice {
         })
     }
 
-    /// Get the output's renderer.
-    pub fn renderer(&mut self) -> &mut Gles2Renderer {
-        &mut self.renderer
-    }
-
     /// Set output DPMS state.
     fn set_enabled(&mut self, enabled: bool) {
         let property = match self.get_drm_property("ACTIVE") {
@@ -419,9 +414,6 @@ impl OutputDevice {
         // Bind the next buffer to render into.
         let (dmabuf, age) = self.gbm_surface.next_buffer()?;
         self.renderer.bind(dmabuf)?;
-
-        // Import all pending buffers.
-        windows.import_buffers(&mut self.renderer);
 
         // Draw the current frame into the buffer.
         let transform = windows.orientation().transform();

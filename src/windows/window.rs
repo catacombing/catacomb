@@ -17,7 +17,7 @@ use smithay::wayland::shell::wlr_layer::{
 };
 use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface, XdgPopupSurfaceRoleAttributes};
 
-use crate::drawing::{SurfaceBuffer, Texture};
+use crate::drawing::{CatacombSurfaceData, Texture};
 use crate::geometry::{SubtractRectFast, Vector};
 use crate::output::{Canvas, ExclusiveSpace, Output};
 use crate::windows::surface::{CatacombLayerSurface, OffsetSurface, Surface};
@@ -57,10 +57,10 @@ pub struct Window<S = ToplevelSurface> {
     popups: Vec<Window<PopupSurface>>,
 
     /// Pending window damage.
-    damage: Option<Rectangle<i32, Physical>>,
+    damage: Option<Rectangle<i32, Logical>>,
 
     /// Opaque window region.
-    opaque_region: Vec<Rectangle<i32, Physical>>,
+    opaque_region: Vec<Rectangle<i32, Logical>>,
 
     /// Window liveliness override.
     dead: bool,
@@ -143,23 +143,29 @@ impl<S: Surface> Window<S> {
 
         // Handle opaque regions.
         let mut opaque_regions = opaque_regions.into();
-        if let Some((damage, opaque_regions)) = window_damage.zip(opaque_regions.as_mut()) {
+        if let Some(opaque_regions) = opaque_regions.as_mut() {
             // Remove this window's region from opaque regions.
-            opaque_regions.popn(self.opaque_region().len());
+            opaque_regions.popn(self.opaque_region.len());
 
             // Filter out occluded damage.
-            let unoccluded_damage = opaque_regions.filter_damage(&[damage]);
-            window_damage = unoccluded_damage.iter().copied().reduce(Rectangle::merge);
+            if let Some(damage) = window_damage {
+                let unoccluded_damage = opaque_regions.filter_damage(&[damage]);
+                window_damage = unoccluded_damage.iter().copied().reduce(Rectangle::merge);
+            }
         }
+
+        // Clear window damage.
+        //
+        // Since window damage only matters for the current frame, we clear it even when
+        // nothing needs to be drawn since all the required updates have been completed
+        // at that point.
+        self.damage = None;
 
         // Skip rendering without damage.
         let window_damage = match window_damage {
             Some(window_damage) if !window_damage.is_empty() => window_damage,
             _ => return,
         };
-
-        // Clear window damage.
-        self.damage = None;
 
         for texture in &mut self.texture_cache.textures {
             texture.draw_at(frame, canvas, bounds, scale, window_damage);
@@ -185,7 +191,7 @@ impl<S: Surface> Window<S> {
     /// Import the buffers of all surfaces into the renderer.
     pub fn import_buffers(&mut self, renderer: &mut Gles2Renderer) {
         // Do not import buffers during a transaction.
-        if !self.transaction_done() {
+        if self.transaction.is_some() {
             return;
         }
 
@@ -200,6 +206,7 @@ impl<S: Surface> Window<S> {
         }
 
         let geometry = self.geometry();
+        let old_size = self.texture_cache.size;
         self.texture_cache.reset(geometry.size);
         self.buffers_pending = false;
 
@@ -207,7 +214,7 @@ impl<S: Surface> Window<S> {
             self.surface.surface(),
             Point::from((0, 0)) - geometry.loc,
             |_, surface_data, location| {
-                let data = match surface_data.data_map.get::<RefCell<SurfaceBuffer>>() {
+                let data = match surface_data.data_map.get::<RefCell<CatacombSurfaceData>>() {
                     Some(data) => data,
                     None => return TraversalAction::SkipChildren,
                 };
@@ -226,13 +233,25 @@ impl<S: Surface> Window<S> {
                     return TraversalAction::DoChildren(location);
                 }
 
-                // Retrieve buffer damage.
-                let damage = data.damage.buffer();
+                // Update window's opaque region.
+                self.opaque_region.clear();
+                for (kind, rect) in &data.opaque_region {
+                    let mut rect = *rect;
+                    rect.loc += location;
+
+                    match kind {
+                        RectangleKind::Add => self.opaque_region.push(rect),
+                        RectangleKind::Subtract => self.opaque_region.subtract_rect(rect),
+                    }
+                }
 
                 let buffer = match &data.buffer {
                     Some(buffer) => buffer,
                     None => return TraversalAction::SkipChildren,
                 };
+
+                // Retrieve buffer damage.
+                let damage = data.damage.buffer();
 
                 // Import and cache the buffer.
                 let action = match renderer.import_buffer(buffer, Some(surface_data), damage) {
@@ -257,14 +276,28 @@ impl<S: Surface> Window<S> {
                     },
                 };
 
+                // Update window damage.
+                let new_damage = data.damage.logical().iter().copied().map(|mut damage| {
+                    damage.loc += location;
+                    damage
+                });
+                self.damage = new_damage.chain(self.damage).reduce(Rectangle::merge);
+
                 // Ensure damage is cleared after successful import.
-                data.damage.clear_buffer();
+                data.damage.clear();
 
                 action
             },
             |_, _, _| (),
             |_, _, _| true,
         );
+
+        // Update damage if window moved within its bounds due to centering.
+        if let Some(damage) = self.damage.as_mut().filter(|_| geometry.size != old_size) {
+            let mut moved_damage = *damage;
+            moved_damage.loc += old_size.sub(geometry.size).to_point();
+            *damage = damage.merge(moved_damage);
+        }
     }
 
     /// Send a configure for the latest window properties.
@@ -334,73 +367,42 @@ impl<S: Surface> Window<S> {
 
     /// Handle common surface commit logic for surfaces of any kind.
     pub fn surface_commit_common(&mut self, surface: &WlSurface, output: &Output) {
-        let output_rect = Rectangle::from_loc_and_size((0, 0), output.physical_resolution());
-        let output_scale = output.scale();
-
         // Cancel transactions on the commit after the configure was acked.
         self.acked_size = self.surface.acked_size();
 
         // Handle surface buffer changes.
         compositor::with_surface_tree_upward(
             surface,
-            self.bounds().loc.to_physical(output_scale),
-            |_, data, location| {
-                // Compute absolute surface location.
-                let mut location = *location;
-                if data.role == Some("subsurface") {
-                    let current = data.cached_state.current::<SubsurfaceCachedState>();
-                    location += current.location.to_physical(output_scale);
-                }
+            (),
+            |_, data, _| {
+                // Get access to surface data.
+                data.data_map.insert_if_missing(|| RefCell::new(CatacombSurfaceData::new()));
+                let mut surface_data =
+                    data.data_map.get::<RefCell<CatacombSurfaceData>>().unwrap().borrow_mut();
 
-                // Update opaque regions.
-                self.opaque_region.clear();
+                // Check if new buffer has been attached.
                 let mut attributes = data.cached_state.current::<SurfaceAttributes>();
-                if let Some(region) = &attributes.opaque_region {
-                    for (kind, rect) in &region.rects {
-                        let mut rect = rect.to_physical(output_scale);
-                        rect.loc += location;
-
-                        match kind {
-                            RectangleKind::Add => self.opaque_region.push(rect),
-                            RectangleKind::Subtract => self.opaque_region.subtract_rect(rect),
-                        }
-                    }
-                }
-
-                // Retrieve new buffer updates.
-                let assignment = match attributes.buffer.take() {
-                    Some(assignment) => assignment,
-                    None => return TraversalAction::DoChildren(location),
+                let buffer_assignment = match attributes.buffer.take() {
+                    Some(buffer_assignment) => buffer_assignment,
+                    None => return TraversalAction::DoChildren(()),
                 };
 
+                // Update opaque regions.
+                surface_data.opaque_region = attributes
+                    .opaque_region
+                    .as_mut()
+                    .map(|region| mem::take(&mut region.rects))
+                    .unwrap_or_default();
+
                 // Store pending buffer updates.
-                data.data_map.insert_if_missing(|| RefCell::new(SurfaceBuffer::new()));
-                let mut buffer =
-                    data.data_map.get::<RefCell<SurfaceBuffer>>().unwrap().borrow_mut();
-                buffer.update_buffer(&mut attributes, assignment, output_scale);
+                surface_data.update_buffer(&mut attributes, buffer_assignment);
                 self.buffers_pending = true;
 
-                // Update window damage.
-                let new_damage = buffer.damage.drain_physical().flat_map(|mut damage| {
-                    damage.loc += location;
-                    damage.intersection(output_rect)
-                });
-                self.damage = new_damage.chain(self.damage).reduce(Rectangle::merge);
-
-                TraversalAction::DoChildren(location)
+                TraversalAction::DoChildren(())
             },
             |_, _, _| (),
             |_, _, _| true,
         );
-
-        // Update damage if window moved within its bounds due to centering.
-        let new_size = self.geometry().size;
-        let old_size = self.texture_cache.size;
-        if let Some(damage) = self.damage.as_mut().filter(|_| new_size != old_size) {
-            let mut moved_damage = *damage;
-            moved_damage.loc += old_size.sub(new_size).to_physical(output_scale).to_point();
-            *damage = damage.merge(moved_damage);
-        }
 
         // Send initial configure after the first commit.
         if !self.initial_configure_sent {
@@ -437,7 +439,7 @@ impl<S: Surface> Window<S> {
                 // Calculate surface's bounding box.
                 let size = surface_data
                     .data_map
-                    .get::<RefCell<SurfaceBuffer>>()
+                    .get::<RefCell<CatacombSurfaceData>>()
                     .map_or_else(Size::default, |data| data.borrow().size);
                 let surface_rect = Rectangle::from_loc_and_size(location.to_f64(), size.to_f64());
 
@@ -517,16 +519,30 @@ impl<S: Surface> Window<S> {
 
     /// Check if this window requires a redraw.
     pub fn damaged(&self) -> bool {
-        self.transaction.is_none() && self.damage.is_some()
+        self.damage.is_some()
     }
 
     /// Get pending window damage.
-    pub fn damage(&self) -> Option<Rectangle<i32, Physical>> {
-        self.damage.filter(|_| self.transaction.is_none())
+    pub fn damage(&self, canvas: &Canvas) -> Option<Rectangle<i32, Physical>> {
+        // Offset damage by window bounds.
+        let mut damage = self.damage?;
+        damage.loc += self.bounds().loc;
+
+        // Convert to physical coordinates.
+        let physical = damage.to_physical(canvas.scale());
+
+        // Clamp to output size.
+        let output_rect = Rectangle::from_loc_and_size((0, 0), canvas.physical_resolution());
+        physical.intersection(output_rect)
     }
 
-    pub fn opaque_region(&self) -> &[Rectangle<i32, Physical>] {
-        &self.opaque_region
+    /// Window's opaque region relative to its position.
+    pub fn opaque_region(&self) -> impl Iterator<Item = Rectangle<i32, Logical>> + '_ {
+        let bounds = self.bounds();
+        self.opaque_region.iter().copied().map(move |mut rect| {
+            rect.loc += bounds.loc;
+            rect
+        })
     }
 
     /// Get primary window surface.

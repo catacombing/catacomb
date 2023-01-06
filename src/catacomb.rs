@@ -273,6 +273,11 @@ impl Catacomb {
         // Update transaction before rendering to update device orientation.
         let transaction_deadline = self.windows.update_transaction();
 
+        // Import all pending buffers and update damage.
+        if let Some(renderer) = self.backend.renderer() {
+            self.windows.import_buffers(renderer);
+        }
+
         // Update surface focus.
         let focus = self.windows.focus();
         if focus != self.last_focus {
@@ -362,12 +367,13 @@ impl DmabufHandler for Catacomb {
         _global: &DmabufGlobal,
         buffer: Dmabuf,
     ) -> Result<(), ImportError> {
-        let output_device = match self.backend.output() {
-            Some(output_device) => output_device,
+        let renderer = match self.backend.renderer() {
+            Some(renderer) => renderer,
             None => return Err(ImportError::Failed),
         };
 
-        output_device.renderer().import_dmabuf(&buffer, None).map_err(|_| ImportError::Failed)?;
+        renderer.import_dmabuf(&buffer, None).map_err(|_| ImportError::Failed)?;
+
         Ok(())
     }
 }

@@ -2,13 +2,14 @@
 
 use std::ops::Deref;
 use std::rc::Rc;
-use std::vec::Drain;
 
 use smithay::backend::renderer::gles2::{ffi, Gles2Frame, Gles2Renderer, Gles2Texture};
 use smithay::backend::renderer::{self, Frame};
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::utils::{Buffer as BufferSpace, Logical, Physical, Point, Rectangle, Size, Transform};
-use smithay::wayland::compositor::{BufferAssignment, Damage as SurfaceDamage, SurfaceAttributes};
+use smithay::wayland::compositor::{
+    BufferAssignment, Damage as SurfaceDamage, RectangleKind, SurfaceAttributes,
+};
 
 use crate::geometry::Vector;
 use crate::output::Canvas;
@@ -49,7 +50,7 @@ impl Texture {
     pub fn from_surface(
         texture: Rc<Gles2Texture>,
         location: impl Into<Point<i32, Logical>>,
-        buffer: &SurfaceBuffer,
+        buffer: &CatacombSurfaceData,
     ) -> Self {
         Self {
             transform: buffer.transform,
@@ -169,8 +170,9 @@ impl Graphics {
     }
 }
 
-/// Surface buffer cache.
-pub struct SurfaceBuffer {
+/// Surface data store.
+pub struct CatacombSurfaceData {
+    pub opaque_region: Vec<(RectangleKind, Rectangle<i32, Logical>)>,
     pub texture: Option<Texture>,
     pub size: Size<i32, Logical>,
     pub buffer: Option<Buffer>,
@@ -179,10 +181,11 @@ pub struct SurfaceBuffer {
     pub scale: i32,
 }
 
-impl Default for SurfaceBuffer {
+impl Default for CatacombSurfaceData {
     fn default() -> Self {
         Self {
             scale: 1,
+            opaque_region: Default::default(),
             transform: Default::default(),
             texture: Default::default(),
             buffer: Default::default(),
@@ -192,7 +195,7 @@ impl Default for SurfaceBuffer {
     }
 }
 
-impl SurfaceBuffer {
+impl CatacombSurfaceData {
     pub fn new() -> Self {
         Self::default()
     }
@@ -202,7 +205,6 @@ impl SurfaceBuffer {
         &mut self,
         attributes: &mut SurfaceAttributes,
         assignment: BufferAssignment,
-        output_scale: i32,
     ) {
         match assignment {
             BufferAssignment::NewBuffer(buffer) => {
@@ -219,12 +221,12 @@ impl SurfaceBuffer {
 
         // Store pending damage.
         for damage in attributes.damage.drain(..) {
-            self.add_damage(output_scale, damage);
+            self.add_damage(damage);
         }
     }
 
     /// Add new surface damage.
-    fn add_damage(&mut self, output_scale: i32, damage: SurfaceDamage) {
+    fn add_damage(&mut self, damage: SurfaceDamage) {
         let (buffer, logical) = match damage {
             SurfaceDamage::Buffer(buffer) => {
                 let buffer_size = self.size.to_buffer(self.scale, self.transform);
@@ -236,7 +238,7 @@ impl SurfaceBuffer {
                 (buffer, logical)
             },
         };
-        self.damage.physical.push(logical.to_physical(output_scale));
+        self.damage.logical.push(logical);
         self.damage.buffer.push(buffer);
     }
 }
@@ -262,7 +264,7 @@ impl Deref for Buffer {
 #[derive(Default)]
 pub struct Damage {
     buffer: Vec<Rectangle<i32, BufferSpace>>,
-    physical: Vec<Rectangle<i32, Physical>>,
+    logical: Vec<Rectangle<i32, Logical>>,
 }
 
 impl Damage {
@@ -271,13 +273,14 @@ impl Damage {
         self.buffer.as_slice()
     }
 
-    /// Clear all buffer damage.
-    pub fn clear_buffer(&mut self) {
-        self.buffer.clear();
+    /// Get buffer's damage in logical coordinates.
+    pub fn logical(&self) -> &[Rectangle<i32, Logical>] {
+        &self.logical
     }
 
-    /// Drain all pending physical damage.
-    pub fn drain_physical(&mut self) -> Drain<'_, Rectangle<i32, Physical>> {
-        self.physical.drain(..)
+    /// Clear all damage.
+    pub fn clear(&mut self) {
+        self.logical.clear();
+        self.buffer.clear();
     }
 }

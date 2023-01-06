@@ -267,7 +267,7 @@ impl Windows {
         // Clear the screen.
         let clear_damage = self.opaque_regions.filter_damage(damage);
         if !clear_damage.is_empty() {
-            let _ = frame.clear([1., 0., 1., 1.], &clear_damage);
+            let _ = frame.clear([1., 0., 1., 1.], clear_damage);
         }
 
         self.layers.draw_background(frame, &self.canvas, damage, &mut self.opaque_regions);
@@ -583,9 +583,9 @@ impl Windows {
         let primary = active_layout.primary();
         let secondary = active_layout.secondary();
 
-        let primary_damage = primary.and_then(|window| window.borrow().damage());
-        let secondary_damage = secondary.and_then(|window| window.borrow().damage());
-        let layer_damage = self.layers.iter().filter_map(Window::damage);
+        let primary_damage = primary.and_then(|window| window.borrow().damage(&self.canvas));
+        let secondary_damage = secondary.and_then(|window| window.borrow().damage(&self.canvas));
+        let layer_damage = self.layers.iter().filter_map(|window| window.damage(&self.canvas));
 
         for window_damage in layer_damage.chain(primary_damage).chain(secondary_damage) {
             damage.push(window_damage);
@@ -868,18 +868,23 @@ impl OpaqueRegions {
     ) {
         self.opaque_regions.clear();
 
-        for window in layers.background() {
-            self.opaque_regions.extend_from_slice(window.opaque_region());
+        for rect in layers.background().flat_map(|window| window.opaque_region()) {
+            let physical_rect = rect.to_physical(canvas.scale());
+            self.opaque_regions.push(physical_rect);
         }
 
         // Ignore layouts/foreground layer regions in overview and DnD.
         if workspace_active {
             layouts.with_visible(|window| {
-                self.opaque_regions.extend_from_slice(window.opaque_region());
+                for rect in window.opaque_region() {
+                    let physical_rect = rect.to_physical(canvas.scale());
+                    self.opaque_regions.push(physical_rect);
+                }
             });
 
-            for window in layers.foreground() {
-                self.opaque_regions.extend_from_slice(window.opaque_region());
+            for rect in layers.foreground().flat_map(|window| window.opaque_region()) {
+                let physical_rect = rect.to_physical(canvas.scale());
+                self.opaque_regions.push(physical_rect);
             }
         }
 
@@ -907,6 +912,15 @@ impl OpaqueRegions {
     /// Pop `N` opaque region rectangles from the bottom of the stack.
     pub fn popn(&mut self, n: usize) {
         let original_len = self.opaque_regions.len();
+
+        // Clear vec if everything would be popped.
+        //
+        // This is necessary since `rotate_left` panics when `n` is bigger than `len`.
+        if n >= original_len {
+            self.opaque_regions.clear();
+            return;
+        }
+
         self.opaque_regions.rotate_left(n);
         self.opaque_regions.truncate(original_len.saturating_sub(n));
     }
