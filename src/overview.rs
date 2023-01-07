@@ -278,7 +278,7 @@ impl Overview {
         self.x_offset > 0.
             || self.x_offset < min_offset
             || self.y_offset != 0.
-            || self.x_offset.fract() <= f64::EPSILON
+            || self.x_offset.fract().abs() > f64::EPSILON
     }
 }
 
