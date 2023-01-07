@@ -312,10 +312,17 @@ impl<S: Surface> Window<S> {
 
     /// Change the window dimensions.
     pub fn set_dimensions(&mut self, rectangle: Rectangle<i32, Logical>) {
-        // Prevent redundant configure events.
-        let transaction = self.start_transaction();
-        let old_ractangle = mem::replace(&mut transaction.rectangle, rectangle);
-        if transaction.rectangle != old_ractangle && self.initial_configure_sent {
+        // Skip if we're already at the correct size.
+        let current = self.transaction.as_ref().map_or(self.rectangle, |t| t.rectangle);
+        if rectangle == current {
+            return;
+        }
+
+        // Transactionally update geometry.
+        self.start_transaction().rectangle = rectangle;
+
+        // Send reconfigures after the initial commit.
+        if self.initial_configure_sent {
             self.reconfigure();
         }
     }
