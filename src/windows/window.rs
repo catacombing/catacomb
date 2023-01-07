@@ -292,11 +292,11 @@ impl<S: Surface> Window<S> {
             |_, _, _| true,
         );
 
-        // Update damage if window moved within its bounds due to centering.
-        if let Some(damage) = self.damage.as_mut().filter(|_| geometry.size != old_size) {
-            let mut moved_damage = *damage;
-            moved_damage.loc += old_size.sub(geometry.size).to_point();
-            *damage = damage.merge(moved_damage);
+        // Add old geometry as damage if shrinkage caused re-centering within bounds.
+        if let Some(damage) = self.damage.as_mut().filter(|_| geometry.size < old_size) {
+            let old_loc = damage.loc - old_size.sub(geometry.size).to_point();
+            let old_rect = Rectangle::from_loc_and_size(old_loc, old_size);
+            *damage = damage.merge(old_rect);
         }
     }
 
