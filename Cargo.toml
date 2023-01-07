@@ -22,10 +22,7 @@ features = [
     "backend_udev",
     "backend_session_libseat",
     "renderer_gl",
-    "renderer_multi",
-    "slog-stdlog"
 ]
-
 
 [dependencies]
 catacomb_ipc = { version = "0.1.0", path = "./catacomb_ipc", features = ["clap", "smithay"] }

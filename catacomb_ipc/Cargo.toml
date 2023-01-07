@@ -17,10 +17,8 @@ features = [
     "backend_gbm",
     "backend_libinput",
     "backend_udev",
-    "backend_session",
+    "backend_session_libseat",
     "renderer_gl",
-    "renderer_multi",
-    "slog-stdlog"
 ]
 optional = true
 
