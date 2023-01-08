@@ -2,10 +2,10 @@
 
 use std::borrow::Cow;
 use std::cell::{RefCell, RefMut};
-use std::mem;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::{cmp, mem};
 
 use smithay::backend::renderer::gles2::ffi::{self as gl, Gles2};
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
@@ -247,7 +247,8 @@ impl Windows {
 
         // Collect pending damage.
         let max_age = MAX_DAMAGE_AGE as u8;
-        let damage = if buffer_age == 0
+        #[allow(unused_mut)]
+        let mut damage = if buffer_age == 0
             || buffer_age > max_age
             || fully_damaged
             || !matches!(self.view, View::Workspace)
@@ -259,6 +260,15 @@ impl Windows {
             self.window_damage(damage);
             damage.take_since(buffer_age)
         };
+
+        // Swap out damage with full damage to redraw everything while debugging.
+        #[cfg(feature = "debug_damage")]
+        let mut debug_damage: &[Rectangle<i32, Physical>] = {
+            let resolution = self.output.size().to_physical(self.output.scale());
+            &[Rectangle::from_loc_and_size((0, 0), resolution)]
+        };
+        #[cfg(feature = "debug_damage")]
+        mem::swap(&mut damage, &mut debug_damage);
 
         // Update the opaque regions.
         let workspace_active = matches!(self.view, View::Workspace);
@@ -303,6 +313,24 @@ impl Windows {
         let _ = frame.with_context(|gl| unsafe {
             self.draw_gesture_handle(gl, damage);
         });
+
+        // Draw damage debug overlay.
+        #[cfg(feature = "debug_damage")]
+        {
+            let _ = frame.with_context(|gl| unsafe {
+                gl.BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+            });
+
+            for rect in debug_damage {
+                let bounds = rect.to_logical(self.canvas.scale());
+                let scale = cmp::max(bounds.size.w, bounds.size.h) as f64;
+                graphics.damage_debug.draw_at(frame, &self.canvas, bounds, scale, None);
+            }
+
+            let _ = frame.with_context(|gl| unsafe {
+                gl.BlendFunc(gl::ONE, gl::ONE_MINUS_SRC_ALPHA);
+            });
+        }
     }
 
     /// Draw the gesture handle.

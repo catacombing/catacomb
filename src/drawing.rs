@@ -20,6 +20,9 @@ pub const MAX_DAMAGE_AGE: usize = 2;
 /// Color of the hovered overview tiling location highlight.
 const ACTIVE_DROP_TARGET_RGBA: [u8; 4] = [128, 128, 128, 128];
 
+/// Color for the damage debug overlay.
+const DAMAGE_DEBUG_RGBA: [u8; 4] = [255, 0, 255, 64];
+
 /// Color of the overview tiling location highlight.
 const DROP_TARGET_RGBA: [u8; 4] = [128, 128, 128, 64];
 
@@ -159,14 +162,16 @@ impl Texture {
 #[derive(Debug)]
 pub struct Graphics {
     pub active_drop_target: Texture,
+    pub damage_debug: Texture,
     pub drop_target: Texture,
 }
 
 impl Graphics {
     pub fn new(renderer: &mut Gles2Renderer) -> Self {
         let active_drop_target = Texture::from_buffer(renderer, &ACTIVE_DROP_TARGET_RGBA, 1, 1);
+        let damage_debug = Texture::from_buffer(renderer, &DAMAGE_DEBUG_RGBA, 1, 1);
         let drop_target = Texture::from_buffer(renderer, &DROP_TARGET_RGBA, 1, 1);
-        Self { active_drop_target, drop_target }
+        Self { active_drop_target, damage_debug, drop_target }
     }
 }
 
