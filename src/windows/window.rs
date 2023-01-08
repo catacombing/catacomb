@@ -277,9 +277,9 @@ impl<S: Surface> Window<S> {
                 };
 
                 // Update window damage.
-                let new_damage = data.damage.logical().iter().copied().map(|mut damage| {
+                let new_damage = data.damage.logical().iter().copied().flat_map(|mut damage| {
                     damage.loc += location;
-                    damage
+                    damage.intersection(geometry)
                 });
                 self.damage = new_damage.chain(self.damage).reduce(Rectangle::merge);
 
