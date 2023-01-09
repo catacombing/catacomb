@@ -2,10 +2,12 @@
 
 use std::borrow::Cow;
 use std::cell::{RefCell, RefMut};
+#[cfg(feature = "debug_damage")]
+use std::cmp;
+use std::mem;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, UNIX_EPOCH};
-use std::{cmp, mem};
 
 use smithay::backend::renderer::gles2::ffi::{self as gl, Gles2};
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
@@ -272,7 +274,13 @@ impl Windows {
 
         // Update the opaque regions.
         let workspace_active = matches!(self.view, View::Workspace);
-        self.opaque_regions.update(&self.layouts, &self.layers, &self.canvas, workspace_active);
+        self.opaque_regions.update(
+            &self.layouts,
+            &self.layers,
+            &self.canvas,
+            self.gesture_handle_rect(),
+            workspace_active,
+        );
 
         // Clear the screen.
         let clear_damage = self.opaque_regions.filter_damage(damage);
@@ -310,9 +318,12 @@ impl Windows {
         }
 
         // Draw gesture handle in workspace view.
-        let _ = frame.with_context(|gl| unsafe {
-            self.draw_gesture_handle(gl, damage);
-        });
+        let handle_rect = self.gesture_handle_rect();
+        if damage.iter().any(|damage| damage.overlaps(handle_rect)) {
+            let _ = frame.with_context(|gl| unsafe {
+                self.draw_gesture_handle(gl, damage);
+            });
+        }
 
         // Draw damage debug overlay.
         #[cfg(feature = "debug_damage")]
@@ -383,6 +394,14 @@ impl Windows {
         gl.Clear(gl::COLOR_BUFFER_BIT);
 
         gl.Disable(gl::SCISSOR_TEST);
+    }
+
+    /// Get the size and location of the gesture handle.
+    fn gesture_handle_rect(&self) -> Rectangle<i32, Physical> {
+        let canvas_size = self.canvas.size().to_physical(self.canvas.scale());
+        let handle_size = (canvas_size.w, GESTURE_HANDLE_HEIGHT * self.canvas.scale());
+        let handle_loc = (0, canvas_size.h - handle_size.1);
+        Rectangle::from_loc_and_size(handle_loc, handle_size)
     }
 
     /// Request new frames for all visible windows.
@@ -892,6 +911,7 @@ impl OpaqueRegions {
         layouts: &Layouts,
         layers: &Layers,
         canvas: &Canvas,
+        handle_rect: Rectangle<i32, Physical>,
         workspace_active: bool,
     ) {
         self.opaque_regions.clear();
@@ -916,10 +936,8 @@ impl OpaqueRegions {
             }
         }
 
-        let canvas_size = canvas.physical_resolution();
-        let handle_size = (canvas_size.w, GESTURE_HANDLE_HEIGHT * canvas.scale());
-        let handle_loc = (0, canvas_size.h - handle_size.1);
-        self.opaque_regions.push(Rectangle::from_loc_and_size(handle_loc, handle_size));
+        // Add gesture handle's opaque region.
+        self.opaque_regions.push(handle_rect);
     }
 
     /// Filter out occluded damage rectangles.
