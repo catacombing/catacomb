@@ -539,8 +539,8 @@ impl<S: Surface> Window<S> {
         let physical = damage.to_physical(canvas.scale());
 
         // Clamp to output size.
-        let output_rect = Rectangle::from_loc_and_size((0, 0), canvas.physical_resolution());
-        physical.intersection(output_rect)
+        let canvas_size = canvas.size().to_physical(canvas.scale());
+        physical.intersection(Rectangle::from_loc_and_size((0, 0), canvas_size))
     }
 
     /// Window's opaque region relative to its position.
