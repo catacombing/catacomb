@@ -493,7 +493,8 @@ impl BufferHandler for Catacomb {
 
 impl ScreencopyHandler for Catacomb {
     fn output_size(&mut self, _output: &WlOutput) -> Size<i32, Physical> {
-        self.windows.output().physical_resolution()
+        let output = self.windows.output();
+        output.size().to_physical(output.scale())
     }
 
     fn copy(
@@ -503,8 +504,7 @@ impl ScreencopyHandler for Catacomb {
         _overlay_cursor: bool,
     ) -> Result<Vec<Rectangle<i32, Physical>>, Box<dyn Error>> {
         // Copy the framebuffer to the target buffer.
-        let output_size = self.windows.output().physical_resolution();
-        self.backend.copy_framebuffer(buffer, output_size, rect)?;
+        self.backend.copy_framebuffer(buffer, self.windows.output(), rect)?;
 
         // Always mark entire buffer as damaged.
         let damage = vec![rect];
