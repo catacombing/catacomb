@@ -4,6 +4,7 @@ use std::error::Error;
 
 use _screencopy::zwlr_screencopy_frame_v1::ZwlrScreencopyFrameV1;
 use _screencopy::zwlr_screencopy_manager_v1::{Request, ZwlrScreencopyManagerV1};
+#[cfg(feature = "screencopy_dma")]
 use smithay::backend::allocator::Fourcc;
 use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server as _screencopy;
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
@@ -108,6 +109,7 @@ where
 
         if manager.version() >= 3 {
             // Send desired DMA buffer parameters.
+            #[cfg(feature = "screencopy_dma")]
             frame.linux_dmabuf(Fourcc::Argb8888 as u32, rect.size.w as u32, rect.size.h as u32);
 
             // Notify client that all supported buffers were enumerated.

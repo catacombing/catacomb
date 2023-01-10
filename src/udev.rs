@@ -14,9 +14,9 @@ use smithay::backend::egl::context::EGLContext;
 use smithay::backend::egl::display::EGLDisplay;
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::gles2::{ffi, Gles2Renderer};
-use smithay::backend::renderer::{
-    self, Bind, BufferType, Frame, ImportAll, ImportDma, ImportEgl, Renderer,
-};
+#[cfg(feature = "screencopy_dma")]
+use smithay::backend::renderer::ImportAll;
+use smithay::backend::renderer::{self, Bind, BufferType, Frame, ImportDma, ImportEgl, Renderer};
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev;
@@ -442,6 +442,7 @@ impl OutputDevice {
     ) -> Result<(), Box<dyn Error>> {
         match renderer::buffer_type(buffer) {
             Some(BufferType::Shm) => self.copy_framebuffer_shm(buffer, output, rect),
+            #[cfg(feature = "screencopy_dma")]
             Some(BufferType::Dma) => self.copy_framebuffer_dma(buffer, output, rect),
             Some(format) => Err(format!("unsupported buffer format: {format:?}").into()),
             None => Err("invalid target buffer".into()),
@@ -527,6 +528,7 @@ impl OutputDevice {
     }
 
     /// Copy framebuffer region into a DMA buffer.
+    #[cfg(feature = "screencopy_dma")]
     fn copy_framebuffer_dma(
         &mut self,
         buffer: &WlBuffer,
