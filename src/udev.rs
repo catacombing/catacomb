@@ -13,7 +13,9 @@ use smithay::backend::egl::context::EGLContext;
 use smithay::backend::egl::display::EGLDisplay;
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::gles2::{ffi, Gles2Renderer};
-use smithay::backend::renderer::{self, Bind, BufferType, Frame, ImportDma, ImportEgl, Renderer};
+use smithay::backend::renderer::{
+    self, Bind, BufferType, Frame, ImportAll, ImportDma, ImportEgl, Renderer,
+};
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev;
@@ -439,6 +441,7 @@ impl OutputDevice {
     ) -> Result<(), Box<dyn Error>> {
         match renderer::buffer_type(buffer) {
             Some(BufferType::Shm) => self.copy_framebuffer_shm(buffer, output_size, rect),
+            Some(BufferType::Dma) => self.copy_framebuffer_dma(buffer, output_size, rect),
             Some(format) => Err(format!("unsupported buffer format: {format:?}").into()),
             None => Err("invalid target buffer".into()),
         }
@@ -482,5 +485,36 @@ impl OutputDevice {
 
             Ok(())
         })?
+    }
+
+    /// Copy framebuffer region into a DMA buffer.
+    fn copy_framebuffer_dma(
+        &mut self,
+        buffer: &WlBuffer,
+        output_size: Size<i32, Physical>,
+        rect: Rectangle<i32, Physical>,
+    ) -> Result<(), Box<dyn Error>> {
+        let buffer_size = renderer::buffer_dimensions(buffer).ok_or("unexpected buffer type")?;
+        let damage = [Rectangle::from_loc_and_size((0, 0), buffer_size)];
+        let texture = self
+            .renderer
+            .import_buffer(buffer, None, &damage)
+            .ok_or("unexpected buffer type")??;
+
+        self.renderer.with_context(|gl| unsafe {
+            gl.BindTexture(ffi::TEXTURE_2D, texture.tex_id());
+            gl.CopyTexSubImage2D(
+                ffi::TEXTURE_2D,
+                0,
+                0,
+                0,
+                rect.loc.x,
+                output_size.h - rect.loc.y - rect.size.h,
+                rect.size.w,
+                rect.size.h,
+            );
+        })?;
+
+        Ok(())
     }
 }
