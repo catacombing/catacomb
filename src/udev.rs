@@ -419,7 +419,7 @@ impl OutputDevice {
         self.renderer.bind(dmabuf)?;
 
         // Draw the current frame into the buffer.
-        let transform = windows.orientation().transform();
+        let transform = windows.orientation().output_transform();
         let output_size = windows.output().physical_resolution();
         let mut frame = self.renderer.render(output_size, transform)?;
         windows.draw(&mut frame, &self.graphics, damage, age);

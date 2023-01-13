@@ -75,14 +75,25 @@ impl FromStr for Orientation {
 
 #[cfg(feature = "smithay")]
 impl Orientation {
-    /// Display rendering transform for this orientation.
+    /// Output rendering transform for this orientation.
     #[must_use]
-    pub fn transform(&self) -> Transform {
+    pub fn output_transform(&self) -> Transform {
         match self {
             Self::Portrait => Transform::Normal,
             Self::InversePortrait => Transform::_180,
             Self::Landscape => Transform::_90,
             Self::InverseLandscape => Transform::_270,
+        }
+    }
+
+    /// Surface rendering transform for this orientation.
+    #[must_use]
+    pub fn surface_transform(&self) -> Transform {
+        match self {
+            Self::Portrait => Transform::Normal,
+            Self::InversePortrait => Transform::_180,
+            Self::Landscape => Transform::_270,
+            Self::InverseLandscape => Transform::_90,
         }
     }
 }

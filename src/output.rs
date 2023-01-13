@@ -71,7 +71,7 @@ impl Output {
     #[inline]
     pub fn set_mode(&mut self, mode: Mode) {
         let scale = Some(Scale::Integer(self.canvas.scale));
-        let transform = Some(self.orientation.transform());
+        let transform = Some(self.orientation.output_transform());
         self.output.change_current_state(Some(mode), transform, scale, None);
         self.output.set_preferred(mode);
         self.canvas.mode = mode;
