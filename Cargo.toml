@@ -14,8 +14,6 @@ members = ["catacomb_ipc"]
 [features]
 # Draw damage debug info overlay.
 debug_damage = []
-# wlr-screencopy-v1 `linux_dmabuf` support.
-screencopy_dma = []
 
 [dependencies.smithay]
 git = "https://github.com/smithay/smithay"

@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use std::process;
 use std::time::Duration;
 
-use catacomb_ipc::Orientation;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::gbm::GbmDevice;
 use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent, GbmBufferedSurface};
@@ -14,9 +13,9 @@ use smithay::backend::egl::context::EGLContext;
 use smithay::backend::egl::display::EGLDisplay;
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::gles2::{ffi, Gles2Renderer};
-#[cfg(feature = "screencopy_dma")]
-use smithay::backend::renderer::ImportAll;
-use smithay::backend::renderer::{self, Bind, BufferType, Frame, ImportDma, ImportEgl, Renderer};
+use smithay::backend::renderer::{
+    self, Bind, BufferType, Frame, ImportAll, ImportDma, ImportEgl, Renderer,
+};
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev;
@@ -200,11 +199,10 @@ impl Udev {
     pub fn copy_framebuffer(
         &mut self,
         buffer: &WlBuffer,
-        output: &Output,
         rect: Rectangle<i32, Physical>,
     ) -> Result<(), Box<dyn Error>> {
         if let Some(output_device) = &mut self.output_device {
-            output_device.copy_framebuffer(buffer, output, rect)?;
+            output_device.copy_framebuffer(buffer, rect)?;
         }
         Ok(())
     }
@@ -437,13 +435,11 @@ impl OutputDevice {
     fn copy_framebuffer(
         &mut self,
         buffer: &WlBuffer,
-        output: &Output,
         rect: Rectangle<i32, Physical>,
     ) -> Result<(), Box<dyn Error>> {
         match renderer::buffer_type(buffer) {
-            Some(BufferType::Shm) => self.copy_framebuffer_shm(buffer, output, rect),
-            #[cfg(feature = "screencopy_dma")]
-            Some(BufferType::Dma) => self.copy_framebuffer_dma(buffer, output, rect),
+            Some(BufferType::Shm) => self.copy_framebuffer_shm(buffer, rect),
+            Some(BufferType::Dma) => self.copy_framebuffer_dma(buffer, rect),
             Some(format) => Err(format!("unsupported buffer format: {format:?}").into()),
             None => Err("invalid target buffer".into()),
         }
@@ -454,7 +450,6 @@ impl OutputDevice {
     fn copy_framebuffer_shm(
         &mut self,
         buffer: &WlBuffer,
-        output: &Output,
         rect: Rectangle<i32, Physical>,
     ) -> Result<(), Box<dyn Error>> {
         // Manually copy array to SHM buffer to account for stride.
@@ -468,59 +463,22 @@ impl OutputDevice {
                 return Err::<(), Box<dyn Error>>("Invalid buffer format".into());
             }
 
-            // Create an owned buffer if we need to rotate the output.
-            let mut owned_buffer = Vec::new();
-            let orientation = output.orientation();
-            let buffer_ptr = if orientation != Orientation::default() {
-                owned_buffer = vec![0; shm_buffer.len()];
-                owned_buffer.as_mut_ptr()
-            } else {
-                shm_buffer.as_mut_ptr()
-            };
-
-            // Translate region rect to framebuffer coordinates.
-            let output_size = output.physical_resolution();
-            let (x, y, w, h) = match orientation {
-                Orientation::Portrait => (rect.loc.x, rect.loc.y, rect.size.w, rect.size.h),
-                Orientation::InversePortrait => (
-                    output_size.w - rect.loc.x - rect.size.w,
-                    output_size.h - rect.loc.y - rect.size.h,
-                    rect.size.w,
-                    rect.size.h,
-                ),
-                Orientation::Landscape => {
-                    (output_size.w - rect.loc.y - rect.size.h, rect.loc.x, rect.size.h, rect.size.w)
-                },
-                Orientation::InverseLandscape => {
-                    (rect.loc.y, output_size.h - rect.loc.x - rect.size.w, rect.size.h, rect.size.w)
-                },
-            };
-
             // Copy framebuffer data to the SHM buffer.
             self.renderer.with_context(|gl| unsafe {
-                gl.ReadPixels(x, y, w, h, ffi::RGBA, ffi::UNSIGNED_BYTE, buffer_ptr.cast());
+                gl.ReadPixels(
+                    rect.loc.x,
+                    rect.loc.y,
+                    rect.size.w,
+                    rect.size.h,
+                    ffi::RGBA,
+                    ffi::UNSIGNED_BYTE,
+                    shm_buffer.as_mut_ptr().cast(),
+                );
             })?;
 
-            // Convert rotation and OpenGL's RGBA to ARGB.
-            let width = rect.size.w as usize;
-            let height = rect.size.h as usize;
-            for i in 0..width * height {
-                let src_pixel = match orientation {
-                    // Just swap RGBA/ARGB pixels for portrait mode.
-                    Orientation::Portrait => {
-                        shm_buffer.swap(i * 4, i * 4 + 2);
-                        continue;
-                    },
-                    Orientation::Landscape => (height - i / width - 1) + (i % width) * height,
-                    Orientation::InversePortrait => width * height - i - 1,
-                    Orientation::InverseLandscape => (i / width) + (width - i % width - 1) * height,
-                };
-
-                // Copy rotated pixel with color channel correction.
-                shm_buffer[i * 4 + 0] = owned_buffer[src_pixel * 4 + 2];
-                shm_buffer[i * 4 + 1] = owned_buffer[src_pixel * 4 + 1];
-                shm_buffer[i * 4 + 2] = owned_buffer[src_pixel * 4 + 0];
-                shm_buffer[i * 4 + 3] = owned_buffer[src_pixel * 4 + 3];
+            // Convert OpenGL's RGBA to ARGB.
+            for i in 0..(rect.size.w * rect.size.h) as usize {
+                shm_buffer.swap(i * 4, i * 4 + 2);
             }
 
             Ok(())
@@ -528,11 +486,9 @@ impl OutputDevice {
     }
 
     /// Copy framebuffer region into a DMA buffer.
-    #[cfg(feature = "screencopy_dma")]
     fn copy_framebuffer_dma(
         &mut self,
         buffer: &WlBuffer,
-        output: &Output,
         rect: Rectangle<i32, Physical>,
     ) -> Result<(), Box<dyn Error>> {
         let buffer_size = renderer::buffer_dimensions(buffer).ok_or("unexpected buffer type")?;
@@ -542,7 +498,6 @@ impl OutputDevice {
             .import_buffer(buffer, None, &damage)
             .ok_or("unexpected buffer type")??;
 
-        let output_size = output.size().to_physical(output.scale());
         self.renderer.with_context(|gl| unsafe {
             gl.BindTexture(ffi::TEXTURE_2D, texture.tex_id());
             gl.CopyTexSubImage2D(
@@ -551,7 +506,7 @@ impl OutputDevice {
                 0,
                 0,
                 rect.loc.x,
-                output_size.h - rect.loc.y - rect.size.h,
+                rect.loc.y,
                 rect.size.w,
                 rect.size.h,
             );

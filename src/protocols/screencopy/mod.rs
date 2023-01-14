@@ -8,13 +8,13 @@ use _screencopy::zwlr_screencopy_manager_v1::{Request, ZwlrScreencopyManagerV1};
 use smithay::backend::allocator::Fourcc;
 use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server as _screencopy;
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
-use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_shm;
 use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
 };
-use smithay::utils::{Physical, Rectangle, Size};
+use smithay::utils::{Physical, Rectangle};
 
+use crate::output::Output;
 use crate::protocols::screencopy::frame::ScreencopyFrameState;
 
 pub mod frame;
@@ -76,20 +76,29 @@ where
         data_init: &mut DataInit<'_, D>,
     ) {
         let (frame, overlay_cursor, rect) = match request {
-            Request::CaptureOutput { frame, overlay_cursor, output } => {
-                let rect = Rectangle::from_loc_and_size((0, 0), state.output_size(&output));
+            Request::CaptureOutput { frame, overlay_cursor, .. } => {
+                let rect =
+                    Rectangle::from_loc_and_size((0, 0), state.output().physical_resolution());
                 (frame, overlay_cursor, rect)
             },
-            Request::CaptureOutputRegion { frame, overlay_cursor, output, x, y, width, height } => {
-                let output_size = state.output_size(&output);
+            Request::CaptureOutputRegion { frame, overlay_cursor, x, y, width, height, .. } => {
                 let rect = Rectangle::from_loc_and_size((x, y), (width, height));
 
+                // Translate logical rect to physical framebuffer coordinates.
+                let output = state.output();
+                let output_transform = output.orientation().output_transform();
+                let rotated_rect = output_transform.transform_rect_in(rect, &output.size());
+                let physical_rect = rotated_rect.to_physical(output.scale());
+
                 // Clamp captured region to the output.
-                let rect = rect
-                    .intersection(Rectangle::from_loc_and_size((0, 0), output_size))
+                let clamped_rect = physical_rect
+                    .intersection(Rectangle::from_loc_and_size(
+                        (0, 0),
+                        output.physical_resolution(),
+                    ))
                     .unwrap_or_default();
 
-                (frame, overlay_cursor, rect)
+                (frame, overlay_cursor, clamped_rect)
             },
             Request::Destroy => return,
             _ => unreachable!(),
@@ -120,8 +129,8 @@ where
 
 /// Handler trait for wlr-screencopy.
 pub trait ScreencopyHandler {
-    /// Get the size of an output.
-    fn output_size(&mut self, output: &WlOutput) -> Size<i32, Physical>;
+    /// Get the physical size of an output.
+    fn output(&mut self) -> &Output;
 
     /// Copy a region from the framebuffer into the supplied buffer.
     fn copy(

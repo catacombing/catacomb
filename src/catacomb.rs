@@ -26,7 +26,7 @@ use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Display, DisplayHandle, Resource};
-use smithay::utils::{Physical, Rectangle, Serial, Size, SERIAL_COUNTER};
+use smithay::utils::{Physical, Rectangle, Serial, SERIAL_COUNTER};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{CompositorHandler, CompositorState};
 use smithay::wayland::data_device::{
@@ -59,6 +59,7 @@ use crate::delegate_screencopy_manager;
 use crate::drawing::MAX_DAMAGE_AGE;
 use crate::input::{PhysicalButtonState, TouchState};
 use crate::orientation::{Accelerometer, AccelerometerSource};
+use crate::output::Output;
 use crate::protocols::screencopy::{ScreencopyHandler, ScreencopyManagerState};
 use crate::udev::Udev;
 use crate::windows::Windows;
@@ -492,9 +493,8 @@ impl BufferHandler for Catacomb {
 }
 
 impl ScreencopyHandler for Catacomb {
-    fn output_size(&mut self, _output: &WlOutput) -> Size<i32, Physical> {
-        let output = self.windows.output();
-        output.size().to_physical(output.scale())
+    fn output(&mut self) -> &Output {
+        self.windows.output()
     }
 
     fn copy(
@@ -504,12 +504,10 @@ impl ScreencopyHandler for Catacomb {
         _overlay_cursor: bool,
     ) -> Result<Vec<Rectangle<i32, Physical>>, Box<dyn Error>> {
         // Copy the framebuffer to the target buffer.
-        self.backend.copy_framebuffer(buffer, self.windows.output(), rect)?;
+        self.backend.copy_framebuffer(buffer, rect)?;
 
         // Always mark entire buffer as damaged.
-        let damage = vec![rect];
-
-        Ok(damage)
+        Ok(vec![rect])
     }
 }
 delegate_screencopy_manager!(Catacomb);
