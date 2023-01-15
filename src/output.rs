@@ -216,8 +216,8 @@ impl Canvas {
     /// while the overview is active.
     pub fn available_overview(&self) -> Rectangle<i32, Logical> {
         let reserved = |exclusivity| match exclusivity {
-            Exclusivity::Foreground(_) => 0,
-            Exclusivity::Background(reserved) => reserved,
+            Exclusivity::Top(_) | Exclusivity::Overlay(_) => 0,
+            Exclusivity::Background(reserved) | Exclusivity::Bottom(reserved) => reserved,
         };
 
         // Get reserved space on the background layers.
@@ -230,6 +230,31 @@ impl Canvas {
 
         let loc = (left, top);
         let mut size = self.wm_size();
+        size.w -= left + right;
+        size.h -= top + bottom;
+        Rectangle::from_loc_and_size(loc, size)
+    }
+
+    /// Area of the output available for fullscreen surfaces.
+    ///
+    /// This only accounts for overlay layer shell windows, since these are the
+    /// only ones visible in fullscreen mode.
+    pub fn available_fullscreen(&self) -> Rectangle<i32, Logical> {
+        let reserved = |exclusivity| match exclusivity {
+            Exclusivity::Overlay(reserved) => reserved,
+            _ => 0,
+        };
+
+        // Get reserved space on the overlay layer.
+        let (top, right, bottom, left) = (
+            reserved(self.exclusive.top),
+            reserved(self.exclusive.right),
+            reserved(self.exclusive.bottom),
+            reserved(self.exclusive.left),
+        );
+
+        let loc = (left, top);
+        let mut size = self.size();
         size.w -= left + right;
         size.h -= top + bottom;
         Rectangle::from_loc_and_size(loc, size)
@@ -280,8 +305,10 @@ impl ExclusiveSpace {
 /// Type of exclusive space reservation.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Exclusivity {
-    Foreground(i32),
+    Overlay(i32),
+    Top(i32),
     Background(i32),
+    Bottom(i32),
 }
 
 impl Default for Exclusivity {
@@ -293,8 +320,10 @@ impl Default for Exclusivity {
 impl Exclusivity {
     fn from_layer(layer: Layer, reserved: i32) -> Self {
         match layer {
-            Layer::Bottom | Layer::Background => Self::Background(reserved),
-            Layer::Top | Layer::Overlay => Self::Foreground(reserved),
+            Layer::Bottom => Self::Bottom(reserved),
+            Layer::Background => Self::Background(reserved),
+            Layer::Top => Self::Top(reserved),
+            Layer::Overlay => Self::Overlay(reserved),
         }
     }
 }
@@ -304,9 +333,10 @@ impl Add<Exclusivity> for i32 {
 
     fn add(self, exclusivity: Exclusivity) -> Self::Output {
         match exclusivity {
-            Exclusivity::Background(reserved) | Exclusivity::Foreground(reserved) => {
-                self + reserved
-            },
+            Exclusivity::Bottom(reserved)
+            | Exclusivity::Background(reserved)
+            | Exclusivity::Top(reserved)
+            | Exclusivity::Overlay(reserved) => self + reserved,
         }
     }
 }
@@ -316,9 +346,10 @@ impl Sub<Exclusivity> for i32 {
 
     fn sub(self, exclusivity: Exclusivity) -> Self::Output {
         match exclusivity {
-            Exclusivity::Background(reserved) | Exclusivity::Foreground(reserved) => {
-                self - reserved
-            },
+            Exclusivity::Bottom(reserved)
+            | Exclusivity::Background(reserved)
+            | Exclusivity::Top(reserved)
+            | Exclusivity::Overlay(reserved) => self - reserved,
         }
     }
 }
@@ -328,7 +359,10 @@ impl Deref for Exclusivity {
 
     fn deref(&self) -> &Self::Target {
         match self {
-            Exclusivity::Background(reserved) | Exclusivity::Foreground(reserved) => reserved,
+            Exclusivity::Bottom(reserved)
+            | Exclusivity::Background(reserved)
+            | Exclusivity::Top(reserved)
+            | Exclusivity::Overlay(reserved) => reserved,
         }
     }
 }

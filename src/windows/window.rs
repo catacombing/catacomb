@@ -575,14 +575,19 @@ impl Window<PopupSurface> {
 
 impl Window<CatacombLayerSurface> {
     /// Handle a surface commit for layer shell windows.
-    pub fn surface_commit(&mut self, surface: &WlSurface, output: &mut Output) {
+    pub fn surface_commit(
+        &mut self,
+        surface: &WlSurface,
+        output: &mut Output,
+        fullscreen_active: bool,
+    ) {
         self.update_layer_state(output);
-        self.update_dimensions(output);
+        self.update_dimensions(output, fullscreen_active);
         self.surface_commit_common(surface, output);
     }
 
     /// Recompute the window's size and location.
-    pub fn update_dimensions(&mut self, output: &mut Output) {
+    pub fn update_dimensions(&mut self, output: &mut Output, fullscreen_active: bool) {
         let state = compositor::with_states(self.surface.surface(), |states| {
             *states.cached_state.current::<LayerSurfaceCachedState>()
         });
@@ -590,6 +595,7 @@ impl Window<CatacombLayerSurface> {
         // Exclude gesture handle from Top/Overlay window size.
         let output_size = match state.layer {
             Layer::Background | Layer::Bottom => output.size(),
+            Layer::Overlay if fullscreen_active => output.size(),
             Layer::Top | Layer::Overlay => output.wm_size(),
         };
         let mut size = state.size;

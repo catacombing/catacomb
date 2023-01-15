@@ -389,6 +389,10 @@ impl XdgShellHandler for Catacomb {
         self.windows.add(surface);
     }
 
+    fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
+        self.windows.add_popup(surface);
+    }
+
     fn ack_configure(&mut self, surface: WlSurface, _configure: Configure) {
         // Request new frames after each resize.
         let runtime = self.windows.runtime();
@@ -397,11 +401,13 @@ impl XdgShellHandler for Catacomb {
         }
     }
 
-    fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
-        self.windows.add_popup(surface);
+    fn fullscreen_request(&mut self, surface: ToplevelSurface, _output: Option<WlOutput>) {
+        self.windows.fullscreen(&surface);
     }
 
-    fn grab(&mut self, _surface: PopupSurface, _seat: WlSeat, _serial: Serial) {}
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        self.windows.unfullscreen(&surface);
+    }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         self.windows.reap_xdg(&surface);
@@ -412,6 +418,8 @@ impl XdgShellHandler for Catacomb {
         self.windows.refresh_popups();
         self.unstall();
     }
+
+    fn grab(&mut self, _surface: PopupSurface, _seat: WlSeat, _serial: Serial) {}
 }
 delegate_xdg_shell!(Catacomb);
 

@@ -429,7 +429,7 @@ impl Layouts {
     }
 
     /// Convert layout position to winow.
-    pub fn window(&self, position: LayoutPosition) -> Option<&Rc<RefCell<Window>>> {
+    pub fn window_at(&self, position: LayoutPosition) -> Option<&Rc<RefCell<Window>>> {
         self.layouts.get(position.index).and_then(|layout| {
             if position.secondary {
                 layout.secondary.as_ref()
@@ -437,6 +437,14 @@ impl Layouts {
                 layout.primary.as_ref()
             }
         })
+    }
+
+    /// Find the window for the given toplevel surface.
+    pub fn find_window(&self, surface: &ToplevelSurface) -> Option<&Rc<RefCell<Window>>> {
+        self.layouts
+            .iter()
+            .flat_map(|layout| layout.primary.iter().chain(&layout.secondary))
+            .find(|window| &window.borrow().surface == surface)
     }
 
     /// Check if there are any layouts.

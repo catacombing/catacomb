@@ -184,7 +184,8 @@ impl Windows {
         // Handle layer shell surface commits.
         let old_exclusive = *self.output.exclusive();
         if let Some(window) = find_window!(self.layers.iter_mut()) {
-            window.surface_commit(surface, &mut self.output);
+            let fullscreen_active = matches!(self.view, View::Fullscreen(_));
+            window.surface_commit(surface, &mut self.output, fullscreen_active);
         }
 
         // Resize windows after exclusive zone change.
@@ -253,7 +254,7 @@ impl Windows {
         let mut damage = if buffer_age == 0
             || buffer_age > max_age
             || fully_damaged
-            || !matches!(self.view, View::Workspace)
+            || !matches!(self.view, View::Workspace | View::Fullscreen(_))
         {
             let resolution = self.output.size().to_physical(self.output.scale());
             damage.push(Rectangle::from_loc_and_size((0, 0), resolution));
@@ -273,13 +274,12 @@ impl Windows {
         mem::swap(&mut damage, &mut debug_damage);
 
         // Update the opaque regions.
-        let workspace_active = matches!(self.view, View::Workspace);
         self.opaque_regions.update(
             &self.layouts,
             &self.layers,
             &self.canvas,
             self.gesture_handle_rect(),
-            workspace_active,
+            &self.view,
         );
 
         // Clear the screen.
@@ -288,21 +288,28 @@ impl Windows {
             let _ = frame.clear([1., 0., 1., 1.], clear_damage);
         }
 
-        self.layers.draw_background(frame, &self.canvas, damage, &mut self.opaque_regions);
-
-        match self.view {
+        match &mut self.view {
             View::Workspace => {
+                self.layers.draw_background(frame, &self.canvas, damage, &mut self.opaque_regions);
+
                 self.layouts.with_visible_mut(|window| {
                     window.draw(frame, &self.canvas, 1., None, damage, &mut self.opaque_regions);
                 });
+
+                // Draw top/overlay windows in workspace view.
+                self.layers.draw_foreground(frame, &self.canvas, damage, &mut self.opaque_regions);
             },
-            View::DragAndDrop(ref dnd) => {
+            View::DragAndDrop(dnd) => {
+                self.layers.draw_background(frame, &self.canvas, damage, &mut self.opaque_regions);
+
                 self.layouts.with_visible_mut(|window| {
                     window.draw(frame, &self.canvas, 1., None, damage, None);
                 });
                 dnd.draw(frame, &self.canvas, graphics);
             },
-            View::Overview(ref mut overview) => {
+            View::Overview(overview) => {
+                self.layers.draw_background(frame, &self.canvas, damage, &mut self.opaque_regions);
+
                 overview.draw(frame, &self.output, &self.canvas, &self.layouts);
 
                 // Stage immediate redraw while overview animations are active.
@@ -310,16 +317,18 @@ impl Windows {
                     self.fully_damaged = true;
                 }
             },
+            View::Fullscreen(window) => {
+                window.borrow_mut().draw(frame, &self.canvas, 1., None, None, None);
+
+                // Draw overlay windows in fullscreen view.
+                self.layers.draw_overlay(frame, &self.canvas, damage, &mut self.opaque_regions);
+            },
         }
 
-        // Only draw top/overlay windows in workspace view.
-        if workspace_active {
-            self.layers.draw_foreground(frame, &self.canvas, damage, &mut self.opaque_regions);
-        }
-
-        // Draw gesture handle in workspace view.
-        let handle_rect = self.gesture_handle_rect();
-        if damage.iter().any(|damage| damage.overlaps(handle_rect)) {
+        // Draw gesture handle when not in fullscreen view.
+        if !matches!(self.view, View::Fullscreen(_))
+            && damage.iter().any(|damage| damage.overlaps(self.gesture_handle_rect()))
+        {
             let _ = frame.with_context(|gl| unsafe {
                 self.draw_gesture_handle(gl, damage);
             });
@@ -327,21 +336,7 @@ impl Windows {
 
         // Draw damage debug overlay.
         #[cfg(feature = "debug_damage")]
-        {
-            let _ = frame.with_context(|gl| unsafe {
-                gl.BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
-            });
-
-            for rect in debug_damage {
-                let bounds = rect.to_logical(self.canvas.scale());
-                let scale = cmp::max(bounds.size.w, bounds.size.h) as f64;
-                graphics.damage_debug.draw_at(frame, &self.canvas, bounds, scale, None);
-            }
-
-            let _ = frame.with_context(|gl| unsafe {
-                gl.BlendFunc(gl::ONE, gl::ONE_MINUS_SRC_ALPHA);
-            });
-        }
+        self.draw_damage_debug(frame, graphics, debug_damage);
     }
 
     /// Draw the gesture handle.
@@ -396,6 +391,29 @@ impl Windows {
         gl.Disable(gl::SCISSOR_TEST);
     }
 
+    /// Draw damage debug overlay.
+    #[cfg(feature = "debug_damage")]
+    fn draw_damage_debug(
+        &self,
+        frame: &mut Gles2Frame,
+        graphics: &Graphics,
+        debug_damage: &[Rectangle<i32, Physical>],
+    ) {
+        let _ = frame.with_context(|gl| unsafe {
+            gl.BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+        });
+
+        for rect in debug_damage {
+            let bounds = rect.to_logical(self.canvas.scale());
+            let scale = cmp::max(bounds.size.w, bounds.size.h) as f64;
+            graphics.damage_debug.draw_at(frame, &self.canvas, bounds, scale, None);
+        }
+
+        let _ = frame.with_context(|gl| unsafe {
+            gl.BlendFunc(gl::ONE, gl::ONE_MINUS_SRC_ALPHA);
+        });
+    }
+
     /// Get the size and location of the gesture handle.
     fn gesture_handle_rect(&self) -> Rectangle<i32, Physical> {
         let canvas_size = self.canvas.size().to_physical(self.canvas.scale());
@@ -407,15 +425,32 @@ impl Windows {
     /// Request new frames for all visible windows.
     pub fn request_frames(&mut self) {
         let runtime = self.runtime();
-        self.layers.request_frames(runtime);
 
-        if matches!(self.view, View::Workspace) {
-            self.layouts.with_visible(|window| window.request_frame(runtime));
+        match &self.view {
+            View::Fullscreen(window) => {
+                for overlay in self.layers.overlay() {
+                    overlay.request_frame(runtime);
+                }
+                window.borrow().request_frame(runtime);
+            },
+            View::Overview(_) | View::DragAndDrop(_) => {
+                for window in self.layers.background() {
+                    window.request_frame(runtime);
+                }
+            },
+            View::Workspace => {
+                self.layers.request_frames(runtime);
+                self.layouts.with_visible(|window| window.request_frame(runtime));
+            },
         }
     }
 
     /// Stage dead XDG shell window for reaping.
     pub fn reap_xdg(&mut self, surface: &ToplevelSurface) {
+        // Remove fullscreen if this client was fullscreened.
+        self.unfullscreen(surface);
+
+        // Reap layout windows.
         self.layouts.reap(&self.output, surface);
     }
 
@@ -451,7 +486,7 @@ impl Windows {
         };
 
         // Convert layout position to window.
-        let window = match self.layouts.window(layout_position) {
+        let window = match self.layouts.window_at(layout_position) {
             Some(window) => window.clone(),
             None => return,
         };
@@ -459,6 +494,40 @@ impl Windows {
         let dnd = DragAndDrop::new(&self.output, overview, layout_position, window);
         self.view = View::DragAndDrop(dnd);
         self.fully_damaged = true;
+    }
+
+    /// Fullscreen the supplied XDG surface.
+    pub fn fullscreen(&mut self, surface: &ToplevelSurface) {
+        if let Some(window) = self.layouts.find_window(surface) {
+            // Update window's XDG state.
+            window.borrow_mut().surface.set_state(|state| {
+                state.states.set(State::Fullscreen);
+            });
+
+            // Resize windows and change view.
+            self.set_view(View::Fullscreen(window.clone()));
+            self.resize_all();
+        }
+    }
+
+    /// Unfullscreen the supplied XDG surface, if it is currently fullscreened.
+    pub fn unfullscreen(&mut self, surface: &ToplevelSurface) {
+        let window = match &self.view {
+            View::Fullscreen(window) => window.borrow_mut(),
+            _ => return,
+        };
+
+        if &window.surface == surface {
+            // Update window's XDG state.
+            window.surface.set_state(|state| {
+                state.states.unset(State::Fullscreen);
+            });
+            drop(window);
+
+            // Resize windows and change view.
+            self.set_view(View::Workspace);
+            self.resize_all();
+        }
     }
 
     /// Current window focus.
@@ -564,12 +633,31 @@ impl Windows {
 
     /// Resize all windows to their expected size.
     pub fn resize_all(&mut self) {
-        // Resize XDG windows.
-        self.layouts.resize_all(&self.output);
+        // Check next view after transaction is applied.
+        let view = self.transaction.as_ref().and_then(|t| t.view.as_ref()).unwrap_or(&self.view);
 
-        // Resize layer shell windows.
-        for window in self.layers.iter_mut() {
-            window.update_dimensions(&mut self.output);
+        match view {
+            // Resize fullscreen and overlay surfaces in fullscreen view.
+            View::Fullscreen(window) => {
+                // Resize fullscreen XDG client.
+                let available_fullscreen = self.output.available_fullscreen();
+                window.borrow_mut().set_dimensions(available_fullscreen);
+
+                // Resize overlay layer clients.
+                for window in self.layers.overlay_mut() {
+                    window.update_dimensions(&mut self.output, true);
+                }
+            },
+            // Resize all surfaces.
+            _ => {
+                // Resize XDG windows.
+                self.layouts.resize_all(&self.output);
+
+                // Resize layer shell windows.
+                for window in self.layers.iter_mut() {
+                    window.update_dimensions(&mut self.output, false);
+                }
+            },
         }
     }
 
@@ -615,9 +703,21 @@ impl Windows {
 
     /// Check if any window was damaged since the last redraw.
     pub fn damaged(&mut self) -> bool {
-        self.fully_damaged
-            || self.layers.iter().any(Window::damaged)
-            || self.layouts.windows().any(|window| window.damaged())
+        if self.fully_damaged {
+            return true;
+        }
+
+        match &self.view {
+            // Check only fullscreened and overlay shell windows in fullscreen view.
+            View::Fullscreen(window) => {
+                window.borrow().damaged() || self.layers.overlay().any(Window::damaged)
+            },
+            // Check all windows for damage outside of fullscreen.
+            _ => {
+                self.layers.iter().any(Window::damaged)
+                    || self.layouts.windows().any(|window| window.damaged())
+            },
+        }
     }
 
     /// Window damage since last redraw.
@@ -626,16 +726,30 @@ impl Windows {
     /// global damage into account. To avoid unnecessary work,
     /// [`Windows::fully_damaged`] should be called first.
     fn window_damage(&self, damage: &mut Damage) {
-        let active_layout = self.layouts.active();
-        let primary = active_layout.primary();
-        let secondary = active_layout.secondary();
+        match &self.view {
+            View::Workspace => {
+                let active_layout = self.layouts.active();
+                let primary = active_layout.primary();
+                let secondary = active_layout.secondary();
 
-        let primary_damage = primary.and_then(|window| window.borrow().damage(&self.canvas));
-        let secondary_damage = secondary.and_then(|window| window.borrow().damage(&self.canvas));
-        let layer_damage = self.layers.iter().filter_map(|window| window.damage(&self.canvas));
+                let primary = primary.and_then(|window| window.borrow().damage(&self.canvas));
+                let secondary = secondary.and_then(|window| window.borrow().damage(&self.canvas));
+                let layer = self.layers.iter().filter_map(|window| window.damage(&self.canvas));
 
-        for window_damage in layer_damage.chain(primary_damage).chain(secondary_damage) {
-            damage.push(window_damage);
+                for window_damage in layer.chain(primary).chain(secondary) {
+                    damage.push(window_damage);
+                }
+            },
+            // Use only fullscreened and overlay shell window's damage in fullscreen mode.
+            View::Fullscreen(window) => {
+                let fullscreened = window.borrow().damage(&self.canvas);
+                let layer = self.layers.overlay().filter_map(|window| window.damage(&self.canvas));
+
+                for window_damage in fullscreened.iter().copied().chain(layer) {
+                    damage.push(window_damage);
+                }
+            },
+            _ => unreachable!(),
         }
     }
 
@@ -664,7 +778,7 @@ impl Windows {
                 }
                 return;
             },
-            View::DragAndDrop(_) => return,
+            View::DragAndDrop(_) | View::Fullscreen(_) => return,
         };
 
         overview.cancel_hold(&self.event_loop);
@@ -706,7 +820,7 @@ impl Windows {
 
                 return;
             },
-            View::Workspace => return,
+            View::Fullscreen(_) | View::Workspace => return,
         };
 
         let delta = point - mem::replace(&mut overview.last_drag_point, point);
@@ -716,7 +830,7 @@ impl Windows {
             if delta.x.abs() < delta.y.abs() {
                 overview.drag_action = overview
                     .layout_position(&self.output, &self.layouts, point)
-                    .and_then(|position| self.layouts.window(position))
+                    .and_then(|position| self.layouts.window_at(position))
                     .map(|window| DragAction::Close(Rc::downgrade(window)))
                     .unwrap_or_default();
             } else {
@@ -764,7 +878,7 @@ impl Windows {
                     self.set_view(View::Overview(overview));
                 }
             },
-            View::Workspace => (),
+            View::Fullscreen(_) | View::Workspace => (),
         }
     }
 
@@ -776,8 +890,17 @@ impl Windows {
                 self.set_view(View::Workspace);
             },
             (Gesture::Up, _) if !self.layouts.is_empty() => {
+                // Unset fullscreen XDG state if it's currently active.
+                if let View::Fullscreen(window) = &self.view {
+                    window.borrow().surface.set_state(|state| {
+                        state.states.unset(State::Fullscreen);
+                    });
+                }
+
+                // Change view and resize windows.
                 let overview = Overview::new(self.layouts.active_offset());
                 self.set_view(View::Overview(overview));
+                self.resize_all();
             },
             (Gesture::Left, View::Workspace) => self.layouts.cycle_active(&self.output, 1),
             (Gesture::Right, View::Workspace) => self.layouts.cycle_active(&self.output, -1),
@@ -791,23 +914,37 @@ impl Windows {
     /// function will also change focus to the root window associated with
     /// the touch surface.
     pub fn touch_surface_at(&mut self, position: Point<f64, Logical>) -> Option<OffsetSurface> {
+        /// Focus a layer shell surface and return it.
+        macro_rules! focus_layer_surface {
+            ($window:expr) => {{
+                let surface = $window.surface_at(position);
+
+                if !$window.deny_focus {
+                    self.layouts.focus = None;
+                    self.layers.focus = Some($window.surface().clone());
+                }
+
+                surface
+            }};
+        }
+
         // Prevent window interaction in Overview/DnD.
-        match self.view {
+        match &self.view {
             View::Workspace => (),
+            View::Fullscreen(window) => {
+                if let Some(window) = self.layers.overlay_window_at(position) {
+                    return focus_layer_surface!(window);
+                }
+
+                return window.borrow().surface_at(position);
+            },
             _ => return None,
         };
 
         // Search for topmost clicked surface.
 
         if let Some(window) = self.layers.foreground_window_at(position) {
-            let surface = window.surface_at(position);
-
-            if !window.deny_focus {
-                self.layouts.focus = None;
-                self.layers.focus = Some(window.surface().clone());
-            }
-
-            return surface;
+            return focus_layer_surface!(window);
         }
 
         let active_layout = self.layouts.active().clone();
@@ -821,14 +958,7 @@ impl Windows {
         }
 
         if let Some(window) = self.layers.background_window_at(position) {
-            let surface = window.surface_at(position);
-
-            if !window.deny_focus {
-                self.layouts.focus = None;
-                self.layers.focus = Some(window.surface().clone());
-            }
-
-            return surface;
+            return focus_layer_surface!(window);
         }
 
         // Clear focus if touch wasn't on any surface.
@@ -882,6 +1012,8 @@ enum View {
     Overview(Overview),
     /// Drag and drop for tiling windows.
     DragAndDrop(DragAndDrop),
+    /// Fullscreened XDG-shell window.
+    Fullscreen(Rc<RefCell<Window>>),
     /// Currently active windows.
     Workspace,
 }
@@ -912,28 +1044,36 @@ impl OpaqueRegions {
         layers: &Layers,
         canvas: &Canvas,
         handle_rect: Rectangle<i32, Physical>,
-        workspace_active: bool,
+        view: &View,
     ) {
         self.opaque_regions.clear();
 
-        for rect in layers.background().flat_map(|window| window.opaque_region()) {
+        // Add logical rectangle to opaque regions.
+        let mut push_rect = |rect: Rectangle<i32, Logical>| {
             let physical_rect = rect.to_physical(canvas.scale());
             self.opaque_regions.push(physical_rect);
-        }
+        };
+
+        let workspace_active = match view {
+            // Use only overlay shell and the fullscreen client in fullscreen mode.
+            View::Fullscreen(window) => {
+                window.borrow().opaque_region().for_each(&mut push_rect);
+                layers.overlay().flat_map(|window| window.opaque_region()).for_each(&mut push_rect);
+                return;
+            },
+            View::Workspace => true,
+            _ => false,
+        };
+
+        layers.background().flat_map(|window| window.opaque_region()).for_each(&mut push_rect);
 
         // Ignore layouts/foreground layer regions in overview and DnD.
         if workspace_active {
             layouts.with_visible(|window| {
-                for rect in window.opaque_region() {
-                    let physical_rect = rect.to_physical(canvas.scale());
-                    self.opaque_regions.push(physical_rect);
-                }
+                window.opaque_region().for_each(&mut push_rect);
             });
 
-            for rect in layers.foreground().flat_map(|window| window.opaque_region()) {
-                let physical_rect = rect.to_physical(canvas.scale());
-                self.opaque_regions.push(physical_rect);
-            }
+            layers.foreground().flat_map(|window| window.opaque_region()).for_each(&mut push_rect);
         }
 
         // Add gesture handle's opaque region.

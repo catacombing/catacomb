@@ -58,6 +58,16 @@ impl Layers {
         self.top.iter().chain(&self.overlay)
     }
 
+    /// Iterate over layer shell overlay windows, bottom to top.
+    pub fn overlay(&self) -> impl Iterator<Item = &LayerWindow> {
+        self.overlay.iter()
+    }
+
+    /// Iterate over layer shell overlay windows, bottom to top.
+    pub fn overlay_mut(&mut self) -> impl Iterator<Item = &mut LayerWindow> {
+        self.overlay.iter_mut()
+    }
+
     /// Draw background/bottom layer windows.
     pub fn draw_background(
         &mut self,
@@ -87,6 +97,17 @@ impl Layers {
             window.draw(frame, canvas, 1., None, damage, &mut *opaque_regions);
         }
 
+        self.draw_overlay(frame, canvas, damage, opaque_regions);
+    }
+
+    /// Draw overlay layer windows.
+    pub fn draw_overlay(
+        &mut self,
+        frame: &mut Gles2Frame,
+        canvas: &Canvas,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &mut OpaqueRegions,
+    ) {
         for window in &mut self.overlay {
             window.draw(frame, canvas, 1., None, damage, &mut *opaque_regions);
         }
@@ -115,6 +136,11 @@ impl Layers {
             .rev()
             .find(|window| window.contains(position))
             .or_else(|| self.background.iter().rev().find(|window| window.contains(position)))
+    }
+
+    /// Overlay window at the specified position.
+    pub fn overlay_window_at(&self, position: Point<f64, Logical>) -> Option<&LayerWindow> {
+        self.overlay.iter().rev().find(|window| window.contains(position))
     }
 
     /// Apply all pending transactional updates.
