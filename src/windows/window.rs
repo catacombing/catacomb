@@ -295,7 +295,8 @@ impl<S: Surface> Window<S> {
         }
     }
 
-    /// Check whether there is a new buffer pending with an updated geometry size.
+    /// Check whether there is a new buffer pending with an updated geometry
+    /// size.
     pub fn pending_buffer_resize(&self) -> bool {
         self.surface.geometry().size != self.texture_cache.size
     }
