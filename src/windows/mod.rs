@@ -178,17 +178,24 @@ impl Windows {
 
         // Apply popup surface commits.
         for mut window in self.layouts.windows_mut() {
-            window.popup_surface_commit(&root_surface, surface, &self.output);
+            if window.popup_surface_commit(&root_surface, surface, &self.output) {
+                // Abort as soon as we found the parent.
+                return;
+            }
         }
+
+        // Abort if we can't find any window for this surface.
+        let window = match find_window!(self.layers.iter_mut()) {
+            Some(window) => window,
+            None => return,
+        };
 
         // Handle layer shell surface commits.
         let old_exclusive = *self.output.exclusive();
-        if let Some(window) = find_window!(self.layers.iter_mut()) {
-            let fullscreen_active = matches!(self.view, View::Fullscreen(_));
-            window.surface_commit(surface, &mut self.output, fullscreen_active);
-        }
+        let fullscreen_active = matches!(self.view, View::Fullscreen(_));
+        window.surface_commit(surface, &mut self.output, fullscreen_active);
 
-        // Resize windows after exclusive zone change.
+        // Resize windows after exclusive zone changes.
         if self.output.exclusive() != &old_exclusive {
             self.resize_all();
         }

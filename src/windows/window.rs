@@ -495,16 +495,16 @@ impl<S: Surface> Window<S> {
         root_surface: &WlSurface,
         surface: &WlSurface,
         output: &Output,
-    ) {
-        for window in &mut self.popups {
+    ) -> bool {
+        self.popups.iter_mut().any(|window| {
             if window.surface.surface() == root_surface {
                 window.surface_commit_common(surface, output);
                 window.rectangle.loc = window.position();
-                return;
+                return true;
             }
 
-            window.popup_surface_commit(root_surface, surface, output);
-        }
+            window.popup_surface_commit(root_surface, surface, output)
+        })
     }
 
     /// Refresh popup windows.
@@ -594,9 +594,8 @@ impl Window<CatacombLayerSurface> {
 
         // Exclude gesture handle from Top/Overlay window size.
         let output_size = match state.layer {
-            Layer::Background | Layer::Bottom => output.size(),
             Layer::Overlay if fullscreen_active => output.size(),
-            Layer::Top | Layer::Overlay => output.wm_size(),
+            _ => output.wm_size(),
         };
         let mut size = state.size;
 
