@@ -101,11 +101,6 @@ impl<S: Surface> Window<S> {
         }
     }
 
-    /// Geometry of the window's visible bounds.
-    pub fn geometry(&self) -> Rectangle<i32, Logical> {
-        self.surface.geometry()
-    }
-
     /// Check window liveliness.
     pub fn alive(&self) -> bool {
         !self.dead && self.surface.alive()
@@ -205,7 +200,7 @@ impl<S: Surface> Window<S> {
             return;
         }
 
-        let geometry = self.geometry();
+        let geometry = self.surface.geometry();
         let old_size = self.texture_cache.size;
         self.texture_cache.reset(geometry.size);
         self.buffers_pending = false;
@@ -298,6 +293,11 @@ impl<S: Surface> Window<S> {
             let old_rect = Rectangle::from_loc_and_size(old_loc, old_size);
             *damage = damage.merge(old_rect);
         }
+    }
+
+    /// Check whether there is a new buffer pending with an updated geometry size.
+    pub fn pending_buffer_resize(&self) -> bool {
+        self.surface.geometry().size != self.texture_cache.size
     }
 
     /// Send a configure for the latest window properties.
