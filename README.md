@@ -5,4 +5,10 @@
 Catacomb is a Wayland compositor for Linux smartphones. It aims to provide
 responsive window management without cutting down on useful features.
 
-**This software is a work in progress and not ready to be used yet.**
+## Screenshots
+
+<p align="center">
+  <img src="https://user-images.githubusercontent.com/8886672/210189210-6a70de47-1bfe-46e0-b4e7-e4921a9c5ff5.png" width="30%"/>
+  <img src="https://user-images.githubusercontent.com/8886672/213074577-28b081dc-d614-443e-beb1-8681e060595c.png" width="30%"/>
+  <img src="https://user-images.githubusercontent.com/8886672/210189206-3d9d738f-dd60-47bb-99ab-7a6450be9da1.png" width="30%"/>
+</p>
