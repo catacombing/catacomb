@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::gbm::GbmDevice;
+use smithay::backend::allocator::{Format as DrmFormat, Fourcc, Modifier};
 use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent, GbmBufferedSurface};
 use smithay::backend::egl::context::EGLContext;
 use smithay::backend::egl::display::EGLDisplay;
@@ -107,10 +108,13 @@ pub fn run() {
 
 /// Add udev device, automatically kicking off rendering for it.
 fn add_device(catacomb: &mut Catacomb, path: PathBuf) {
-    let _ = catacomb.backend.add_device(&catacomb.display_handle, &mut catacomb.windows, path);
+    // Try to create the device.
+    let result = catacomb.backend.add_device(&catacomb.display_handle, &mut catacomb.windows, path);
 
-    // Kick-off rendering.
-    catacomb.create_frame();
+    // Kick-off rendering if the device creation was successful.
+    if result.is_ok() {
+        catacomb.create_frame();
+    }
 }
 
 /// Udev backend shared state.
@@ -139,9 +143,7 @@ impl Udev {
         // Register notifier for handling session events.
         event_loop
             .insert_source(notifier, |event, _, catacomb| match event {
-                SessionEvent::ActivateSession => {
-                    catacomb.event_loop.insert_idle(Catacomb::create_frame);
-                },
+                SessionEvent::ActivateSession => catacomb.create_frame(),
                 SessionEvent::PauseSession => (),
             })
             .expect("insert notifier source");
@@ -317,7 +319,8 @@ impl Udev {
         drm: &DrmDevice,
         gbm: &GbmDevice<DrmDeviceFd>,
     ) -> Option<GbmBufferedSurface<GbmDevice<DrmDeviceFd>, ()>> {
-        let formats = Bind::<Dmabuf>::supported_formats(renderer)?;
+        let mut formats = Bind::<Dmabuf>::supported_formats(renderer)?;
+        formats.insert(DrmFormat { code: Fourcc::Argb8888, modifier: Modifier::Linear });
         let resources = drm.resource_handles().ok()?;
 
         // Find the first connected output port.
