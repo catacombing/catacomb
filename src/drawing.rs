@@ -124,7 +124,7 @@ impl Texture {
         }
 
         // Truncate source size based on window bounds.
-        let src_size = (self.size + self.location.to_size()).min(scaled_window_bounds);
+        let src_size = (self.size.to_point() + self.location).to_size().min(scaled_window_bounds);
         let src = Rectangle::from_loc_and_size((0, 0), src_size);
         let src_buffer = src.to_buffer(self.scale, self.transform, &self.size);
 
