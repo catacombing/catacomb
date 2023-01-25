@@ -427,16 +427,22 @@ impl<S: Surface> Window<S> {
     /// Find subsurface at the specified location.
     pub fn surface_at(&self, position: Point<f64, Logical>) -> Option<OffsetSurface> {
         // Check popups top to bottom first.
-        let relative = position - self.rectangle.loc.to_f64();
+        let parent_offset = self.rectangle.loc;
+        let relative = position - parent_offset.to_f64();
         let popup = self.popups.iter().find_map(|popup| popup.surface_at(relative));
-        if let Some(popup_surface) = popup {
+        if let Some(mut popup_surface) = popup {
+            // Convert surface offset from parent-relative to global.
+            popup_surface.offset += parent_offset;
             return Some(popup_surface);
         }
+
+        let geometry = self.surface.geometry();
+        let bounds = self.bounds();
 
         let result = RefCell::new(None);
         compositor::with_surface_tree_upward(
             self.surface.surface(),
-            self.bounds().loc,
+            bounds.loc,
             |wl_surface, surface_data, location| {
                 let mut location = *location;
                 if surface_data.role == Some("subsurface") {
@@ -445,11 +451,14 @@ impl<S: Surface> Window<S> {
                 }
 
                 // Calculate surface's bounding box.
+                //
+                // This includes content outside of the surface's geometry.
                 let size = surface_data
                     .data_map
                     .get::<RefCell<CatacombSurfaceData>>()
                     .map_or_else(Size::default, |data| data.borrow().size);
-                let surface_rect = Rectangle::from_loc_and_size(location.to_f64(), size.to_f64());
+                let surface_loc = (location - geometry.loc).to_f64();
+                let surface_rect = Rectangle::from_loc_and_size(surface_loc, size.to_f64());
 
                 // Check if the position is within the surface bounds.
                 if surface_rect.contains(position) {
