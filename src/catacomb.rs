@@ -6,7 +6,8 @@ use std::os::unix::io::AsRawFd;
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::{env, mem};
+use std::time::Instant;
+use std::{env, fs, mem};
 
 use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use _server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as ManagerMode;
@@ -74,6 +75,7 @@ pub struct Catacomb {
     pub button_state: PhysicalButtonState,
     pub display_handle: DisplayHandle,
     pub touch_state: TouchState,
+    pub last_resume: Instant,
     pub socket_name: String,
     pub seat_name: String,
     pub windows: Windows,
@@ -245,6 +247,7 @@ impl Catacomb {
             seat,
             display: Rc::new(RefCell::new(display)),
             accelerometer_token: accel_token,
+            last_resume: Instant::now(),
             suspend_timer: Default::default(),
             button_state: Default::default(),
             last_focus: Default::default(),
@@ -319,18 +322,41 @@ impl Catacomb {
         }
     }
 
-    /// Toggle the output's sleep state.
+    /// Toggle sleep state.
     pub fn toggle_sleep(&mut self) {
-        self.sleeping = !self.sleeping;
-
-        // Disable accelerometer timer while sleeping.
-        if self.sleeping {
-            let _ = self.event_loop.disable(&self.accelerometer_token);
+        if !self.sleeping {
+            self.sleep();
         } else {
-            let _ = self.event_loop.enable(&self.accelerometer_token);
+            self.resume();
+        }
+    }
+
+    /// Start active sleep.
+    pub fn sleep(&mut self) {
+        // Disable accelerometer timer while sleeping.
+        let _ = self.event_loop.disable(&self.accelerometer_token);
+
+        self.backend.set_sleep(true);
+        self.sleeping = true;
+    }
+
+    /// Resume after sleep.
+    pub fn resume(&mut self) {
+        let _ = self.event_loop.enable(&self.accelerometer_token);
+        self.backend.set_sleep(false);
+        self.sleeping = false;
+    }
+
+    /// Suspend to RAM.
+    pub fn suspend(&mut self) {
+        if let Err(err) = fs::write("/sys/power/state", "mem") {
+            eprintln!("Failed suspending to RAM: {err}");
         }
 
-        self.backend.set_sleep(self.sleeping);
+        // Update resume time to ignore buttons during sleep.
+        self.last_resume = Instant::now();
+
+        self.resume();
     }
 }
 

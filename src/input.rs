@@ -1,6 +1,5 @@
 //! Input event handling.
 
-use std::fs;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -23,6 +22,9 @@ use crate::windows::surface::OffsetSurface;
 /// Time before a tap is considered a hold.
 pub const HOLD_DURATION: Duration = Duration::from_secs(1);
 
+/// Duration after resume for which power button presses will be ignored.
+const RESUME_INHIBIT_DURATION: Duration = Duration::from_millis(500);
+
 /// Time before button press is considered a hold.
 const BUTTON_HOLD_DURATION: Duration = Duration::from_millis(500);
 
@@ -33,7 +35,7 @@ const MAX_TAP_DISTANCE: f64 = 20.;
 const FRICTION: f64 = 0.1;
 
 /// Duration until suspend after screen is turned off.
-const SUSPEND_TIMEOUT: Duration = Duration::from_secs(30);
+const SUSPEND_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Touch slot for pointer emulation.
 ///
@@ -468,6 +470,12 @@ impl Catacomb {
                     let vt = (keysym - keysyms::KEY_XF86Switch_VT_1 + 1) as i32;
                     catacomb.backend.change_vt(vt);
                 },
+                // Filter power buttons pressed during suspend.
+                (keysyms::KEY_XF86PowerOff, _)
+                    if catacomb.last_resume.elapsed() <= RESUME_INHIBIT_DURATION =>
+                {
+                    ()
+                },
                 (keysyms::KEY_XF86PowerOff, KeyState::Pressed) => {
                     let id = catacomb.button_state.next_id();
                     catacomb.button_state.power = Some(id);
@@ -512,8 +520,8 @@ impl Catacomb {
                             catacomb.suspend_timer = Some(
                                 catacomb
                                     .event_loop
-                                    .insert_source(timer, |_, _, _| {
-                                        suspend();
+                                    .insert_source(timer, |_, _, catacomb| {
+                                        catacomb.suspend();
                                         TimeoutAction::Drop
                                     })
                                     .expect("insert suspend timer"),
@@ -547,12 +555,5 @@ impl Catacomb {
         };
 
         (x, y).into()
-    }
-}
-
-/// Suspend to RAM.
-fn suspend() {
-    if let Err(err) = fs::write("/sys/power/state", "mem") {
-        eprintln!("Failed suspending to RAM: {err}");
     }
 }
