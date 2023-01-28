@@ -305,7 +305,15 @@ impl Windows {
                 self.layers.draw_background(frame, &self.canvas, damage, &mut self.opaque_regions);
 
                 self.layouts.with_visible_mut(|window| {
-                    window.draw(frame, &self.canvas, 1., None, damage, &mut self.opaque_regions);
+                    window.draw(
+                        frame,
+                        &self.canvas,
+                        1.,
+                        None,
+                        None,
+                        damage,
+                        &mut self.opaque_regions,
+                    );
                 });
 
                 // Draw top/overlay windows in workspace view.
@@ -315,7 +323,7 @@ impl Windows {
                 self.layers.draw_background(frame, &self.canvas, damage, &mut self.opaque_regions);
 
                 self.layouts.with_visible_mut(|window| {
-                    window.draw(frame, &self.canvas, 1., None, damage, None);
+                    window.draw(frame, &self.canvas, 1., None, None, damage, None);
                 });
                 dnd.draw(frame, &self.canvas, graphics);
             },
@@ -330,7 +338,7 @@ impl Windows {
                 }
             },
             View::Fullscreen(window) => {
-                window.borrow_mut().draw(frame, &self.canvas, 1., None, None, None);
+                window.borrow_mut().draw(frame, &self.canvas, 1., None, None, None, None);
 
                 // Draw overlay windows in fullscreen view.
                 self.layers.draw_overlay(frame, &self.canvas, damage, &mut self.opaque_regions);

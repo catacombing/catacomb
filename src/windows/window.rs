@@ -113,18 +113,33 @@ impl<S: Surface> Window<S> {
 
     /// Render this window's buffers.
     ///
-    /// If no location is specified, the textures cached location will be used.
+    /// If no location is specified, the texture's cached location will be used.
+    ///
+    /// Bounds is an absolute rectangle to which the window's rendering will be
+    /// clipped. Passing `None` will clamp the window to its geometry, cutting
+    /// off parts of the texture outside of it (i.e. shadows).
+    #[allow(clippy::too_many_arguments)]
     pub fn draw<'a>(
         &mut self,
         frame: &mut Gles2Frame,
         canvas: &Canvas,
         scale: f64,
+        location: impl Into<Option<Point<i32, Logical>>>,
         bounds: impl Into<Option<Rectangle<i32, Logical>>>,
         damage: impl Into<Option<&'a [Rectangle<i32, Physical>]>>,
         opaque_regions: impl Into<Option<&'a mut OpaqueRegions>>,
     ) {
-        let bounds = bounds.into().unwrap_or_else(|| self.bounds());
+        // Calculate render position and bounds.
+        let location = location.into();
+        let bounds = bounds.into().unwrap_or_else(|| {
+            let mut bounds = self.bounds();
+            if let Some(location) = location {
+                bounds.loc = location;
+            }
+            bounds
+        });
         let physical_bounds = bounds.to_physical(canvas.scale());
+        let location = location.unwrap_or(bounds.loc);
 
         // Treat no damage information as full damage.
         let full_damage = [physical_bounds];
@@ -163,14 +178,27 @@ impl<S: Surface> Window<S> {
         };
 
         for texture in &mut self.texture_cache.textures {
-            texture.draw_at(frame, canvas, bounds, scale, window_damage);
+            texture.draw_at(frame, canvas, location, bounds, scale, window_damage);
         }
 
         // Draw popup tree.
         for popup in &mut self.popups {
             let loc = bounds.loc + popup.rectangle.loc;
-            let popup_bounds = Rectangle::from_loc_and_size(loc, (i32::MAX, i32::MAX));
-            popup.draw(frame, canvas, scale, popup_bounds, damage, opaque_regions.as_deref_mut());
+
+            // Do not clamp popup bounds, to allow rendering even without the client
+            // geometry.
+            let popup_loc = loc - popup.surface.geometry().loc;
+            let popup_bounds = Rectangle::from_loc_and_size(popup_loc, (i32::MAX, i32::MAX));
+
+            popup.draw(
+                frame,
+                canvas,
+                scale,
+                loc,
+                popup_bounds,
+                damage,
+                opaque_regions.as_deref_mut(),
+            );
         }
     }
 

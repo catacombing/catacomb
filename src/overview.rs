@@ -213,7 +213,9 @@ impl Overview {
                 let mut bounds = position.bounds;
                 self.handle_closing(output, canvas, layouts, primary, &mut bounds, true);
 
-                primary.borrow_mut().draw(frame, canvas, position.scale, bounds, None, None);
+                let scale = position.scale;
+                let loc = bounds.loc;
+                primary.borrow_mut().draw(frame, canvas, scale, loc, None, None, None);
             }
 
             // Draw the secondary window.
@@ -222,7 +224,9 @@ impl Overview {
                 let mut bounds = position.secondary_bounds();
                 self.handle_closing(output, canvas, layouts, secondary, &mut bounds, false);
 
-                secondary.borrow_mut().draw(frame, canvas, position.scale, bounds, None, None);
+                let scale = position.scale;
+                let loc = bounds.loc;
+                secondary.borrow_mut().draw(frame, canvas, scale, loc, None, None, None);
             }
 
             offset += 1.;
@@ -289,7 +293,7 @@ pub struct DragAndDrop {
     pub touch_position: Point<f64, Logical>,
     pub window: Rc<RefCell<Window>>,
     pub overview_x_offset: f64,
-    window_bounds: Rectangle<i32, Logical>,
+    start_location: Point<i32, Logical>,
     scale: f64,
 }
 
@@ -308,12 +312,15 @@ impl DragAndDrop {
         let available = canvas.available_overview();
         let position = OverviewPosition::new(available, overview.x_offset, window_x_offset);
 
-        // Calculate original bounds of dragged window.
-        let window_bounds =
-            if layout_position.secondary { position.secondary_bounds() } else { position.bounds };
+        // Calculate original position of dragged window.
+        let start_location = if layout_position.secondary {
+            position.secondary_bounds().loc
+        } else {
+            position.bounds.loc
+        };
 
         Self {
-            window_bounds,
+            start_location,
             window,
             touch_position: overview.last_drag_point,
             overview_x_offset: overview.x_offset,
@@ -325,12 +332,11 @@ impl DragAndDrop {
     /// Draw the tiling location picker.
     pub fn draw(&self, frame: &mut Gles2Frame, canvas: &Canvas, graphics: &Graphics) {
         // Offset by dragged distance.
-        let mut bounds = self.window_bounds;
-        bounds.loc += self.window_position.to_i32_round();
+        let location = self.start_location + self.window_position.to_i32_round();
 
         // Render the window being drag-and-dropped.
         let mut window = self.window.borrow_mut();
-        window.draw(frame, canvas, self.scale, bounds, None, None);
+        window.draw(frame, canvas, self.scale, location, None, None, None);
 
         // Set custom OpenGL blending function.
         let _ = frame.with_context(|gl| unsafe {
@@ -345,9 +351,9 @@ impl DragAndDrop {
         let scale = cmp::max(available.size.w, available.size.h) as f64;
         for bounds in [primary_bounds, secondary_bounds] {
             if bounds.to_f64().contains(self.touch_position) {
-                graphics.active_drop_target.draw_at(frame, canvas, bounds, scale, None);
+                graphics.active_drop_target.draw_at(frame, canvas, bounds.loc, bounds, scale, None);
             } else {
-                graphics.drop_target.draw_at(frame, canvas, bounds, scale, None);
+                graphics.drop_target.draw_at(frame, canvas, bounds.loc, bounds, scale, None);
             }
         }
 

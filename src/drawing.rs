@@ -105,33 +105,34 @@ impl Texture {
 
     /// Render the texture at the specified location.
     ///
-    /// Using the `window_bounds` and `window_scale` parameters, it is possible
-    /// to scale the texture and truncate it to be within the specified
-    /// window bounds. The scaling will always take part **before** the
-    /// truncation.
+    /// Bounds is an absolute rectangle to which the window's rendering will be
+    /// clipped. Passing `None` will not clamp the window.
     pub fn draw_at(
         &self,
         frame: &mut Gles2Frame,
         canvas: &Canvas,
-        window_bounds: Rectangle<i32, Logical>,
-        window_scale: f64,
+        location: Point<i32, Logical>,
+        bounds: impl Into<Option<Rectangle<i32, Logical>>>,
+        scale: f64,
         damage: impl Into<Option<Rectangle<i32, Physical>>>,
     ) {
-        // Skip textures completely outside of the window bounds.
-        let scaled_window_bounds = window_bounds.size.scale(1. / window_scale).max((1, 1));
-        if self.location.x >= scaled_window_bounds.w || self.location.y >= scaled_window_bounds.h {
-            return;
-        }
+        // Clamp source rectangle to render bounds.
+        let mut src = Rectangle::from_loc_and_size((0, 0), self.size);
+        if let Some(mut bounds) = bounds.into() {
+            // Convert bounds to be relative to window origin.
+            bounds.loc += self.location - location;
 
-        // Truncate source size based on window bounds.
-        let src_size = (self.size.to_point() + self.location).to_size().min(scaled_window_bounds);
-        let src = Rectangle::from_loc_and_size((0, 0), src_size);
+            src = match bounds.intersection(src) {
+                Some(src) => src,
+                // Skip rendering if texture is completely outside of bounds.
+                None => return,
+            };
+        }
         let src_buffer = src.to_buffer(self.scale, self.transform, &self.size);
 
         // Scale output size based on window scale.
-        let location = window_bounds.loc + self.location.scale(window_scale);
-        let dst_size = src_size.scale(window_scale).min(window_bounds.size);
-        let dst = Rectangle::from_loc_and_size(location, dst_size);
+        let dst_location = location + self.location.scale(scale);
+        let dst = Rectangle::from_loc_and_size(dst_location, src.size.scale(scale));
         let dst_physical = dst.to_physical(canvas.scale());
 
         // Calculate surface damage.

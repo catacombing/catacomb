@@ -77,11 +77,11 @@ impl Layers {
         opaque_regions: &mut OpaqueRegions,
     ) {
         for window in &mut self.background {
-            window.draw(frame, canvas, 1., None, damage, &mut *opaque_regions);
+            window.draw(frame, canvas, 1., None, None, damage, &mut *opaque_regions);
         }
 
         for window in &mut self.bottom {
-            window.draw(frame, canvas, 1., None, damage, &mut *opaque_regions);
+            window.draw(frame, canvas, 1., None, None, damage, &mut *opaque_regions);
         }
     }
 
@@ -94,7 +94,7 @@ impl Layers {
         opaque_regions: &mut OpaqueRegions,
     ) {
         for window in &mut self.top {
-            window.draw(frame, canvas, 1., None, damage, &mut *opaque_regions);
+            window.draw(frame, canvas, 1., None, None, damage, &mut *opaque_regions);
         }
 
         self.draw_overlay(frame, canvas, damage, opaque_regions);
@@ -109,7 +109,7 @@ impl Layers {
         opaque_regions: &mut OpaqueRegions,
     ) {
         for window in &mut self.overlay {
-            window.draw(frame, canvas, 1., None, damage, &mut *opaque_regions);
+            window.draw(frame, canvas, 1., None, None, damage, &mut *opaque_regions);
         }
     }
 
