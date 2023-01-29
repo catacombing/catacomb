@@ -260,7 +260,14 @@ impl Udev {
         let device_id = drm.device_id();
         let dispatcher = Dispatcher::new(drm, move |event, _, catacomb: &mut Catacomb| {
             match event {
-                DrmEvent::VBlank(_crtc) => catacomb.create_frame(),
+                DrmEvent::VBlank(_crtc) => {
+                    // Mark the last frame as submitted.
+                    if let Some(output_device) = &mut catacomb.backend.output_device {
+                        let _ = output_device.gbm_surface.frame_submitted();
+                    }
+
+                    catacomb.create_frame();
+                },
                 DrmEvent::Error(error) => eprintln!("DRM error: {error}"),
             };
         });
@@ -412,9 +419,6 @@ impl OutputDevice {
 
     /// Render a frame.
     fn render(&mut self, windows: &mut Windows, damage: &mut Damage) -> Result<(), Box<dyn Error>> {
-        // Mark the current frame as submitted.
-        self.gbm_surface.frame_submitted()?;
-
         // Bind the next buffer to render into.
         let (dmabuf, age) = self.gbm_surface.next_buffer()?;
         self.renderer.bind(dmabuf)?;
