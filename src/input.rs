@@ -472,10 +472,7 @@ impl Catacomb {
                 },
                 // Filter power buttons pressed during suspend.
                 (keysyms::KEY_XF86PowerOff, _)
-                    if catacomb.last_resume.elapsed() <= RESUME_INHIBIT_DURATION =>
-                {
-                    ()
-                },
+                    if catacomb.last_resume.elapsed() <= RESUME_INHIBIT_DURATION => {},
                 (keysyms::KEY_XF86PowerOff, KeyState::Pressed) => {
                     let id = catacomb.button_state.next_id();
                     catacomb.button_state.power = Some(id);

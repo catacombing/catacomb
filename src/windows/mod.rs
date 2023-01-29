@@ -426,7 +426,7 @@ impl Windows {
         for rect in debug_damage {
             let bounds = rect.to_logical(self.canvas.scale());
             let scale = cmp::max(bounds.size.w, bounds.size.h) as f64;
-            graphics.damage_debug.draw_at(frame, &self.canvas, bounds, scale, None);
+            graphics.damage_debug.draw_at(frame, &self.canvas, bounds.loc, bounds, scale, None);
         }
 
         let _ = frame.with_context(|gl| unsafe {

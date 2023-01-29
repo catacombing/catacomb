@@ -215,7 +215,7 @@ impl Overview {
 
                 let scale = position.scale;
                 let loc = bounds.loc;
-                primary.borrow_mut().draw(frame, canvas, scale, loc, None, None, None);
+                primary.borrow_mut().draw(frame, canvas, scale, loc, bounds, None, None);
             }
 
             // Draw the secondary window.
@@ -226,7 +226,7 @@ impl Overview {
 
                 let scale = position.scale;
                 let loc = bounds.loc;
-                secondary.borrow_mut().draw(frame, canvas, scale, loc, None, None, None);
+                secondary.borrow_mut().draw(frame, canvas, scale, loc, bounds, None, None);
             }
 
             offset += 1.;

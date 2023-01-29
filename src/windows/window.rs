@@ -132,10 +132,15 @@ impl<S: Surface> Window<S> {
         // Calculate render position and bounds.
         let location = location.into();
         let bounds = bounds.into().unwrap_or_else(|| {
+            // Get scaled window bounds.
             let mut bounds = self.bounds();
+            bounds.size = bounds.size.scale(scale);
+
+            // Override window location.
             if let Some(location) = location {
                 bounds.loc = location;
             }
+
             bounds
         });
         let physical_bounds = bounds.to_physical(canvas.scale());
@@ -183,11 +188,12 @@ impl<S: Surface> Window<S> {
 
         // Draw popup tree.
         for popup in &mut self.popups {
-            let loc = bounds.loc + popup.rectangle.loc;
+            // Calculate the popup's origin.
+            let loc = bounds.loc + popup.rectangle.loc.scale(scale);
 
             // Do not clamp popup bounds, to allow rendering even without the client
             // geometry.
-            let popup_loc = loc - popup.surface.geometry().loc;
+            let popup_loc = loc - popup.surface.geometry().loc.scale(scale);
             let popup_bounds = Rectangle::from_loc_and_size(popup_loc, (i32::MAX, i32::MAX));
 
             popup.draw(

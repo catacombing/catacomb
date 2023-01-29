@@ -112,27 +112,34 @@ impl Texture {
         frame: &mut Gles2Frame,
         canvas: &Canvas,
         location: Point<i32, Logical>,
-        bounds: impl Into<Option<Rectangle<i32, Logical>>>,
+        bounds: Rectangle<i32, Logical>,
         scale: f64,
         damage: impl Into<Option<Rectangle<i32, Physical>>>,
     ) {
-        // Clamp source rectangle to render bounds.
-        let mut src = Rectangle::from_loc_and_size((0, 0), self.size);
-        if let Some(mut bounds) = bounds.into() {
-            // Convert bounds to be relative to window origin.
-            bounds.loc += self.location - location;
+        // Convert destination bounds to texture-relative rectangle.
+        let mut scaled_bounds = bounds;
+        scaled_bounds.loc -= location;
+        scaled_bounds.size = scaled_bounds.size.scale(1. / scale).max((1, 1));
+        scaled_bounds.loc = scaled_bounds.loc.scale(1. / scale);
+        scaled_bounds.loc -= self.location;
 
-            src = match bounds.intersection(src) {
-                Some(src) => src,
-                // Skip rendering if texture is completely outside of bounds.
-                None => return,
-            };
-        }
+        // Calculate source texture rectangle.
+        let mut src = Rectangle::from_loc_and_size((0, 0), self.size);
+        src = match src.intersection(scaled_bounds) {
+            Some(src) => src,
+            // Skip rendering when completely outside of bounds.
+            None => return,
+        };
         let src_buffer = src.to_buffer(self.scale, self.transform, &self.size);
 
-        // Scale output size based on window scale.
-        let dst_location = location + self.location.scale(scale);
-        let dst = Rectangle::from_loc_and_size(dst_location, src.size.scale(scale));
+        // Calculate destination rectangle.
+        let dst_location = location + (src.loc + self.location).scale(scale);
+        let mut dst = Rectangle::from_loc_and_size(dst_location, src.size.scale(scale));
+        dst = match dst.intersection(bounds) {
+            Some(dst) => dst,
+            // Skip rendering when completely outside of bounds.
+            None => return,
+        };
         let dst_physical = dst.to_physical(canvas.scale());
 
         // Calculate surface damage.
