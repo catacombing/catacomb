@@ -35,7 +35,7 @@ const MAX_TAP_DISTANCE: f64 = 20.;
 const FRICTION: f64 = 0.1;
 
 /// Duration until suspend after screen is turned off.
-const SUSPEND_TIMEOUT: Duration = Duration::from_secs(5);
+const SUSPEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Touch slot for pointer emulation.
 ///
