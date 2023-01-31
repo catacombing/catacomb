@@ -258,12 +258,15 @@ impl Udev {
 
         // Listen for VBlanks.
         let device_id = drm.device_id();
-        let dispatcher = Dispatcher::new(drm, move |event, _, catacomb: &mut Catacomb| {
+        let dispatcher = Dispatcher::new(drm, move |event, metadata, catacomb: &mut Catacomb| {
             match event {
                 DrmEvent::VBlank(_crtc) => {
-                    // Mark the last frame as submitted.
                     if let Some(output_device) = &mut catacomb.backend.output_device {
+                        // Mark the last frame as submitted.
                         let _ = output_device.gbm_surface.frame_submitted();
+
+                        // Send presentation-time feedback.
+                        catacomb.windows.mark_presented(metadata);
                     }
 
                     catacomb.create_frame();

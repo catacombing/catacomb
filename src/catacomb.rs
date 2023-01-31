@@ -36,6 +36,7 @@ use smithay::wayland::data_device::{
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportError};
 use smithay::wayland::input_method::{InputMethodManagerState, InputMethodSeat};
 use smithay::wayland::output::OutputManagerState;
+use smithay::wayland::presentation::PresentationState;
 use smithay::wayland::shell::kde::decoration::{KdeDecorationHandler, KdeDecorationState};
 use smithay::wayland::shell::wlr_layer::{
     Layer, LayerSurface, WlrLayerShellHandler, WlrLayerShellState,
@@ -51,9 +52,9 @@ use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 use smithay::wayland::{compositor, data_device};
 use smithay::{
     delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_input_method_manager,
-    delegate_kde_decoration, delegate_layer_shell, delegate_output, delegate_seat, delegate_shm,
-    delegate_text_input_manager, delegate_virtual_keyboard_manager, delegate_xdg_decoration,
-    delegate_xdg_shell,
+    delegate_kde_decoration, delegate_layer_shell, delegate_output, delegate_presentation,
+    delegate_seat, delegate_shm, delegate_text_input_manager, delegate_virtual_keyboard_manager,
+    delegate_xdg_decoration, delegate_xdg_shell,
 };
 
 use crate::delegate_screencopy_manager;
@@ -180,6 +181,10 @@ impl Catacomb {
 
         // Initialize screencopy protocol.
         ScreencopyManagerState::new::<Self>(&display_handle);
+
+        // Initialize wp_presentation protocol.
+        let clock_id = libc::CLOCK_MONOTONIC as u32;
+        PresentationState::new::<Self>(&display_handle, clock_id);
 
         // Initialize seat.
         let seat_name = backend.seat_name();
@@ -545,6 +550,8 @@ impl ScreencopyHandler for Catacomb {
     }
 }
 delegate_screencopy_manager!(Catacomb);
+
+delegate_presentation!(Catacomb);
 
 #[derive(Default, Debug)]
 pub struct Damage {

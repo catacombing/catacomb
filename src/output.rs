@@ -137,6 +137,11 @@ impl Output {
     pub fn exclusive(&mut self) -> &mut ExclusiveSpace {
         &mut self.canvas.exclusive
     }
+
+    /// Get the underlying smithay output.
+    pub fn smithay_output(&self) -> &SmithayOutput {
+        &self.output
+    }
 }
 
 impl Deref for Output {
@@ -263,6 +268,11 @@ impl Canvas {
     /// Output scale.
     pub fn scale(&self) -> i32 {
         self.scale
+    }
+
+    /// Get output's refresh rate.
+    pub fn refresh(&self) -> i32 {
+        self.mode.refresh
     }
 }
 

@@ -4,13 +4,20 @@ use std::cell::RefCell;
 use std::mem;
 use std::rc::Rc;
 use std::sync::Mutex;
+use std::time::Instant;
 
+use _presentation_time::wp_presentation_feedback::Kind as FeedbackKind;
+use smithay::backend::drm::{DrmEventMetadata, DrmEventTime};
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
 use smithay::backend::renderer::{self, BufferType, ImportAll};
+use smithay::reexports::wayland_protocols::wp::presentation_time::server as _presentation_time;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Physical, Point, Rectangle, Size};
 use smithay::wayland::compositor::{
     self, RectangleKind, SubsurfaceCachedState, SurfaceAttributes, SurfaceData, TraversalAction,
+};
+use smithay::wayland::presentation::{
+    PresentationFeedbackCachedState, PresentationFeedbackCallback,
 };
 use smithay::wayland::shell::wlr_layer::{
     Anchor, ExclusiveZone, KeyboardInteractivity, Layer, LayerSurfaceCachedState,
@@ -62,6 +69,9 @@ pub struct Window<S = ToplevelSurface> {
     /// Opaque window region.
     opaque_region: Vec<Rectangle<i32, Logical>>,
 
+    /// Pending wp_presentation callbacks.
+    presentation_callbacks: Vec<PresentationFeedbackCallback>,
+
     /// Window liveliness override.
     dead: bool,
 }
@@ -72,6 +82,7 @@ impl<S: Surface> Window<S> {
         Window {
             surface,
             initial_configure_sent: Default::default(),
+            presentation_callbacks: Default::default(),
             buffers_pending: Default::default(),
             opaque_region: Default::default(),
             texture_cache: Default::default(),
@@ -279,6 +290,11 @@ impl<S: Surface> Window<S> {
                     None => return TraversalAction::SkipChildren,
                 };
 
+                // Stage presentation callbacks for submission.
+                let mut feedback_state =
+                    surface_data.cached_state.current::<PresentationFeedbackCachedState>();
+                self.presentation_callbacks.append(&mut feedback_state.callbacks);
+
                 // Retrieve buffer damage.
                 let damage = data.damage.buffer();
 
@@ -333,6 +349,41 @@ impl<S: Surface> Window<S> {
     /// size.
     pub fn pending_buffer_resize(&self) -> bool {
         self.surface.geometry().size != self.texture_cache.size
+    }
+
+    /// Mark all rendered clients as presented for `wp_presentation`.
+    pub fn mark_presented(
+        &mut self,
+        metadata: &Option<DrmEventMetadata>,
+        output: &Output,
+        start_time: &Instant,
+    ) {
+        // Skip presentation feedback during transactions.
+        if self.transaction.is_some() {
+            return;
+        }
+
+        let refresh = output.refresh() as u32;
+        let output = output.smithay_output();
+
+        // Try to get monitor clock.
+        let time = metadata.as_ref().and_then(|metadata| match metadata.time {
+            DrmEventTime::Monotonic(time) => Some(time),
+            DrmEventTime::Realtime(_) => None,
+        });
+        let seq = metadata.as_ref().map(|metadata| metadata.sequence).unwrap_or(0);
+
+        // Use Monitor clock or fallback to internal time since startup.
+        let (time, flags) = match time {
+            Some(time) => {
+                (time, FeedbackKind::Vsync | FeedbackKind::HwClock | FeedbackKind::HwCompletion)
+            },
+            None => (start_time.elapsed(), FeedbackKind::Vsync),
+        };
+
+        for callback in self.presentation_callbacks.drain(..) {
+            callback.presented(output, time, refresh, seq as u64, flags);
+        }
     }
 
     /// Send a configure for the latest window properties.

@@ -9,6 +9,7 @@ use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
+use smithay::backend::drm::DrmEventMetadata;
 use smithay::backend::renderer::gles2::ffi::{self as gl, Gles2};
 use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
 use smithay::backend::renderer::Frame;
@@ -462,6 +463,19 @@ impl Windows {
                 self.layers.request_frames(runtime);
                 self.layouts.with_visible(|window| window.request_frame(runtime));
             },
+        }
+    }
+
+    /// Mark all rendered clients as presented for `wp_presentation`.
+    pub fn mark_presented(&mut self, metadata: &Option<DrmEventMetadata>) {
+        // Update XDG client presentation time.
+        for mut window in self.layouts.windows_mut() {
+            window.mark_presented(metadata, &self.output, &self.start_time);
+        }
+
+        // Update layer-shell client presentation time.
+        for layer in self.layers.iter_mut() {
+            layer.mark_presented(metadata, &self.output, &self.start_time);
         }
     }
 
