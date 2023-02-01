@@ -213,9 +213,10 @@ impl Overview {
                 let mut bounds = position.bounds;
                 self.handle_closing(output, canvas, layouts, primary, &mut bounds, true);
 
+                let mut primary = primary.borrow_mut();
                 let scale = position.scale;
-                let loc = bounds.loc;
-                primary.borrow_mut().draw(frame, canvas, scale, loc, bounds, None, None);
+                let loc = bounds.loc + primary.internal_offset().scale(scale);
+                primary.draw(frame, canvas, scale, loc, bounds, None, None);
             }
 
             // Draw the secondary window.
@@ -224,9 +225,10 @@ impl Overview {
                 let mut bounds = position.secondary_bounds();
                 self.handle_closing(output, canvas, layouts, secondary, &mut bounds, false);
 
+                let mut secondary = secondary.borrow_mut();
                 let scale = position.scale;
-                let loc = bounds.loc;
-                secondary.borrow_mut().draw(frame, canvas, scale, loc, bounds, None, None);
+                let loc = bounds.loc + secondary.internal_offset().scale(scale);
+                secondary.draw(frame, canvas, scale, loc, bounds, None, None);
             }
 
             offset += 1.;
@@ -313,11 +315,12 @@ impl DragAndDrop {
         let position = OverviewPosition::new(available, overview.x_offset, window_x_offset);
 
         // Calculate original position of dragged window.
-        let start_location = if layout_position.secondary {
+        let mut start_location = if layout_position.secondary {
             position.secondary_bounds().loc
         } else {
             position.bounds.loc
         };
+        start_location += window.borrow().internal_offset().scale(position.scale);
 
         Self {
             start_location,

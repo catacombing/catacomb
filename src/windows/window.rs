@@ -224,10 +224,17 @@ impl<S: Surface> Window<S> {
     fn bounds(&self) -> Rectangle<i32, Logical> {
         // Center window inside its space.
         let mut bounds = self.rectangle;
-        let cache_size = self.texture_cache.size();
-        bounds.loc.x += ((bounds.size.w - cache_size.w) / 2).max(0);
-        bounds.loc.y += ((bounds.size.h - cache_size.h) / 2).max(0);
+        bounds.loc += self.internal_offset();
         bounds
+    }
+
+    /// Internal window offset for centering the window inside its space.
+    pub fn internal_offset(&self) -> Point<i32, Logical> {
+        let cache_size = self.texture_cache.size();
+        let bounds = self.rectangle;
+        let x = ((bounds.size.w - cache_size.w) / 2).max(0);
+        let y = ((bounds.size.h - cache_size.h) / 2).max(0);
+        (x, y).into()
     }
 
     /// Import the buffers of all surfaces into the renderer.
