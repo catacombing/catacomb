@@ -41,11 +41,10 @@ pub trait Surface {
     fn acked_size(&self) -> Size<i32, Logical>;
 
     /// Geometry of the window's visible bounds.
-    fn geometry(&self) -> Rectangle<i32, Logical> {
+    fn geometry(&self) -> Option<Rectangle<i32, Logical>> {
         compositor::with_states(self.surface(), |states| {
             states.cached_state.current::<SurfaceCachedState>().geometry
         })
-        .unwrap_or_else(|| Rectangle::from_loc_and_size((0, 0), self.acked_size()))
     }
 }
 
@@ -179,8 +178,8 @@ impl Surface for CatacombLayerSurface {
         .unwrap_or_default()
     }
 
-    fn geometry(&self) -> Rectangle<i32, Logical> {
-        Rectangle::from_loc_and_size((0, 0), self.acked_size())
+    fn geometry(&self) -> Option<Rectangle<i32, Logical>> {
+        None
     }
 }
 

@@ -204,7 +204,8 @@ impl<S: Surface> Window<S> {
 
             // Do not clamp popup bounds, to allow rendering even without the client
             // geometry.
-            let popup_loc = loc - popup.surface.geometry().loc.scale(scale);
+            let geometry_loc = popup.surface.geometry().map(|geometry| geometry.loc);
+            let popup_loc = loc - geometry_loc.unwrap_or_default().scale(scale);
             let popup_bounds = Rectangle::from_loc_and_size(popup_loc, (i32::MAX, i32::MAX));
 
             popup.draw(
@@ -223,8 +224,9 @@ impl<S: Surface> Window<S> {
     fn bounds(&self) -> Rectangle<i32, Logical> {
         // Center window inside its space.
         let mut bounds = self.rectangle;
-        bounds.loc.x += ((bounds.size.w - self.texture_cache.size.w) / 2).max(0);
-        bounds.loc.y += ((bounds.size.h - self.texture_cache.size.h) / 2).max(0);
+        let cache_size = self.texture_cache.size();
+        bounds.loc.x += ((bounds.size.w - cache_size.w) / 2).max(0);
+        bounds.loc.y += ((bounds.size.h - cache_size.h) / 2).max(0);
         bounds
     }
 
@@ -244,15 +246,17 @@ impl<S: Surface> Window<S> {
         if !self.buffers_pending {
             return;
         }
-
-        let geometry = self.surface.geometry();
-        let old_size = self.texture_cache.size;
-        self.texture_cache.reset(geometry.size);
         self.buffers_pending = false;
+
+        self.texture_cache.requested_size = self.rectangle.size;
+        self.texture_cache.textures.clear();
+
+        let mut window_rect = Rectangle::default();
+        let geometry = self.surface.geometry();
 
         compositor::with_surface_tree_upward(
             self.surface.surface(),
-            Point::from((0, 0)) - geometry.loc,
+            Point::from((0, 0)) - geometry.unwrap_or_default().loc,
             |_, surface_data, location| {
                 let data = match surface_data.data_map.get::<RefCell<CatacombSurfaceData>>() {
                     Some(data) => data,
@@ -295,6 +299,10 @@ impl<S: Surface> Window<S> {
                     surface_data.cached_state.current::<PresentationFeedbackCachedState>();
                 self.presentation_callbacks.append(&mut feedback_state.callbacks);
 
+                // Update texture cache's combined buffer size.
+                let buffer_rect = Rectangle::from_loc_and_size(location, data.size);
+                window_rect = window_rect.merge(buffer_rect);
+
                 // Retrieve buffer damage.
                 let damage = data.damage.buffer();
 
@@ -323,8 +331,10 @@ impl<S: Surface> Window<S> {
 
                 // Update window damage.
                 let new_damage = data.damage.logical().iter().copied().flat_map(|mut damage| {
+                    damage =
+                        damage.intersection(Rectangle::from_loc_and_size((0, 0), data.size))?;
                     damage.loc += location;
-                    damage.intersection(geometry)
+                    Some(damage)
                 });
                 self.damage = new_damage.chain(self.damage).reduce(Rectangle::merge);
 
@@ -337,9 +347,18 @@ impl<S: Surface> Window<S> {
             |_, _, _| true,
         );
 
+        let old_size = self.texture_cache.size();
+
+        // Update the texture cache's dimensions.
+        self.texture_cache.geometry_size = geometry.map(|geometry| geometry.size);
+        window_rect.size.w += window_rect.loc.x;
+        window_rect.size.h += window_rect.loc.y;
+        self.texture_cache.texture_size = window_rect.size;
+
         // Add old geometry as damage if shrinkage caused re-centering within bounds.
-        if let Some(damage) = self.damage.as_mut().filter(|_| geometry.size < old_size) {
-            let old_loc = damage.loc - old_size.sub(geometry.size).to_point();
+        let new_size = self.texture_cache.size();
+        if let Some(damage) = self.damage.as_mut().filter(|_| new_size < old_size) {
+            let old_loc = damage.loc - old_size.sub(new_size).scale(0.5).to_point();
             let old_rect = Rectangle::from_loc_and_size(old_loc, old_size);
             *damage = damage.merge(old_rect);
         }
@@ -348,7 +367,7 @@ impl<S: Surface> Window<S> {
     /// Check whether there is a new buffer pending with an updated geometry
     /// size.
     pub fn pending_buffer_resize(&self) -> bool {
-        self.surface.geometry().size != self.texture_cache.size
+        self.rectangle.size != self.texture_cache.requested_size
     }
 
     /// Mark all rendered clients as presented for `wp_presentation`.
@@ -521,7 +540,7 @@ impl<S: Surface> Window<S> {
             return Some(popup_surface);
         }
 
-        let geometry = self.surface.geometry();
+        let geometry = self.surface.geometry().unwrap_or_default();
         let bounds = self.bounds();
 
         let result = RefCell::new(None);
@@ -765,20 +784,27 @@ impl WindowTransaction {
 /// Cached window textures.
 #[derive(Default, Debug)]
 struct TextureCache {
-    /// Size of all textures combined.
-    size: Size<i32, Logical>,
+    /// Window's reported size.
+    geometry_size: Option<Size<i32, Logical>>,
+
+    /// Size of all combined textures.
+    texture_size: Size<i32, Logical>,
+
+    /// Desired window size during import.
+    requested_size: Size<i32, Logical>,
+
+    /// Cached textures.
     textures: Vec<Texture>,
 }
 
 impl TextureCache {
-    /// Reset the texture cache.
-    fn reset(&mut self, size: Size<i32, Logical>) {
-        self.textures.clear();
-        self.size = size;
-    }
-
     /// Add a new texture.
     fn push(&mut self, texture: Texture) {
         self.textures.push(texture);
+    }
+
+    /// Get the size of the cached texture.
+    fn size(&self) -> Size<i32, Logical> {
+        self.geometry_size.unwrap_or(self.texture_size)
     }
 }
