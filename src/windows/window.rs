@@ -278,6 +278,10 @@ impl<S: Surface> Window<S> {
                     location += subsurface.location;
                 }
 
+                // Update texture cache's combined buffer size.
+                let buffer_rect = Rectangle::from_loc_and_size(location, data.size);
+                window_rect = window_rect.merge(buffer_rect);
+
                 // Skip surface if buffer was already imported.
                 if let Some(texture) = &data.texture {
                     self.texture_cache.push(texture.clone());
@@ -305,10 +309,6 @@ impl<S: Surface> Window<S> {
                 let mut feedback_state =
                     surface_data.cached_state.current::<PresentationFeedbackCachedState>();
                 self.presentation_callbacks.append(&mut feedback_state.callbacks);
-
-                // Update texture cache's combined buffer size.
-                let buffer_rect = Rectangle::from_loc_and_size(location, data.size);
-                window_rect = window_rect.merge(buffer_rect);
 
                 // Retrieve buffer damage.
                 let damage = data.damage.buffer();
