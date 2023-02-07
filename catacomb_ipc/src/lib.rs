@@ -34,10 +34,11 @@ pub enum IpcMessage {
 }
 
 /// Device orientation.
-#[derive(Deserialize, Serialize, PartialEq, Eq, Copy, Clone, Debug)]
+#[derive(Deserialize, Serialize, Default, PartialEq, Eq, Copy, Clone, Debug)]
 #[serde(rename_all = "kebab-case")]
 pub enum Orientation {
     /// Portrait mode.
+    #[default]
     Portrait,
 
     // Inverse portrait mode.
@@ -48,12 +49,6 @@ pub enum Orientation {
 
     /// Inverse landscape mode.
     InverseLandscape,
-}
-
-impl Default for Orientation {
-    fn default() -> Self {
-        Orientation::Portrait
-    }
 }
 
 impl FromStr for Orientation {

@@ -1040,7 +1040,7 @@ impl Transaction {
 }
 
 /// Compositor window arrangements.
-#[derive(Debug)]
+#[derive(Default, Debug)]
 enum View {
     /// List of all open windows.
     Overview(Overview),
@@ -1049,13 +1049,8 @@ enum View {
     /// Fullscreened XDG-shell window.
     Fullscreen(Rc<RefCell<Window>>),
     /// Currently active windows.
+    #[default]
     Workspace,
-}
-
-impl Default for View {
-    fn default() -> Self {
-        View::Workspace
-    }
 }
 
 /// List with all windows' opaque regions.
