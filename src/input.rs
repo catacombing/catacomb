@@ -265,19 +265,22 @@ impl Catacomb {
             InputEvent::TouchDown { event } => {
                 let position = self.transform_position(&event);
                 let event_type = TouchEventType::Down;
-                let event = TouchEvent::new(event_type, event.slot(), event.time(), position);
+                let time = event.time() as u32;
+                let event = TouchEvent::new(event_type, event.slot(), time, position);
                 self.touch_state.events.push(event);
             },
             InputEvent::TouchUp { event } => {
                 let position = self.touch_state.position;
                 let event_type = TouchEventType::Up;
-                let event = TouchEvent::new(event_type, event.slot(), event.time(), position);
+                let time = event.time() as u32;
+                let event = TouchEvent::new(event_type, event.slot(), time, position);
                 self.touch_state.events.push(event);
             },
             InputEvent::TouchMotion { event } => {
                 let position = self.transform_position(&event);
                 let event_type = TouchEventType::Motion;
-                let event = TouchEvent::new(event_type, event.slot(), event.time(), position);
+                let time = event.time() as u32;
+                let event = TouchEvent::new(event_type, event.slot(), time, position);
                 self.touch_state.events.push(event);
             },
             // Apply all pending touch events.
@@ -460,7 +463,7 @@ impl Catacomb {
             None => return,
         };
         let serial = SERIAL_COUNTER.next_serial();
-        let time = Event::time(event);
+        let time = Event::time(event) as u32;
         let keycode = event.key_code();
         let state = event.state();
 
