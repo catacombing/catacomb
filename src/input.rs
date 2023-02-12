@@ -1,6 +1,5 @@
 //! Input event handling.
 
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use smithay::backend::input::{
@@ -499,11 +498,9 @@ impl Catacomb {
                             catacomb.button_state.power = None;
 
                             // Open drawer.
-                            let _ = Command::new(APP_DRAWER)
-                                .stdin(Stdio::null())
-                                .stdout(Stdio::null())
-                                .stderr(Stdio::null())
-                                .spawn();
+                            if let Err(err) = crate::daemon(APP_DRAWER, []) {
+                                eprintln!("Unable to launch {APP_DRAWER:?}: {err}");
+                            }
 
                             TimeoutAction::Drop
                         })
