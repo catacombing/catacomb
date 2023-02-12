@@ -354,14 +354,17 @@ impl Catacomb {
 
     /// Suspend to RAM.
     pub fn suspend(&mut self) {
-        if let Err(err) = fs::write("/sys/power/state", "mem") {
-            eprintln!("Failed suspending to RAM: {err}");
+        match fs::write("/sys/power/state", "mem") {
+            // Execution will pause after write here, so resume once it continues.
+            Ok(_) => {
+                // Update resume time to ignore buttons pressed during sleep.
+                self.last_resume = Instant::now();
+
+                self.resume();
+            },
+            // Keep screen disabled when suspend failed.
+            Err(err) => eprintln!("Failed suspending to RAM: {err}"),
         }
-
-        // Update resume time to ignore buttons during sleep.
-        self.last_resume = Instant::now();
-
-        self.resume();
     }
 }
 
