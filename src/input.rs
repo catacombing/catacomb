@@ -242,6 +242,11 @@ impl Catacomb {
 
     /// Process new input events.
     pub fn handle_input<I: InputBackend>(&mut self, event: InputEvent<I>) {
+        // Ignore non-keyboard input events while the screen is off.
+        if self.sleeping && !matches!(event, InputEvent::Keyboard { .. }) {
+            return;
+        }
+
         match event {
             InputEvent::Keyboard { event, .. } => self.on_keyboard_input(&event),
             InputEvent::PointerButton { event } if event.button() == Some(MouseButton::Left) => {
