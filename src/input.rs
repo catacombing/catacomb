@@ -269,22 +269,19 @@ impl Catacomb {
             InputEvent::TouchDown { event } => {
                 let position = self.transform_position(&event);
                 let event_type = TouchEventType::Down;
-                let time = event.time() as u32;
-                let event = TouchEvent::new(event_type, event.slot(), time, position);
+                let event = TouchEvent::new(event_type, event.slot(), event.time_msec(), position);
                 self.touch_state.events.push(event);
             },
             InputEvent::TouchUp { event } => {
                 let position = self.touch_state.position;
                 let event_type = TouchEventType::Up;
-                let time = event.time() as u32;
-                let event = TouchEvent::new(event_type, event.slot(), time, position);
+                let event = TouchEvent::new(event_type, event.slot(), event.time_msec(), position);
                 self.touch_state.events.push(event);
             },
             InputEvent::TouchMotion { event } => {
                 let position = self.transform_position(&event);
                 let event_type = TouchEventType::Motion;
-                let time = event.time() as u32;
-                let event = TouchEvent::new(event_type, event.slot(), time, position);
+                let event = TouchEvent::new(event_type, event.slot(), event.time_msec(), position);
                 self.touch_state.events.push(event);
             },
             // Apply all pending touch events.
