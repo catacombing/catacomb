@@ -570,12 +570,12 @@ impl<S: Surface> Window<S> {
                     .data_map
                     .get::<RefCell<CatacombSurfaceData>>()
                     .map_or_else(Size::default, |data| data.borrow().size);
-                let surface_loc = (location - geometry.loc).to_f64();
-                let surface_rect = Rectangle::from_loc_and_size(surface_loc, size.to_f64());
+                let surface_loc = location - geometry.loc;
+                let surface_rect = Rectangle::from_loc_and_size(surface_loc.to_f64(), size.to_f64());
 
                 // Check if the position is within the surface bounds.
                 if surface_rect.contains(position) {
-                    let surface = OffsetSurface::new(wl_surface.clone(), location);
+                    let surface = OffsetSurface::new(wl_surface.clone(), surface_loc);
                     *result.borrow_mut() = Some(surface);
                     TraversalAction::SkipChildren
                 } else {
