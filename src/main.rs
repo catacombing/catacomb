@@ -19,6 +19,7 @@ mod overview;
 mod protocols;
 mod socket;
 mod udev;
+mod vibrate;
 mod windows;
 
 /// Command line arguments.

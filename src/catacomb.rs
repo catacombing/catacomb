@@ -63,6 +63,7 @@ use crate::orientation::{Accelerometer, AccelerometerSource};
 use crate::output::Output;
 use crate::protocols::screencopy::{ScreencopyHandler, ScreencopyManagerState};
 use crate::udev::Udev;
+use crate::vibrate::Vibrator;
 use crate::windows::Windows;
 
 /// The script to run after compositor start.
@@ -77,6 +78,7 @@ pub struct Catacomb {
     pub touch_state: TouchState,
     pub last_resume: Instant,
     pub socket_name: String,
+    pub vibrator: Vibrator,
     pub seat_name: String,
     pub windows: Windows,
     pub seat: Seat<Self>,
@@ -200,6 +202,9 @@ impl Catacomb {
             catacomb.handle_orientation(orientation);
         });
 
+        // Setup rumble device.
+        let vibrator = Vibrator::new(event_loop.clone());
+
         // Run user startup script.
         if let Some(mut script_path) = dirs::config_dir() {
             script_path.push("catacomb");
@@ -227,6 +232,7 @@ impl Catacomb {
             seat_state,
             shm_state,
             seat_name,
+            vibrator,
             windows,
             backend,
             seat,

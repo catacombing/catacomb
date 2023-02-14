@@ -106,6 +106,7 @@ dependencies = [
  "dirs",
  "image",
  "libc",
+ "nix 0.26.2",
  "serde",
  "serde_json",
  "smithay",

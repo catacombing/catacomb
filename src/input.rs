@@ -494,6 +494,9 @@ impl Catacomb {
                             // Reset button state.
                             catacomb.button_state.power = None;
 
+                            // Play rumble to indicate success.
+                            catacomb.vibrator.vibrate(100, 0, 1);
+
                             // Open drawer.
                             if let Err(err) = crate::daemon(APP_DRAWER, []) {
                                 eprintln!("Unable to launch {APP_DRAWER:?}: {err}");
