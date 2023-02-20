@@ -2,29 +2,24 @@
 
 use std::borrow::Cow;
 use std::cell::{RefCell, RefMut};
-#[cfg(feature = "debug_damage")]
-use std::cmp;
 use std::mem;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use smithay::backend::drm::DrmEventMetadata;
-use smithay::backend::renderer::gles2::ffi::{self as gl, Gles2};
-use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
-use smithay::backend::renderer::Frame;
+use smithay::backend::renderer::gles2::Gles2Renderer;
 use smithay::reexports::calloop::LoopHandle;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::DisplayHandle;
-use smithay::utils::{Logical, Physical, Point, Rectangle};
+use smithay::utils::{Logical, Point};
 use smithay::wayland::compositor;
 use smithay::wayland::shell::wlr_layer::{Layer, LayerSurface};
 use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface};
 
-use crate::catacomb::{Catacomb, Damage};
-use crate::drawing::{Graphics, MAX_DAMAGE_AGE};
-use crate::geometry::SubtractRectFast;
+use crate::catacomb::Catacomb;
+use crate::drawing::{CatacombElement, Graphics};
 use crate::input::{Gesture, TouchState};
 use crate::layer::Layers;
 use crate::orientation::Orientation;
@@ -43,15 +38,6 @@ const MAX_TRANSACTION_MILLIS: u64 = 1000;
 
 /// Horizontal sensitivity of the application overview.
 const OVERVIEW_HORIZONTAL_SENSITIVITY: f64 = 250.;
-
-/// Relative size of gesture notch to the handle's whole width/height.
-const GESTURE_NOTCH_PERCENTAGE: f64 = 0.2;
-
-/// Gesture handle foreground color.
-const GESTURE_HANDLE_NOTCH_COLOR: [f32; 4] = [1., 1., 1., 1.];
-
-/// Gesture handle background color.
-const GESTURE_HANDLE_COLOR: [f32; 4] = [0., 0., 0., 1.];
 
 /// Global transaction timer in milliseconds.
 static TRANSACTION_START: AtomicU64 = AtomicU64::new(0);
@@ -81,7 +67,7 @@ pub struct Windows {
     event_loop: LoopHandle<'static, Catacomb>,
     activated: Option<ToplevelSurface>,
     transaction: Option<Transaction>,
-    opaque_regions: OpaqueRegions,
+    textures: Vec<CatacombElement>,
     start_time: Instant,
     output: Output,
 
@@ -97,8 +83,8 @@ pub struct Windows {
     unlocked_orientation: Orientation,
     orientation_locked: bool,
 
-    /// Compositor damage beyond window-internal changes.
-    fully_damaged: bool,
+    /// Client-independent damage.
+    dirty: bool,
 }
 
 impl Windows {
@@ -112,12 +98,12 @@ impl Windows {
             canvas,
             start_time: Instant::now(),
             orientation_locked: true,
-            fully_damaged: true,
+            dirty: true,
             unlocked_orientation: Default::default(),
-            opaque_regions: Default::default(),
             orphan_popups: Default::default(),
             transaction: Default::default(),
             activated: Default::default(),
+            textures: Default::default(),
             layouts: Default::default(),
             layers: Default::default(),
             view: Default::default(),
@@ -250,197 +236,74 @@ impl Windows {
         }
     }
 
-    /// Draw the current window state.
-    pub fn draw(
+    /// Get all textures for rendering.
+    pub fn textures(
         &mut self,
-        frame: &mut Gles2Frame,
-        graphics: &Graphics,
-        damage: &mut Damage,
-        buffer_age: u8,
-    ) {
-        // Reset global damage.
-        let fully_damaged = mem::take(&mut self.fully_damaged);
+        renderer: &mut Gles2Renderer,
+        graphics: &mut Graphics,
+    ) -> &[CatacombElement] {
+        // Clear global damage.
+        self.dirty = false;
 
-        // Collect pending damage.
-        let max_age = MAX_DAMAGE_AGE as u8;
-        #[allow(unused_mut)]
-        let mut damage = if buffer_age == 0
-            || buffer_age > max_age
-            || fully_damaged
-            || !matches!(self.view, View::Workspace | View::Fullscreen(_))
-        {
-            let resolution = self.output.size().to_physical(self.output.scale());
-            damage.push(Rectangle::from_loc_and_size((0, 0), resolution));
-            damage.take_since(1)
-        } else {
-            self.window_damage(damage);
-            damage.take_since(buffer_age)
-        };
+        let scale = self.output.scale();
+        self.textures.clear();
 
-        // Swap out damage with full damage to redraw everything while debugging.
-        #[cfg(feature = "debug_damage")]
-        let mut debug_damage: &[Rectangle<i32, Physical>] = {
-            let resolution = self.output.size().to_physical(self.output.scale());
-            &[Rectangle::from_loc_and_size((0, 0), resolution)]
-        };
-        #[cfg(feature = "debug_damage")]
-        mem::swap(&mut damage, &mut debug_damage);
+        // Draw gesture handle when not in fullscreen view.
+        if !matches!(self.view, View::Fullscreen(_)) {
+            // Calculate position for gesture handle.
+            let scale = self.output.scale();
+            let output_height = self.output.size().to_physical(scale).h;
+            let handle_location = (0, output_height - GESTURE_HANDLE_HEIGHT * scale);
 
-        // Update the opaque regions.
-        self.opaque_regions.update(
-            &self.layouts,
-            &self.layers,
-            &self.canvas,
-            self.gesture_handle_rect(),
-            &self.view,
-        );
-
-        // Clear the screen.
-        let clear_damage = self.opaque_regions.filter_damage(damage);
-        if !clear_damage.is_empty() {
-            let _ = frame.clear([1., 0., 1., 1.], clear_damage);
+            // Get gesture handle texture and move it to the right location.
+            let gesture_handle = graphics.gesture_handle(renderer, &self.output);
+            CatacombElement::add_element(
+                &mut self.textures,
+                gesture_handle,
+                handle_location,
+                None,
+                None,
+            );
         }
 
         match &mut self.view {
             View::Workspace => {
-                self.layers.draw_background(frame, &self.canvas, damage, &mut self.opaque_regions);
+                for layer in self.layers.foreground() {
+                    layer.textures(&mut self.textures, scale, None, None);
+                }
 
-                self.layouts.with_visible_mut(|window| {
-                    window.draw(
-                        frame,
-                        &self.canvas,
-                        1.,
-                        None,
-                        None,
-                        damage,
-                        &mut self.opaque_regions,
-                    );
-                });
+                self.layouts.textures(&mut self.textures, scale);
 
-                // Draw top/overlay windows in workspace view.
-                self.layers.draw_foreground(frame, &self.canvas, damage, &mut self.opaque_regions);
+                for layer in self.layers.background() {
+                    layer.textures(&mut self.textures, scale, None, None);
+                }
             },
             View::DragAndDrop(dnd) => {
-                self.layers.draw_background(frame, &self.canvas, damage, &mut self.opaque_regions);
+                dnd.textures(&mut self.textures, &self.canvas, graphics);
 
-                self.layouts.with_visible_mut(|window| {
-                    window.draw(frame, &self.canvas, 1., None, None, damage, None);
-                });
-                dnd.draw(frame, &self.canvas, graphics);
+                self.layouts.textures(&mut self.textures, scale);
+
+                for layer in self.layers.background() {
+                    layer.textures(&mut self.textures, scale, None, None);
+                }
             },
             View::Overview(overview) => {
-                self.layers.draw_background(frame, &self.canvas, damage, &mut self.opaque_regions);
+                overview.textures(&mut self.textures, &self.output, &self.canvas, &self.layouts);
 
-                overview.draw(frame, &self.output, &self.canvas, &self.layouts);
-
-                // Stage immediate redraw while overview animations are active.
-                if overview.animating_drag(self.layouts.len()) {
-                    self.fully_damaged = true;
+                for layer in self.layers.background() {
+                    layer.textures(&mut self.textures, scale, None, None);
                 }
             },
             View::Fullscreen(window) => {
-                window.borrow_mut().draw(frame, &self.canvas, 1., None, None, None, None);
+                for layer in self.layers.overlay() {
+                    layer.textures(&mut self.textures, scale, None, None);
+                }
 
-                // Draw overlay windows in fullscreen view.
-                self.layers.draw_overlay(frame, &self.canvas, damage, &mut self.opaque_regions);
+                window.borrow().textures(&mut self.textures, scale, None, None);
             },
         }
 
-        // Draw gesture handle when not in fullscreen view.
-        if !matches!(self.view, View::Fullscreen(_))
-            && damage.iter().any(|damage| damage.overlaps(self.gesture_handle_rect()))
-        {
-            let _ = frame.with_context(|gl| unsafe {
-                self.draw_gesture_handle(gl, damage);
-            });
-        }
-
-        // Draw damage debug overlay.
-        #[cfg(feature = "debug_damage")]
-        self.draw_damage_debug(frame, graphics, debug_damage);
-    }
-
-    /// Draw the gesture handle.
-    unsafe fn draw_gesture_handle(&self, gl: &Gles2, damage: &[Rectangle<i32, Physical>]) {
-        let handle_height = GESTURE_HANDLE_HEIGHT * self.canvas.scale();
-        let output_size = self.canvas.physical_resolution();
-
-        // Calculate handle rectangle.
-        let (handle_loc, handle_size) = match self.orientation() {
-            Orientation::Portrait => {
-                ((0, output_size.h - handle_height), (output_size.w, handle_height))
-            },
-            Orientation::InversePortrait => ((0, 0), (output_size.w, handle_height)),
-            Orientation::Landscape => ((0, 0), (handle_height, output_size.h)),
-            Orientation::InverseLandscape => {
-                ((output_size.w - handle_height, 0), (handle_height, output_size.h))
-            },
-        };
-        let handle_rect = Rectangle::from_loc_and_size(handle_loc, handle_size);
-
-        // Skip rendering without damage.
-        if damage.iter().all(|damage| !damage.overlaps(handle_rect)) {
-            return;
-        }
-
-        gl.Enable(gl::SCISSOR_TEST);
-
-        // Draw Background.
-        gl.Scissor(handle_rect.loc.x, handle_rect.loc.y, handle_rect.size.w, handle_rect.size.h);
-        gl.ClearColor(
-            GESTURE_HANDLE_COLOR[0],
-            GESTURE_HANDLE_COLOR[1],
-            GESTURE_HANDLE_COLOR[2],
-            GESTURE_HANDLE_COLOR[3],
-        );
-        gl.Clear(gl::COLOR_BUFFER_BIT);
-
-        // Draw handle notch.
-        let notch_height = (handle_rect.size.h as f64 * GESTURE_NOTCH_PERCENTAGE) as i32;
-        let notch_width = (handle_rect.size.w as f64 * GESTURE_NOTCH_PERCENTAGE) as i32;
-        let notch_x = handle_rect.loc.x + (handle_rect.size.w - notch_width) / 2;
-        let notch_y = handle_rect.loc.y + (handle_rect.size.h - notch_height) / 2;
-        gl.Scissor(notch_x, notch_y, notch_width, notch_height);
-        gl.ClearColor(
-            GESTURE_HANDLE_NOTCH_COLOR[0],
-            GESTURE_HANDLE_NOTCH_COLOR[1],
-            GESTURE_HANDLE_NOTCH_COLOR[2],
-            GESTURE_HANDLE_NOTCH_COLOR[3],
-        );
-        gl.Clear(gl::COLOR_BUFFER_BIT);
-
-        gl.Disable(gl::SCISSOR_TEST);
-    }
-
-    /// Draw damage debug overlay.
-    #[cfg(feature = "debug_damage")]
-    fn draw_damage_debug(
-        &self,
-        frame: &mut Gles2Frame,
-        graphics: &Graphics,
-        debug_damage: &[Rectangle<i32, Physical>],
-    ) {
-        let _ = frame.with_context(|gl| unsafe {
-            gl.BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
-        });
-
-        for rect in debug_damage {
-            let bounds = rect.to_logical(self.canvas.scale());
-            let scale = cmp::max(bounds.size.w, bounds.size.h) as f64;
-            graphics.damage_debug.draw_at(frame, &self.canvas, bounds.loc, bounds, scale, None);
-        }
-
-        let _ = frame.with_context(|gl| unsafe {
-            gl.BlendFunc(gl::ONE, gl::ONE_MINUS_SRC_ALPHA);
-        });
-    }
-
-    /// Get the size and location of the gesture handle.
-    fn gesture_handle_rect(&self) -> Rectangle<i32, Physical> {
-        let canvas_size = self.canvas.size().to_physical(self.canvas.scale());
-        let handle_size = (canvas_size.w, GESTURE_HANDLE_HEIGHT * self.canvas.scale());
-        let handle_loc = (0, canvas_size.h - handle_size.1);
-        Rectangle::from_loc_and_size(handle_loc, handle_size)
+        self.textures.as_slice()
     }
 
     /// Request new frames for all visible windows.
@@ -526,8 +389,7 @@ impl Windows {
         };
 
         let dnd = DragAndDrop::new(&self.output, overview, layout_position, window);
-        self.view = View::DragAndDrop(dnd);
-        self.fully_damaged = true;
+        self.set_view(View::DragAndDrop(dnd));
     }
 
     /// Fullscreen the supplied XDG surface.
@@ -643,6 +505,10 @@ impl Windows {
         // Clear transaction timer.
         TRANSACTION_START.store(0, Ordering::Relaxed);
 
+        // Store old visible window count to see if we need to redraw.
+        let old_layout_count = self.layouts.active().window_count();
+        let old_layer_count = self.layers.len();
+
         // Apply layout/liveliness changes.
         self.layouts.apply_transaction(&self.output);
 
@@ -651,6 +517,7 @@ impl Windows {
 
         // Apply window management changes.
         if let Some(view) = self.transaction.take().and_then(|transaction| transaction.view) {
+            self.dirty = true;
             self.view = view;
         }
         self.canvas = *self.output.canvas();
@@ -660,7 +527,9 @@ impl Windows {
             self.view = View::Workspace;
         }
 
-        self.fully_damaged = true;
+        // Redraw if a visible window has died.
+        self.dirty |= old_layout_count != self.layouts.active().window_count()
+            || old_layer_count != self.layers.len();
 
         None
     }
@@ -730,60 +599,24 @@ impl Windows {
         self.update_orientation(self.unlocked_orientation);
     }
 
-    /// Get the current rendering orientation.
-    pub fn orientation(&self) -> Orientation {
-        self.canvas.orientation()
-    }
-
     /// Check if any window was damaged since the last redraw.
     pub fn damaged(&mut self) -> bool {
-        if self.fully_damaged {
+        if self.dirty {
             return true;
         }
 
         match &self.view {
             // Check only fullscreened and overlay shell windows in fullscreen view.
             View::Fullscreen(window) => {
-                window.borrow().damaged() || self.layers.overlay().any(Window::damaged)
+                window.borrow().dirty() || self.layers.overlay().any(Window::dirty)
             },
+            // Redraw continuously during overview animations.
+            View::Overview(overview) if overview.animating_drag(self.layouts.len()) => true,
             // Check all windows for damage outside of fullscreen.
             _ => {
-                self.layers.iter().any(Window::damaged)
-                    || self.layouts.windows().any(|window| window.damaged())
+                self.layouts.windows().any(|window| window.dirty())
+                    || self.layers.iter().any(Window::dirty)
             },
-        }
-    }
-
-    /// Window damage since last redraw.
-    ///
-    /// This function collects the damage for every window, without taking
-    /// global damage into account. To avoid unnecessary work,
-    /// [`Windows::fully_damaged`] should be called first.
-    fn window_damage(&self, damage: &mut Damage) {
-        match &self.view {
-            View::Workspace => {
-                let active_layout = self.layouts.active();
-                let primary = active_layout.primary();
-                let secondary = active_layout.secondary();
-
-                let primary = primary.and_then(|window| window.borrow().damage(&self.canvas));
-                let secondary = secondary.and_then(|window| window.borrow().damage(&self.canvas));
-                let layer = self.layers.iter().filter_map(|window| window.damage(&self.canvas));
-
-                for window_damage in layer.chain(primary).chain(secondary) {
-                    damage.push(window_damage);
-                }
-            },
-            // Use only fullscreened and overlay shell window's damage in fullscreen mode.
-            View::Fullscreen(window) => {
-                let fullscreened = window.borrow().damage(&self.canvas);
-                let layer = self.layers.overlay().filter_map(|window| window.damage(&self.canvas));
-
-                for window_damage in fullscreened.iter().copied().chain(layer) {
-                    damage.push(window_damage);
-                }
-            },
-            _ => unreachable!(),
         }
     }
 
@@ -850,7 +683,7 @@ impl Windows {
                 dnd.window_position += delta;
 
                 // Redraw when the D&D window is moved.
-                self.fully_damaged = true;
+                self.dirty = true;
 
                 return;
             },
@@ -888,7 +721,7 @@ impl Windows {
         overview.cancel_hold(&self.event_loop);
 
         // Redraw when cycling through the overview.
-        self.fully_damaged = true;
+        self.dirty = true;
     }
 
     /// Handle touch drag release.
@@ -1051,92 +884,4 @@ enum View {
     /// Currently active windows.
     #[default]
     Workspace,
-}
-
-/// List with all windows' opaque regions.
-#[derive(Default, Debug)]
-pub struct OpaqueRegions {
-    opaque_regions: Vec<Rectangle<i32, Physical>>,
-
-    /// Damage cache, to reduce allocations.
-    ///
-    /// This is only useful when the `OpaqueRegions` struct is also stored
-    /// somewhere permanently, otherwise it will still reallocate.
-    damage_cache: Vec<Rectangle<i32, Physical>>,
-}
-
-impl OpaqueRegions {
-    /// Update the currently occluded regions.
-    fn update(
-        &mut self,
-        layouts: &Layouts,
-        layers: &Layers,
-        canvas: &Canvas,
-        handle_rect: Rectangle<i32, Physical>,
-        view: &View,
-    ) {
-        self.opaque_regions.clear();
-
-        // Add logical rectangle to opaque regions.
-        let mut push_rect = |rect: Rectangle<i32, Logical>| {
-            let physical_rect = rect.to_physical(canvas.scale());
-            self.opaque_regions.push(physical_rect);
-        };
-
-        let workspace_active = match view {
-            // Use only overlay shell and the fullscreen client in fullscreen mode.
-            View::Fullscreen(window) => {
-                window.borrow().opaque_region().for_each(&mut push_rect);
-                layers.overlay().flat_map(|window| window.opaque_region()).for_each(&mut push_rect);
-                return;
-            },
-            View::Workspace => true,
-            _ => false,
-        };
-
-        layers.background().flat_map(|window| window.opaque_region()).for_each(&mut push_rect);
-
-        // Ignore layouts/foreground layer regions in overview and DnD.
-        if workspace_active {
-            layouts.with_visible(|window| {
-                window.opaque_region().for_each(&mut push_rect);
-            });
-
-            layers.foreground().flat_map(|window| window.opaque_region()).for_each(&mut push_rect);
-        }
-
-        // Add gesture handle's opaque region.
-        self.opaque_regions.push(handle_rect);
-    }
-
-    /// Filter out occluded damage rectangles.
-    pub fn filter_damage(
-        &mut self,
-        damage: &[Rectangle<i32, Physical>],
-    ) -> &[Rectangle<i32, Physical>] {
-        self.damage_cache.clear();
-        self.damage_cache.extend_from_slice(damage);
-
-        for opaque_region in &self.opaque_regions {
-            self.damage_cache.subtract_rect(*opaque_region);
-        }
-
-        &self.damage_cache
-    }
-
-    /// Pop `N` opaque region rectangles from the bottom of the stack.
-    pub fn popn(&mut self, n: usize) {
-        let original_len = self.opaque_regions.len();
-
-        // Clear vec if everything would be popped.
-        //
-        // This is necessary since `rotate_left` panics when `n` is bigger than `len`.
-        if n >= original_len {
-            self.opaque_regions.clear();
-            return;
-        }
-
-        self.opaque_regions.rotate_left(n);
-        self.opaque_regions.truncate(original_len.saturating_sub(n));
-    }
 }

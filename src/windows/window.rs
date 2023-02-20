@@ -2,19 +2,18 @@
 
 use std::cell::RefCell;
 use std::mem;
-use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::Instant;
 
 use _presentation_time::wp_presentation_feedback::Kind as FeedbackKind;
 use smithay::backend::drm::{DrmEventMetadata, DrmEventTime};
-use smithay::backend::renderer::gles2::{Gles2Frame, Gles2Renderer};
+use smithay::backend::renderer::gles2::Gles2Renderer;
 use smithay::backend::renderer::{self, BufferType, ImportAll};
 use smithay::reexports::wayland_protocols::wp::presentation_time::server as _presentation_time;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Physical, Point, Rectangle, Size};
 use smithay::wayland::compositor::{
-    self, RectangleKind, SubsurfaceCachedState, SurfaceAttributes, SurfaceData, TraversalAction,
+    self, SubsurfaceCachedState, SurfaceAttributes, SurfaceData, TraversalAction,
 };
 use smithay::wayland::presentation::{
     PresentationFeedbackCachedState, PresentationFeedbackCallback,
@@ -24,20 +23,17 @@ use smithay::wayland::shell::wlr_layer::{
 };
 use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface, XdgPopupSurfaceRoleAttributes};
 
-use crate::drawing::{CatacombSurfaceData, Texture};
-use crate::geometry::{SubtractRectFast, Vector};
-use crate::output::{Canvas, ExclusiveSpace, Output};
+use crate::drawing::{CatacombElement, CatacombSurfaceData, RenderTexture, Texture};
+use crate::geometry::Vector;
+use crate::output::{ExclusiveSpace, Output};
+use crate::windows;
 use crate::windows::surface::{CatacombLayerSurface, OffsetSurface, Surface};
-use crate::windows::{self, OpaqueRegions};
 
 /// Wayland client window state.
 #[derive(Debug)]
 pub struct Window<S = ToplevelSurface> {
     /// Initial size configure status.
     pub initial_configure_sent: bool,
-
-    /// Buffers pending to be imported.
-    pub buffers_pending: bool,
 
     /// Last configure size acked by the client.
     pub acked_size: Size<i32, Logical>,
@@ -47,6 +43,9 @@ pub struct Window<S = ToplevelSurface> {
 
     /// Attached surface.
     pub surface: S,
+
+    /// Buffers pending to be updated.
+    dirty: bool,
 
     /// Desired window dimensions.
     rectangle: Rectangle<i32, Logical>,
@@ -63,12 +62,6 @@ pub struct Window<S = ToplevelSurface> {
     /// Popup windows.
     popups: Vec<Window<PopupSurface>>,
 
-    /// Pending window damage.
-    damage: Option<Rectangle<i32, Logical>>,
-
-    /// Opaque window region.
-    opaque_region: Vec<Rectangle<i32, Logical>>,
-
     /// Pending wp_presentation callbacks.
     presentation_callbacks: Vec<PresentationFeedbackCallback>,
 
@@ -76,15 +69,13 @@ pub struct Window<S = ToplevelSurface> {
     dead: bool,
 }
 
-impl<S: Surface> Window<S> {
+impl<S: Surface + 'static> Window<S> {
     /// Create a new Toplevel window.
     pub fn new(surface: S) -> Self {
         Window {
             surface,
             initial_configure_sent: Default::default(),
             presentation_callbacks: Default::default(),
-            buffers_pending: Default::default(),
-            opaque_region: Default::default(),
             texture_cache: Default::default(),
             transaction: Default::default(),
             deny_focus: Default::default(),
@@ -92,7 +83,7 @@ impl<S: Surface> Window<S> {
             rectangle: Default::default(),
             visible: Default::default(),
             popups: Default::default(),
-            damage: Default::default(),
+            dirty: Default::default(),
             dead: Default::default(),
         }
     }
@@ -122,100 +113,60 @@ impl<S: Surface> Window<S> {
         self.bounds().to_f64().contains(point)
     }
 
-    /// Render this window's buffers.
-    ///
-    /// If no location is specified, the texture's cached location will be used.
-    ///
-    /// Bounds is an absolute rectangle to which the window's rendering will be
-    /// clipped. Passing `None` will clamp the window to its geometry, cutting
-    /// off parts of the texture outside of it (i.e. shadows).
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw<'a>(
-        &mut self,
-        frame: &mut Gles2Frame,
-        canvas: &Canvas,
-        scale: f64,
+    /// Add this window's textures to the supplied buffer.
+    pub fn textures(
+        &self,
+        textures: &mut Vec<CatacombElement>,
+        output_scale: i32,
+        window_scale: impl Into<Option<f64>>,
         location: impl Into<Option<Point<i32, Logical>>>,
-        bounds: impl Into<Option<Rectangle<i32, Logical>>>,
-        damage: impl Into<Option<&'a [Rectangle<i32, Physical>]>>,
-        opaque_regions: impl Into<Option<&'a mut OpaqueRegions>>,
     ) {
-        // Calculate render position and bounds.
-        let location = location.into();
+        self.textures_internal(textures, output_scale, window_scale, location, None);
+    }
+
+    /// Internal method for getting render textures.
+    ///
+    /// This ensures both toplevels and their popup children are clamped to the
+    /// toplevel's target geometry.
+    fn textures_internal(
+        &self,
+        textures: &mut Vec<CatacombElement>,
+        output_scale: i32,
+        window_scale: impl Into<Option<f64>>,
+        location: impl Into<Option<Point<i32, Logical>>>,
+        bounds: impl Into<Option<Rectangle<i32, Physical>>>,
+    ) {
+        let location = location.into().unwrap_or_else(|| self.bounds().loc);
+        let window_scale = window_scale.into().unwrap_or(1.);
+
+        // Calculate window bounds only for the toplevel window.
         let bounds = bounds.into().unwrap_or_else(|| {
-            // Get scaled window bounds.
-            let mut bounds = self.bounds();
-            bounds.size = bounds.size.scale(scale);
-
-            // Override window location.
-            if let Some(location) = location {
-                bounds.loc = location;
-            }
-
+            let mut bounds = self.bounds().to_physical(output_scale);
+            bounds.loc = location.to_physical(output_scale);
             bounds
         });
-        let physical_bounds = bounds.to_physical(canvas.scale());
-        let location = location.unwrap_or(bounds.loc);
 
-        // Treat no damage information as full damage.
-        let full_damage = [physical_bounds];
-        let damage = damage.into().unwrap_or(&full_damage);
-
-        // Calculate damage overlapping this window.
-        let mut window_damage = damage
-            .iter()
-            .filter_map(|damage| damage.intersection(physical_bounds))
-            .reduce(Rectangle::merge);
-
-        // Handle opaque regions.
-        let mut opaque_regions = opaque_regions.into();
-        if let Some(opaque_regions) = opaque_regions.as_mut() {
-            // Remove this window's region from opaque regions.
-            opaque_regions.popn(self.opaque_region.len());
-
-            // Filter out occluded damage.
-            if let Some(damage) = window_damage {
-                let unoccluded_damage = opaque_regions.filter_damage(&[damage]);
-                window_damage = unoccluded_damage.iter().copied().reduce(Rectangle::merge);
-            }
+        // Add popup textures.
+        for popup in self.popups.iter().rev() {
+            let popup_location = location + popup.bounds().loc.scale(window_scale);
+            popup.textures_internal(
+                textures,
+                output_scale,
+                window_scale,
+                Some(popup_location),
+                bounds,
+            );
         }
 
-        // Clear window damage.
-        //
-        // Since window damage only matters for the current frame, we clear it even when
-        // nothing needs to be drawn since all the required updates have been completed
-        // at that point.
-        self.damage = None;
-
-        // Skip rendering without damage.
-        let window_damage = match window_damage {
-            Some(window_damage) if !window_damage.is_empty() => window_damage,
-            _ => return,
-        };
-
-        for texture in &mut self.texture_cache.textures {
-            texture.draw_at(frame, canvas, location, bounds, scale, window_damage);
-        }
-
-        // Draw popup tree.
-        for popup in &mut self.popups {
-            // Calculate the popup's origin.
-            let loc = bounds.loc + popup.rectangle.loc.scale(scale);
-
-            // Do not clamp popup bounds, to allow rendering even without the client
-            // geometry.
-            let geometry_loc = popup.surface.geometry().map(|geometry| geometry.loc);
-            let popup_loc = loc - geometry_loc.unwrap_or_default().scale(scale);
-            let popup_bounds = Rectangle::from_loc_and_size(popup_loc, (i32::MAX, i32::MAX));
-
-            popup.draw(
-                frame,
-                canvas,
-                scale,
-                loc,
-                popup_bounds,
-                damage,
-                opaque_regions.as_deref_mut(),
+        // Add windows' textures.
+        let physical_location = location.to_physical(output_scale);
+        for texture in self.texture_cache.textures.iter().rev() {
+            CatacombElement::add_element(
+                textures,
+                texture.clone(),
+                physical_location,
+                bounds,
+                window_scale,
             );
         }
     }
@@ -250,10 +201,9 @@ impl<S: Surface> Window<S> {
         }
 
         // Short-circuit if we know no new buffer is waiting for import.
-        if !self.buffers_pending {
+        if !mem::take(&mut self.dirty) {
             return;
         }
-        self.buffers_pending = false;
 
         self.texture_cache.requested_size = self.rectangle.size;
         self.texture_cache.textures.clear();
@@ -264,7 +214,7 @@ impl<S: Surface> Window<S> {
         compositor::with_surface_tree_upward(
             self.surface.surface(),
             Point::from((0, 0)) - geometry.unwrap_or_default().loc,
-            |_, surface_data, location| {
+            |surface, surface_data, location| {
                 let data = match surface_data.data_map.get::<RefCell<CatacombSurfaceData>>() {
                     Some(data) => data,
                     None => return TraversalAction::SkipChildren,
@@ -289,18 +239,6 @@ impl<S: Surface> Window<S> {
                     return TraversalAction::DoChildren(location);
                 }
 
-                // Update window's opaque region.
-                self.opaque_region.clear();
-                for (kind, rect) in &data.opaque_region {
-                    let mut rect = *rect;
-                    rect.loc += location;
-
-                    match kind {
-                        RectangleKind::Add => self.opaque_region.push(rect),
-                        RectangleKind::Subtract => self.opaque_region.subtract_rect(rect),
-                    }
-                }
-
                 let buffer = match &data.buffer {
                     Some(buffer) => buffer,
                     None => return TraversalAction::SkipChildren,
@@ -323,9 +261,10 @@ impl<S: Surface> Window<S> {
                         }
 
                         // Update and cache the texture.
-                        let texture = Texture::from_surface(Rc::new(texture), location, &data);
-                        self.texture_cache.push(texture.clone());
-                        data.texture = Some(texture);
+                        let texture = Texture::from_surface(texture, location, &data, surface);
+                        let render_texture = RenderTexture::new(texture);
+                        self.texture_cache.push(render_texture.clone());
+                        data.texture = Some(render_texture);
 
                         TraversalAction::DoChildren(location)
                     },
@@ -337,16 +276,7 @@ impl<S: Surface> Window<S> {
                     },
                 };
 
-                // Update window damage.
-                let new_damage = data.damage.logical().iter().copied().flat_map(|mut damage| {
-                    damage =
-                        damage.intersection(Rectangle::from_loc_and_size((0, 0), data.size))?;
-                    damage.loc += location;
-                    Some(damage)
-                });
-                self.damage = new_damage.chain(self.damage).reduce(Rectangle::merge);
-
-                // Ensure damage is cleared after successful import.
+                // Clear buffer damage after successful import.
                 data.damage.clear();
 
                 action
@@ -355,21 +285,11 @@ impl<S: Surface> Window<S> {
             |_, _, _| true,
         );
 
-        let old_size = self.texture_cache.size();
-
         // Update the texture cache's dimensions.
         self.texture_cache.geometry_size = geometry.map(|geometry| geometry.size);
         window_rect.size.w += window_rect.loc.x;
         window_rect.size.h += window_rect.loc.y;
         self.texture_cache.texture_size = window_rect.size;
-
-        // Add old geometry as damage if shrinkage caused re-centering within bounds.
-        let new_size = self.texture_cache.size();
-        if let Some(damage) = self.damage.as_mut().filter(|_| new_size < old_size) {
-            let old_loc = damage.loc - old_size.sub(new_size).scale(0.5).to_point();
-            let old_rect = Rectangle::from_loc_and_size(old_loc, old_size);
-            *damage = damage.merge(old_rect);
-        }
     }
 
     /// Check whether there is a new buffer pending with an updated geometry
@@ -495,6 +415,9 @@ impl<S: Surface> Window<S> {
             surface,
             (),
             |_, data, _| {
+                // Request buffer update.
+                self.dirty = true;
+
                 // Get access to surface data.
                 data.data_map.insert_if_missing(|| RefCell::new(CatacombSurfaceData::new()));
                 let mut surface_data =
@@ -516,7 +439,6 @@ impl<S: Surface> Window<S> {
 
                 // Store pending buffer updates.
                 surface_data.update_buffer(&mut attributes, buffer_assignment);
-                self.buffers_pending = true;
 
                 TraversalAction::DoChildren(())
             },
@@ -649,31 +571,8 @@ impl<S: Surface> Window<S> {
     }
 
     /// Check if this window requires a redraw.
-    pub fn damaged(&self) -> bool {
-        self.damage.is_some()
-    }
-
-    /// Get pending window damage.
-    pub fn damage(&self, canvas: &Canvas) -> Option<Rectangle<i32, Physical>> {
-        // Offset damage by window bounds.
-        let mut damage = self.damage?;
-        damage.loc += self.bounds().loc;
-
-        // Convert to physical coordinates.
-        let physical = damage.to_physical(canvas.scale());
-
-        // Clamp to output size.
-        let canvas_size = canvas.size().to_physical(canvas.scale());
-        physical.intersection(Rectangle::from_loc_and_size((0, 0), canvas_size))
-    }
-
-    /// Window's opaque region relative to its position.
-    pub fn opaque_region(&self) -> impl Iterator<Item = Rectangle<i32, Logical>> + '_ {
-        let bounds = self.bounds();
-        self.opaque_region.iter().copied().map(move |mut rect| {
-            rect.loc += bounds.loc;
-            rect
-        })
+    pub fn dirty(&self) -> bool {
+        self.dirty && self.transaction.is_none()
     }
 
     /// Get primary window surface.
@@ -793,7 +692,7 @@ impl WindowTransaction {
 
 /// Cached window textures.
 #[derive(Default, Debug)]
-struct TextureCache {
+pub struct TextureCache {
     /// Window's reported size.
     geometry_size: Option<Size<i32, Logical>>,
 
@@ -804,12 +703,12 @@ struct TextureCache {
     requested_size: Size<i32, Logical>,
 
     /// Cached textures.
-    textures: Vec<Texture>,
+    textures: Vec<RenderTexture>,
 }
 
 impl TextureCache {
     /// Add a new texture.
-    fn push(&mut self, texture: Texture) {
+    fn push(&mut self, texture: RenderTexture) {
         self.textures.push(texture);
     }
 

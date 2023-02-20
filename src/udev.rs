@@ -7,16 +7,15 @@ use std::process;
 use std::time::Duration;
 
 use smithay::backend::allocator::dmabuf::Dmabuf;
-use smithay::backend::allocator::gbm::GbmDevice;
+use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::allocator::{Format as DrmFormat, Fourcc, Modifier};
 use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent, GbmBufferedSurface};
 use smithay::backend::egl::context::EGLContext;
 use smithay::backend::egl::display::EGLDisplay;
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
+use smithay::backend::renderer::damage::DamageTrackedRenderer;
 use smithay::backend::renderer::gles2::{ffi, Gles2Renderer};
-use smithay::backend::renderer::{
-    self, Bind, BufferType, Frame, ImportAll, ImportDma, ImportEgl, Renderer,
-};
+use smithay::backend::renderer::{self, Bind, BufferType, ImportAll, ImportDma, ImportEgl};
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev;
@@ -38,11 +37,14 @@ use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::utils::{DevPath, DeviceFd, Physical, Rectangle};
 use smithay::wayland::shm;
 
-use crate::catacomb::{Catacomb, Damage};
+use crate::catacomb::Catacomb;
 use crate::drawing::Graphics;
 use crate::ipc_server;
 use crate::output::Output;
 use crate::windows::Windows;
+
+/// Default background color.
+const CLEAR_COLOR: [f32; 4] = [1., 0., 1., 1.];
 
 pub fn run() {
     let mut event_loop = EventLoop::try_new().expect("event loop");
@@ -57,7 +59,7 @@ pub fn run() {
 
     // Setup hardware acceleration.
     let output_device = catacomb.backend.output_device.as_ref();
-    let formats = output_device.map(|device| device.renderer.dmabuf_formats().copied().collect());
+    let formats = output_device.map(|device| device.gles2.dmabuf_formats().copied().collect());
     catacomb.dmabuf_state.create_global::<Catacomb, _>(
         &catacomb.display_handle,
         formats.unwrap_or_default(),
@@ -186,15 +188,15 @@ impl Udev {
     }
 
     /// Render a frame.
-    pub fn render(&mut self, windows: &mut Windows, damage: &mut Damage) {
+    pub fn render(&mut self, windows: &mut Windows) {
         if let Some(output_device) = &mut self.output_device {
-            let _ = output_device.render(windows, damage);
+            let _ = output_device.render(windows);
         }
     }
 
     /// Get the current output's renderer.
     pub fn renderer(&mut self) -> Option<&mut Gles2Renderer> {
-        self.output_device.as_mut().map(|output_device| &mut output_device.renderer)
+        self.output_device.as_mut().map(|output_device| &mut output_device.gles2)
     }
 
     /// Copy framebuffer region into another buffer.
@@ -244,16 +246,16 @@ impl Udev {
         let display = EGLDisplay::new(gbm.clone(), None)?;
         let context = EGLContext::new(&display, None)?;
 
-        let mut renderer = unsafe { Gles2Renderer::new(context, None).expect("create renderer") };
+        let mut gles2 = unsafe { Gles2Renderer::new(context, None).expect("create renderer") };
 
         // Initialize GPU for EGL rendering.
         if Some(path) == self.gpu {
-            let _ = renderer.bind_wl_display(display_handle);
+            let _ = gles2.bind_wl_display(display_handle);
         }
 
         // Create the surface we will render to.
         let gbm_surface = self
-            .create_gbm_surface(display_handle, windows, &renderer, &drm, &gbm)
+            .create_gbm_surface(display_handle, windows, &gles2, &drm, &gbm)
             .ok_or("gbm surface")?;
 
         // Listen for VBlanks.
@@ -277,12 +279,16 @@ impl Udev {
         let token = self.event_loop.register_dispatcher(dispatcher.clone())?;
 
         // Create OpenGL textures.
-        let graphics = Graphics::new(&mut renderer);
+        let graphics = Graphics::new(&mut gles2);
+
+        // Create Smithay element renderer.
+        let renderer = DamageTrackedRenderer::from_output(windows.output().smithay_output());
 
         self.output_device = Some(OutputDevice {
             gbm_surface,
             graphics,
             renderer,
+            gles2,
             token,
             gbm,
             drm: dispatcher,
@@ -299,7 +305,7 @@ impl Udev {
 
             // Disable hardware acceleration when the GPU is removed.
             if output_device.gbm.dev_path() == self.gpu {
-                output_device.renderer.unbind_wl_display();
+                output_device.gles2.unbind_wl_display();
             }
         }
     }
@@ -325,11 +331,11 @@ impl Udev {
         &mut self,
         display: &DisplayHandle,
         windows: &mut Windows,
-        renderer: &Gles2Renderer,
+        gles2: &Gles2Renderer,
         drm: &DrmDevice,
         gbm: &GbmDevice<DrmDeviceFd>,
-    ) -> Option<GbmBufferedSurface<GbmDevice<DrmDeviceFd>, ()>> {
-        let mut formats = Bind::<Dmabuf>::supported_formats(renderer)?;
+    ) -> Option<GbmBufferedSurface<GbmAllocator<DrmDeviceFd>, ()>> {
+        let mut formats = Bind::<Dmabuf>::supported_formats(gles2)?;
         formats.insert(DrmFormat { code: Fourcc::Argb8888, modifier: Modifier::Linear });
         let resources = drm.resource_handles().ok()?;
 
@@ -352,7 +358,9 @@ impl Udev {
             .flat_map(|crtc| drm.create_surface(crtc, connector_mode, &[connector.handle()]))
             // Yield the first successful GBM buffer creation.
             .find_map(|surface| {
-                GbmBufferedSurface::new(surface, gbm.clone(), formats.clone(), None).ok()
+                let gbm_flags = GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT;
+                let allocator = GbmAllocator::new(gbm.clone(), gbm_flags);
+                GbmBufferedSurface::new(surface, allocator, formats.clone(), None).ok()
             })?;
 
         let (width, height) = connector_mode.size();
@@ -377,10 +385,11 @@ impl Udev {
 
 /// Target device for rendering.
 pub struct OutputDevice {
-    gbm_surface: GbmBufferedSurface<GbmDevice<DrmDeviceFd>, ()>,
+    gbm_surface: GbmBufferedSurface<GbmAllocator<DrmDeviceFd>, ()>,
     drm: Dispatcher<'static, DrmDevice, Catacomb>,
-    renderer: Gles2Renderer,
+    renderer: DamageTrackedRenderer,
     gbm: GbmDevice<DrmDeviceFd>,
+    gles2: Gles2Renderer,
     graphics: Graphics,
     id: DeviceId,
 
@@ -421,22 +430,19 @@ impl OutputDevice {
     }
 
     /// Render a frame.
-    fn render(&mut self, windows: &mut Windows, damage: &mut Damage) -> Result<(), Box<dyn Error>> {
+    fn render(&mut self, windows: &mut Windows) -> Result<(), Box<dyn Error>> {
         // Bind the next buffer to render into.
         let (dmabuf, age) = self.gbm_surface.next_buffer()?;
-        self.renderer.bind(dmabuf)?;
+        self.gles2.bind(dmabuf)?;
 
-        // Draw the current frame into the buffer.
-        let transform = windows.orientation().output_transform();
-        let output_size = windows.output().physical_resolution();
-        let mut frame = self.renderer.render(output_size, transform)?;
-        windows.draw(&mut frame, &self.graphics, damage, age);
-
-        // XXX: This must be done before `queue_buffer` to prevent rendering artifacts.
-        let _ = frame.finish();
+        // Render all textures.
+        let textures = windows.textures(&mut self.gles2, &mut self.graphics);
+        self.renderer
+            .render_output(&mut self.gles2, age as usize, textures, CLEAR_COLOR, None)
+            .unwrap();
 
         // Queue buffer for rendering.
-        self.gbm_surface.queue_buffer(())?;
+        self.gbm_surface.queue_buffer(None, ())?;
 
         Ok(())
     }
@@ -474,7 +480,7 @@ impl OutputDevice {
             }
 
             // Copy framebuffer data to the SHM buffer.
-            self.renderer.with_context(|gl| unsafe {
+            self.gles2.with_context(|gl| unsafe {
                 gl.ReadPixels(
                     rect.loc.x,
                     rect.loc.y,
@@ -503,12 +509,10 @@ impl OutputDevice {
     ) -> Result<(), Box<dyn Error>> {
         let buffer_size = renderer::buffer_dimensions(buffer).ok_or("unexpected buffer type")?;
         let damage = [Rectangle::from_loc_and_size((0, 0), buffer_size)];
-        let texture = self
-            .renderer
-            .import_buffer(buffer, None, &damage)
-            .ok_or("unexpected buffer type")??;
+        let texture =
+            self.gles2.import_buffer(buffer, None, &damage).ok_or("unexpected buffer type")??;
 
-        self.renderer.with_context(|gl| unsafe {
+        self.gles2.with_context(|gl| unsafe {
             gl.BindTexture(ffi::TEXTURE_2D, texture.tex_id());
             gl.CopyTexSubImage2D(
                 ffi::TEXTURE_2D,

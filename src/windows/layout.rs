@@ -7,6 +7,7 @@ use std::rc::{Rc, Weak};
 
 use smithay::wayland::shell::xdg::ToplevelSurface;
 
+use crate::drawing::CatacombElement;
 use crate::windows::{self, Output, Window};
 
 /// Default layout as const for borrowing purposes.
@@ -396,6 +397,19 @@ impl Layouts {
         }
     }
 
+    /// Add all visible windows' textures to the supplied buffer.
+    pub fn textures(&self, textures: &mut Vec<CatacombElement>, scale: i32) {
+        let layout = self.active();
+
+        if let Some(secondary) = layout.secondary().map(|window| window.borrow()) {
+            secondary.textures(textures, scale, None, None);
+        }
+
+        if let Some(primary) = layout.primary().map(|window| window.borrow()) {
+            primary.textures(textures, scale, None, None);
+        }
+    }
+
     /// Get an iterator over all windows.
     pub fn windows(&self) -> impl Iterator<Item = Ref<Window>> {
         self.layouts
@@ -478,6 +492,13 @@ impl Layout {
     /// Get layout's secondary window.
     pub fn secondary(&self) -> Option<&Rc<RefCell<Window>>> {
         self.secondary.as_ref()
+    }
+
+    /// Get number of visible windows.
+    pub fn window_count(&self) -> usize {
+        let primary_count = if self.primary.is_some() { 1 } else { 0 };
+        let secondary_count = if self.secondary.is_some() { 1 } else { 0 };
+        primary_count + secondary_count
     }
 }
 

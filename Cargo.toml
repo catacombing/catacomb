@@ -11,10 +11,6 @@ edition = "2021"
 [workspace]
 members = ["catacomb_ipc"]
 
-[features]
-# Draw damage debug info overlay.
-debug_damage = []
-
 [dependencies.smithay]
 git = "https://github.com/smithay/smithay"
 default-features = false
@@ -38,3 +34,4 @@ dirs = "4.0.0"
 udev = "0.6.2"
 image = "0.24.5"
 nix = "0.26.2"
+slog = "2.7.0"

@@ -3,28 +3,33 @@
 use std::ops::Deref;
 use std::rc::Rc;
 
+use smithay::backend::renderer::element::utils::{
+    CropRenderElement, Relocate, RelocateRenderElement, RescaleRenderElement,
+};
+use smithay::backend::renderer::element::{Element, Id, RenderElement};
 use smithay::backend::renderer::gles2::{ffi, Gles2Frame, Gles2Renderer, Gles2Texture};
-use smithay::backend::renderer::{self, Frame};
+use smithay::backend::renderer::utils::{CommitCounter, DamageTracker, DamageTrackerSnapshot};
+use smithay::backend::renderer::{self, Frame, Renderer};
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
-use smithay::utils::{Buffer as BufferSpace, Logical, Physical, Point, Rectangle, Size, Transform};
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::utils::{
+    Buffer as BufferSpace, Logical, Physical, Point, Rectangle, Scale, Size, Transform,
+};
 use smithay::wayland::compositor::{
     BufferAssignment, Damage as SurfaceDamage, RectangleKind, SurfaceAttributes,
 };
 
-use crate::geometry::Vector;
-use crate::output::Canvas;
-
-/// Maximum buffer age before damage information is discarded.
-pub const MAX_DAMAGE_AGE: usize = 2;
+use crate::geometry::SubtractRectFast;
+use crate::output::{Canvas, GESTURE_HANDLE_HEIGHT};
 
 /// Color of the hovered overview tiling location highlight.
-const ACTIVE_DROP_TARGET_RGBA: [u8; 4] = [128, 128, 128, 128];
-
-/// Color for the damage debug overlay.
-const DAMAGE_DEBUG_RGBA: [u8; 4] = [255, 0, 255, 64];
+const ACTIVE_DROP_TARGET_RGBA: [u8; 4] = [64, 64, 64, 128];
 
 /// Color of the overview tiling location highlight.
-const DROP_TARGET_RGBA: [u8; 4] = [128, 128, 128, 64];
+const DROP_TARGET_RGBA: [u8; 4] = [32, 32, 32, 64];
+
+/// Relative size of gesture notch to the handle's whole width/height.
+const GESTURE_NOTCH_PERCENTAGE: f64 = 0.2;
 
 /// Cached texture.
 ///
@@ -32,35 +37,67 @@ const DROP_TARGET_RGBA: [u8; 4] = [128, 128, 128, 64];
 /// the surface itself has already died.
 #[derive(Clone, Debug)]
 pub struct Texture {
+    opaque_regions: Vec<Rectangle<i32, Physical>>,
+    tracker: DamageTrackerSnapshot<i32, Physical>,
     location: Point<i32, Logical>,
-    texture: Rc<Gles2Texture>,
     size: Size<i32, Logical>,
+    texture: Gles2Texture,
     transform: Transform,
     scale: i32,
+    id: Id,
 }
 
 impl Texture {
-    pub fn new(texture: Rc<Gles2Texture>, size: impl Into<Size<i32, Logical>>) -> Self {
+    /// Create a texture from an OpenGL texture.
+    pub fn new(texture: Gles2Texture, size: impl Into<Size<i32, Logical>>, opaque: bool) -> Self {
+        // Ensure fully opaque textures are treated as such.
+        let size = size.into();
+        let opaque_regions = if opaque {
+            vec![Rectangle::from_loc_and_size((0, 0), size).to_physical(1)]
+        } else {
+            Vec::new()
+        };
+
         Self {
-            size: size.into(),
-            scale: 1,
+            opaque_regions,
             texture,
+            size,
+            tracker: DamageTrackerSnapshot::empty(),
+            id: Id::new(),
+            scale: 1,
             transform: Default::default(),
             location: Default::default(),
         }
     }
 
+    /// Create a texture from a Wayland surface.
     pub fn from_surface(
-        texture: Rc<Gles2Texture>,
+        texture: Gles2Texture,
         location: impl Into<Point<i32, Logical>>,
         buffer: &CatacombSurfaceData,
+        surface: &WlSurface,
     ) -> Self {
+        let location = location.into();
+
+        // Get surface's opaque region.
+        let mut opaque_regions = Vec::new();
+        for (kind, rect) in &buffer.opaque_region {
+            let rect = rect.to_physical(buffer.scale);
+            match kind {
+                RectangleKind::Add => opaque_regions.push(rect),
+                RectangleKind::Subtract => opaque_regions.subtract_rect(rect),
+            }
+        }
+
         Self {
+            opaque_regions,
+            location,
+            texture,
+            tracker: buffer.damage.tracker.snapshot(),
+            id: Id::from_wayland_resource(surface),
             transform: buffer.transform,
-            location: location.into(),
             scale: buffer.scale,
             size: buffer.size,
-            texture,
         }
     }
 
@@ -70,6 +107,7 @@ impl Texture {
         buffer: &[u8],
         width: i32,
         height: i32,
+        opaque: bool,
     ) -> Self {
         assert!(buffer.len() as i32 >= width * height * 4);
 
@@ -100,93 +138,218 @@ impl Texture {
         let texture =
             unsafe { Gles2Texture::from_raw(renderer, texture_id, (width, height).into()) };
 
-        Texture::new(Rc::new(texture), (width, height))
+        Texture::new(texture, (width, height), opaque)
+    }
+}
+
+/// Newtype to implement element traits on `Rc<Texture>`.
+#[derive(Clone, Debug)]
+pub struct RenderTexture(Rc<Texture>);
+
+impl RenderTexture {
+    pub fn new(texture: Texture) -> Self {
+        Self(Rc::new(texture))
+    }
+}
+
+impl Deref for RenderTexture {
+    type Target = Texture;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Element for RenderTexture {
+    fn id(&self) -> &Id {
+        &self.id
     }
 
-    /// Render the texture at the specified location.
-    ///
-    /// Bounds is an absolute rectangle to which the window's rendering will be
-    /// clipped. Passing `None` will not clamp the window.
-    pub fn draw_at(
+    fn current_commit(&self) -> CommitCounter {
+        self.tracker.current_commit()
+    }
+
+    fn src(&self) -> Rectangle<f64, BufferSpace> {
+        let size = self.size.to_buffer(self.scale, self.transform).to_f64();
+        Rectangle::from_loc_and_size((0., 0.), size)
+    }
+
+    fn geometry(&self, _scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        Rectangle::from_loc_and_size(self.location, self.size).to_physical(self.scale)
+    }
+
+    fn damage_since(
+        &self,
+        scale: Scale<f64>,
+        commit: Option<CommitCounter>,
+    ) -> Vec<Rectangle<i32, Physical>> {
+        self.tracker.damage_since(commit).unwrap_or_else(|| {
+            // Fallback to fully damage.
+            vec![Rectangle::from_loc_and_size((0, 0), self.geometry(scale).size)]
+        })
+    }
+
+    fn opaque_regions(&self, _scale: Scale<f64>) -> Vec<Rectangle<i32, Physical>> {
+        self.opaque_regions.clone()
+    }
+}
+
+impl RenderElement<Gles2Renderer> for RenderTexture {
+    fn draw<'a>(
         &self,
         frame: &mut Gles2Frame,
-        canvas: &Canvas,
-        location: Point<i32, Logical>,
-        bounds: Rectangle<i32, Logical>,
-        scale: f64,
-        damage: impl Into<Option<Rectangle<i32, Physical>>>,
+        src: Rectangle<f64, BufferSpace>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        _log: &slog::Logger,
+    ) -> Result<(), <Gles2Renderer as Renderer>::Error> {
+        frame.render_texture_from_to(&self.texture, src, dst, damage, self.transform, 1.)
+    }
+}
+
+/// Catacomb render element type.
+#[derive(Debug)]
+pub struct CatacombElement(
+    CropRenderElement<RelocateRenderElement<RescaleRenderElement<RenderTexture>>>,
+);
+
+impl CatacombElement {
+    pub fn add_element(
+        textures: &mut Vec<CatacombElement>,
+        texture: RenderTexture,
+        location: impl Into<Point<i32, Physical>>,
+        bounds: impl Into<Option<Rectangle<i32, Physical>>>,
+        window_scale: impl Into<Option<f64>>,
     ) {
-        // Convert destination bounds to texture-relative rectangle.
-        let mut scaled_bounds = bounds;
-        scaled_bounds.loc -= location;
-        scaled_bounds.size = scaled_bounds.size.scale(1. / scale).max((1, 1));
-        scaled_bounds.loc = scaled_bounds.loc.scale(1. / scale);
-        scaled_bounds.loc -= self.location;
+        let bounds = bounds
+            .into()
+            .unwrap_or_else(|| Rectangle::from_loc_and_size((0, 0), (i32::MAX, i32::MAX)));
+        let window_scale = window_scale.into().unwrap_or(1.);
+        let location = location.into();
 
-        // Calculate source texture rectangle.
-        let mut src = Rectangle::from_loc_and_size((0, 0), self.size);
-        src = match src.intersection(scaled_bounds) {
-            Some(src) => src,
-            // Skip rendering when completely outside of bounds.
-            None => return,
-        };
-        let src_buffer = src.to_buffer(self.scale, self.transform, &self.size);
+        let rescaled_element =
+            RescaleRenderElement::from_element(texture, (0, 0).into(), window_scale);
+        let relocated_element =
+            RelocateRenderElement::from_element(rescaled_element, location, Relocate::Relative);
+        let cropped_element = CropRenderElement::from_element(relocated_element, 1., bounds);
 
-        // Calculate destination rectangle.
-        let dst_location = location + (src.loc + self.location).scale(scale);
-        let mut dst = Rectangle::from_loc_and_size(dst_location, src.size.scale(scale));
-        dst = match dst.intersection(bounds) {
-            Some(dst) => dst,
-            // Skip rendering when completely outside of bounds.
-            None => return,
-        };
-        let dst_physical = dst.to_physical(canvas.scale());
-
-        // Calculate surface damage.
-        let full_damage = Rectangle::from_loc_and_size((0, 0), dst_physical.size);
-        let surface_damage = match damage.into() {
-            Some(mut damage) => {
-                damage.loc -= dst_physical.loc;
-                full_damage.intersection(damage)
-            },
-            None => Some(full_damage),
-        };
-
-        // Draw the damaged surface.
-        if let Some(surface_damage) = surface_damage {
-            let _ = frame.render_texture_from_to(
-                &self.texture,
-                src_buffer.to_f64(),
-                dst_physical,
-                &[surface_damage],
-                self.transform,
-                1.,
-            );
+        if let Some(cropped_element) = cropped_element {
+            textures.push(Self(cropped_element));
         }
+    }
+}
+
+impl Element for CatacombElement {
+    fn id(&self) -> &Id {
+        self.0.id()
+    }
+
+    fn current_commit(&self) -> CommitCounter {
+        self.0.current_commit()
+    }
+
+    fn src(&self) -> Rectangle<f64, BufferSpace> {
+        self.0.src()
+    }
+
+    fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        self.0.geometry(scale)
+    }
+
+    fn damage_since(
+        &self,
+        scale: Scale<f64>,
+        commit: Option<CommitCounter>,
+    ) -> Vec<Rectangle<i32, Physical>> {
+        self.0.damage_since(scale, commit)
+    }
+
+    fn opaque_regions(&self, scale: Scale<f64>) -> Vec<Rectangle<i32, Physical>> {
+        self.0.opaque_regions(scale)
+    }
+}
+
+impl RenderElement<Gles2Renderer> for CatacombElement {
+    fn draw<'a>(
+        &self,
+        frame: &mut Gles2Frame,
+        src: Rectangle<f64, BufferSpace>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        log: &slog::Logger,
+    ) -> Result<(), <Gles2Renderer as Renderer>::Error> {
+        self.0.draw(frame, src, dst, damage, log)
     }
 }
 
 /// Grahpics texture cache.
 #[derive(Debug)]
 pub struct Graphics {
-    pub active_drop_target: Texture,
-    pub damage_debug: Texture,
-    pub drop_target: Texture,
+    pub gesture_handle: Option<RenderTexture>,
+    pub active_drop_target: RenderTexture,
+    pub drop_target: RenderTexture,
 }
 
 impl Graphics {
     pub fn new(renderer: &mut Gles2Renderer) -> Self {
-        let active_drop_target = Texture::from_buffer(renderer, &ACTIVE_DROP_TARGET_RGBA, 1, 1);
-        let damage_debug = Texture::from_buffer(renderer, &DAMAGE_DEBUG_RGBA, 1, 1);
-        let drop_target = Texture::from_buffer(renderer, &DROP_TARGET_RGBA, 1, 1);
-        Self { active_drop_target, damage_debug, drop_target }
+        let active_drop_target =
+            Texture::from_buffer(renderer, &ACTIVE_DROP_TARGET_RGBA, 1, 1, false);
+        let drop_target = Texture::from_buffer(renderer, &DROP_TARGET_RGBA, 1, 1, false);
+        Self {
+            active_drop_target: RenderTexture::new(active_drop_target),
+            drop_target: RenderTexture::new(drop_target),
+            gesture_handle: None,
+        }
+    }
+
+    /// Get texture for the gesture handle.
+    pub fn gesture_handle(
+        &mut self,
+        renderer: &mut Gles2Renderer,
+        canvas: &Canvas,
+    ) -> RenderTexture {
+        // Initialize texture or replace it after scale change.
+        let width = canvas.size().to_physical(canvas.scale()).w;
+        let height = GESTURE_HANDLE_HEIGHT * canvas.scale();
+        if self
+            .gesture_handle
+            .as_ref()
+            .map_or(true, |handle| handle.size.w != width || handle.size.h != height)
+        {
+            // Initialize a white buffer with the correct size.
+            let mut buffer = vec![255; (height * width * 4) as usize];
+
+            // Calculate notch size.
+            let notch_height = (height as f64 * GESTURE_NOTCH_PERCENTAGE) as i32;
+            let notch_width = (width as f64 * GESTURE_NOTCH_PERCENTAGE) as i32;
+
+            // Fill everything other than the handle's notch with black pixels.
+            for x in 0..width {
+                for y in 0..height {
+                    if y < (height - notch_height) / 2
+                        || y >= (height + notch_height) / 2
+                        || x < (width - notch_width) / 2
+                        || x >= (width + notch_width) / 2
+                    {
+                        let offset = (y * width + x) as usize * 4;
+                        buffer[offset..offset + 3].copy_from_slice(&[0, 0, 0]);
+                    }
+                }
+            }
+
+            let texture = Texture::from_buffer(renderer, &buffer, width, height, true);
+            self.gesture_handle = Some(RenderTexture(Rc::new(texture)));
+        }
+
+        // SAFETY: The code above ensures the `Option` is `Some`.
+        unsafe { self.gesture_handle.clone().unwrap_unchecked() }
     }
 }
 
 /// Surface data store.
 pub struct CatacombSurfaceData {
     pub opaque_region: Vec<(RectangleKind, Rectangle<i32, Logical>)>,
-    pub texture: Option<Texture>,
+    pub texture: Option<RenderTexture>,
     pub size: Size<i32, Logical>,
     pub buffer: Option<Buffer>,
     pub transform: Transform,
@@ -221,6 +384,7 @@ impl CatacombSurfaceData {
     ) {
         match assignment {
             BufferAssignment::NewBuffer(buffer) => {
+                let old_size = self.size;
                 self.size = renderer::buffer_dimensions(&buffer)
                     .unwrap_or_default()
                     .to_logical(self.scale, self.transform);
@@ -228,6 +392,11 @@ impl CatacombSurfaceData {
                 self.scale = attributes.buffer_scale;
                 self.buffer = Some(Buffer(buffer));
                 self.texture = None;
+
+                // Reset damage on buffer resize.
+                if old_size != self.size {
+                    self.damage.tracker.reset();
+                }
             },
             BufferAssignment::Removed => *self = Self::default(),
         }
@@ -251,7 +420,7 @@ impl CatacombSurfaceData {
                 (buffer, logical)
             },
         };
-        self.damage.logical.push(logical);
+        self.damage.tracker.add([logical.to_physical(self.scale)]);
         self.damage.buffer.push(buffer);
     }
 }
@@ -277,7 +446,7 @@ impl Deref for Buffer {
 #[derive(Default)]
 pub struct Damage {
     buffer: Vec<Rectangle<i32, BufferSpace>>,
-    logical: Vec<Rectangle<i32, Logical>>,
+    tracker: DamageTracker<i32, Physical>,
 }
 
 impl Damage {
@@ -286,14 +455,8 @@ impl Damage {
         self.buffer.as_slice()
     }
 
-    /// Get buffer's damage in logical coordinates.
-    pub fn logical(&self) -> &[Rectangle<i32, Logical>] {
-        &self.logical
-    }
-
     /// Clear all damage.
     pub fn clear(&mut self) {
-        self.logical.clear();
         self.buffer.clear();
     }
 }

@@ -1,14 +1,11 @@
 //! Layer shell windows.
 
-use smithay::backend::renderer::gles2::Gles2Frame;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Logical, Physical, Point, Rectangle};
+use smithay::utils::{Logical, Point};
 use smithay::wayland::shell::wlr_layer::Layer;
 
-use crate::output::Canvas;
 use crate::windows::surface::CatacombLayerSurface;
 use crate::windows::window::Window;
-use crate::windows::OpaqueRegions;
 
 type LayerWindow = Window<CatacombLayerSurface>;
 
@@ -34,83 +31,44 @@ impl Layers {
         }
     }
 
+    /// Get number of layer shell clients.
+    pub fn len(&self) -> usize {
+        self.background.len() + self.bottom.len() + self.top.len() + self.overlay.len()
+    }
+
     /// Iterate over all layer shell windows.
     pub fn iter(&self) -> impl Iterator<Item = &LayerWindow> {
         self.background.iter().chain(&self.bottom).chain(&self.top).chain(&self.overlay)
     }
 
-    /// Iterate mutably over all layer shell windows.
+    /// Iterate mutably over all layer shell windows, top to bottom.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut LayerWindow> {
         self.background
             .iter_mut()
             .chain(&mut self.bottom)
             .chain(&mut self.top)
             .chain(&mut self.overlay)
+            .rev()
     }
 
-    /// Iterate over layer shell background windows, bottom to top.
+    /// Iterate over layer shell background windows, top to bottom.
     pub fn background(&self) -> impl Iterator<Item = &LayerWindow> {
-        self.background.iter().chain(&self.bottom)
+        self.background.iter().chain(&self.bottom).rev()
     }
 
-    /// Iterate over layer shell foreground windows, bottom to top.
+    /// Iterate over layer shell foreground windows, top to bottom.
     pub fn foreground(&self) -> impl Iterator<Item = &LayerWindow> {
-        self.top.iter().chain(&self.overlay)
+        self.top.iter().chain(&self.overlay).rev()
     }
 
-    /// Iterate over layer shell overlay windows, bottom to top.
+    /// Iterate over layer shell overlay windows, top to bottom.
     pub fn overlay(&self) -> impl Iterator<Item = &LayerWindow> {
-        self.overlay.iter()
+        self.overlay.iter().rev()
     }
 
-    /// Iterate over layer shell overlay windows, bottom to top.
+    /// Iterate over layer shell overlay windows, top to bottom.
     pub fn overlay_mut(&mut self) -> impl Iterator<Item = &mut LayerWindow> {
-        self.overlay.iter_mut()
-    }
-
-    /// Draw background/bottom layer windows.
-    pub fn draw_background(
-        &mut self,
-        frame: &mut Gles2Frame,
-        canvas: &Canvas,
-        damage: &[Rectangle<i32, Physical>],
-        opaque_regions: &mut OpaqueRegions,
-    ) {
-        for window in &mut self.background {
-            window.draw(frame, canvas, 1., None, None, damage, &mut *opaque_regions);
-        }
-
-        for window in &mut self.bottom {
-            window.draw(frame, canvas, 1., None, None, damage, &mut *opaque_regions);
-        }
-    }
-
-    /// Draw top/overlay layer windows.
-    pub fn draw_foreground(
-        &mut self,
-        frame: &mut Gles2Frame,
-        canvas: &Canvas,
-        damage: &[Rectangle<i32, Physical>],
-        opaque_regions: &mut OpaqueRegions,
-    ) {
-        for window in &mut self.top {
-            window.draw(frame, canvas, 1., None, None, damage, &mut *opaque_regions);
-        }
-
-        self.draw_overlay(frame, canvas, damage, opaque_regions);
-    }
-
-    /// Draw overlay layer windows.
-    pub fn draw_overlay(
-        &mut self,
-        frame: &mut Gles2Frame,
-        canvas: &Canvas,
-        damage: &[Rectangle<i32, Physical>],
-        opaque_regions: &mut OpaqueRegions,
-    ) {
-        for window in &mut self.overlay {
-            window.draw(frame, canvas, 1., None, None, damage, &mut *opaque_regions);
-        }
+        self.overlay.iter_mut().rev()
     }
 
     /// Request new frames from all layer shell windows.

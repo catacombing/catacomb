@@ -6,7 +6,7 @@ use std::os::unix::io::AsRawFd;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
-use std::{env, fs, mem};
+use std::{env, fs};
 
 use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use _server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as ManagerMode;
@@ -57,7 +57,6 @@ use smithay::{
 };
 
 use crate::delegate_screencopy_manager;
-use crate::drawing::MAX_DAMAGE_AGE;
 use crate::input::{PhysicalButtonState, TouchState};
 use crate::orientation::{Accelerometer, AccelerometerSource};
 use crate::output::Output;
@@ -98,7 +97,6 @@ pub struct Catacomb {
 
     accelerometer_token: RegistrationToken,
     last_focus: Option<WlSurface>,
-    damage: Damage,
 
     // Indicates if rendering was intentionally stalled.
     //
@@ -245,7 +243,6 @@ impl Catacomb {
             terminated: Default::default(),
             sleeping: Default::default(),
             stalled: Default::default(),
-            damage: Default::default(),
         }
     }
 
@@ -268,11 +265,6 @@ impl Catacomb {
         // Update transaction before rendering to update device orientation.
         let transaction_deadline = self.windows.update_transaction();
 
-        // Import all pending buffers and update damage.
-        if let Some(renderer) = self.backend.renderer() {
-            self.windows.import_buffers(renderer);
-        }
-
         // Update surface focus.
         let focus = self.windows.focus();
         if focus != self.last_focus {
@@ -282,7 +274,13 @@ impl Catacomb {
 
         // Redraw only when there is damage present.
         if self.windows.damaged() {
-            self.backend.render(&mut self.windows, &mut self.damage);
+            // Apply pending client updates.
+            if let Some(renderer) = self.backend.renderer() {
+                self.windows.import_buffers(renderer);
+            }
+
+            // Draw all visible clients.
+            self.backend.render(&mut self.windows);
         } else if let Some(deadline) = transaction_deadline {
             // Force a redraw after the transaction has timed out.
             self.backend.schedule_redraw(deadline);
@@ -541,60 +539,3 @@ impl ScreencopyHandler for Catacomb {
 delegate_screencopy_manager!(Catacomb);
 
 delegate_presentation!(Catacomb);
-
-#[derive(Default, Debug)]
-pub struct Damage {
-    /// Combined damage history for all tracked buffer ages.
-    damage: Vec<Rectangle<i32, Physical>>,
-
-    /// Tracked damage rectangles per buffer age.
-    ///
-    /// This must be one bigger than [`MAX_DAMAGE_AGE`], since the last slot is
-    /// reserved for pending damage for the next frame.
-    rects: [usize; MAX_DAMAGE_AGE + 1],
-
-    /// Buffer for storing current damage.
-    ///
-    /// This is used to deduplicate the damage rectangles to prevent excessive
-    /// draw calls.
-    current: Vec<Rectangle<i32, Physical>>,
-}
-
-impl Damage {
-    /// Add pending damage for the next frame.
-    pub fn push(&mut self, damage: Rectangle<i32, Physical>) {
-        self.rects[self.rects.len() - 1] += 1;
-        self.damage.push(damage);
-    }
-
-    /// Calculate damage history since buffer age.
-    ///
-    /// This will also clear the pending damage, pushing it into history and
-    /// preparing the storage for new damage.
-    pub fn take_since(&mut self, buffer_age: u8) -> &[Rectangle<i32, Physical>] {
-        // Move pending damage into history.
-
-        let oldest_rects = mem::take(&mut self.rects[self.rects.len() - 2]);
-        let new_rects = self.rects[self.rects.len() - 1];
-        self.rects.rotate_right(1);
-
-        self.damage.rotate_right(new_rects);
-        self.damage.truncate(self.damage.len() - oldest_rects);
-
-        // Compute rects relevant for current buffer age.
-        let rects = self.rects.iter().take(buffer_age as usize).sum();
-
-        // Optimize damage rectangle count.
-        self.current.clear();
-        for damage in &self.damage[..rects] {
-            // Combine overlapping rects.
-            let overlap = self.current.iter_mut().find(|staged| staged.overlaps(*damage));
-            match overlap {
-                Some(overlap) => *overlap = overlap.merge(*damage),
-                None => self.current.push(*damage),
-            }
-        }
-
-        self.current.as_slice()
-    }
-}

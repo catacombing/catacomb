@@ -5,13 +5,12 @@ use std::cmp;
 use std::rc::{Rc, Weak};
 use std::time::Instant;
 
-use smithay::backend::renderer::gles2::{ffi, Gles2Frame};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use crate::catacomb::Catacomb;
-use crate::drawing::Graphics;
+use crate::drawing::{CatacombElement, Graphics};
 use crate::geometry::Vector;
 use crate::input::HOLD_DURATION;
 use crate::output::{Canvas, Output};
@@ -178,10 +177,10 @@ impl Overview {
         *last_animation_step = Instant::now();
     }
 
-    /// Render the overview.
-    pub fn draw(
+    /// Get textures for rendering the overview.
+    pub fn textures(
         &mut self,
-        frame: &mut Gles2Frame,
+        textures: &mut Vec<CatacombElement>,
         output: &Output,
         canvas: &Canvas,
         layouts: &Layouts,
@@ -213,10 +212,10 @@ impl Overview {
                 let mut bounds = position.bounds;
                 self.handle_closing(output, canvas, layouts, primary, &mut bounds, true);
 
-                let mut primary = primary.borrow_mut();
+                let primary = primary.borrow();
                 let scale = position.scale;
                 let loc = bounds.loc + primary.internal_offset().scale(scale);
-                primary.draw(frame, canvas, scale, loc, bounds, None, None);
+                primary.textures(textures, canvas.scale(), scale, loc);
             }
 
             // Draw the secondary window.
@@ -225,10 +224,10 @@ impl Overview {
                 let mut bounds = position.secondary_bounds();
                 self.handle_closing(output, canvas, layouts, secondary, &mut bounds, false);
 
-                let mut secondary = secondary.borrow_mut();
+                let secondary = secondary.borrow();
                 let scale = position.scale;
                 let loc = bounds.loc + secondary.internal_offset().scale(scale);
-                secondary.draw(frame, canvas, scale, loc, bounds, None, None);
+                secondary.textures(textures, canvas.scale(), scale, loc);
             }
 
             offset += 1.;
@@ -332,38 +331,39 @@ impl DragAndDrop {
         }
     }
 
-    /// Draw the tiling location picker.
-    pub fn draw(&self, frame: &mut Gles2Frame, canvas: &Canvas, graphics: &Graphics) {
-        // Offset by dragged distance.
-        let location = self.start_location + self.window_position.to_i32_round();
-
-        // Render the window being drag-and-dropped.
-        let mut window = self.window.borrow_mut();
-        window.draw(frame, canvas, self.scale, location, None, None, None);
-
-        // Set custom OpenGL blending function.
-        let _ = frame.with_context(|gl| unsafe {
-            gl.BlendFunc(ffi::SRC_ALPHA, ffi::ONE_MINUS_SRC_ALPHA);
-        });
+    /// Get textures for rendering the Drag & Drop view.
+    pub fn textures(
+        &self,
+        textures: &mut Vec<CatacombElement>,
+        canvas: &Canvas,
+        graphics: &Graphics,
+    ) {
+        let scale = canvas.scale();
+        let available = canvas.available_overview().to_physical(scale);
 
         // Get bounds of the drop areas.
         let (primary_bounds, secondary_bounds) = self.drop_bounds(canvas);
 
         // Render the drop areas.
-        let available = canvas.available_overview();
-        let scale = cmp::max(available.size.w, available.size.h) as f64;
+        let area_scale = cmp::max(available.size.w, available.size.h) as f64;
         for bounds in [primary_bounds, secondary_bounds] {
-            if bounds.to_f64().contains(self.touch_position) {
-                graphics.active_drop_target.draw_at(frame, canvas, bounds.loc, bounds, scale, None);
+            // Get correctly colored texture for the drop area.
+            let texture = if bounds.to_f64().contains(self.touch_position) {
+                graphics.active_drop_target.clone()
             } else {
-                graphics.drop_target.draw_at(frame, canvas, bounds.loc, bounds, scale, None);
-            }
+                graphics.drop_target.clone()
+            };
+
+            // Rescale and crop texture to the desired dimensions.
+            let bounds = bounds.to_physical(scale);
+            CatacombElement::add_element(textures, texture, bounds.loc, bounds, area_scale);
         }
 
-        // Reset OpenGL blending function.
-        let _ = frame.with_context(|gl| unsafe {
-            gl.BlendFunc(ffi::ONE, ffi::ONE_MINUS_SRC_ALPHA);
-        });
+        // Offset by dragged distance.
+        let location = self.start_location + self.window_position.to_i32_round();
+
+        // Render the window being drag-and-dropped.
+        self.window.borrow().textures(textures, scale, self.scale, location);
     }
 
     /// Bounds for the drop preview areas of the D&D action.
