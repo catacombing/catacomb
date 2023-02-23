@@ -66,18 +66,6 @@ pub fn run() {
         None,
     );
 
-    // Setup input handling.
-
-    let session = catacomb.backend.session.clone();
-    let mut context = Libinput::new_with_udev::<LibinputSessionInterface<_>>(session.into());
-    context.udev_assign_seat(&catacomb.seat_name).expect("assign seat");
-
-    let input_backend = LibinputInputBackend::new(context, None);
-    event_loop
-        .handle()
-        .insert_source(input_backend, |event, _, catacomb| catacomb.handle_input(event))
-        .expect("insert input source");
-
     // Handle device events.
     event_loop
         .handle()
@@ -142,10 +130,27 @@ impl Udev {
             },
         };
 
+        // Setup input handling.
+
+        let mut context =
+            Libinput::new_with_udev::<LibinputSessionInterface<_>>(session.clone().into());
+        context.udev_assign_seat(&session.seat()).expect("assign seat");
+
+        let input_backend = LibinputInputBackend::new(context.clone(), None);
+        event_loop
+            .insert_source(input_backend, |event, _, catacomb| catacomb.handle_input(event))
+            .expect("insert input source");
+
         // Register notifier for handling session events.
         event_loop
-            .insert_source(notifier, |event, _, catacomb| match event {
-                SessionEvent::ActivateSession => catacomb.create_frame(),
+            .insert_source(notifier, move |event, _, catacomb| match event {
+                SessionEvent::ActivateSession => {
+                    if let Err(err) = context.resume() {
+                        eprintln!("Failed to resume libinput: {err:?}");
+                    }
+
+                    catacomb.create_frame();
+                },
                 SessionEvent::PauseSession => (),
             })
             .expect("insert notifier source");
