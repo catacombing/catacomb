@@ -122,7 +122,7 @@ impl Catacomb {
             .expect("register unix signal source");
 
         // Create and register Wayland socket.
-        let socket_source = ListeningSocketSource::new_auto(None).expect("create Wayland socket");
+        let socket_source = ListeningSocketSource::new_auto().expect("create Wayland socket");
         let socket_name = socket_source.socket_name().to_string_lossy().into_owned();
         event_loop
             .insert_source(socket_source, move |stream, _, catacomb| {
@@ -147,16 +147,16 @@ impl Catacomb {
             .expect("register display");
 
         // Create the compositor and register a surface commit handler.
-        let compositor_state = CompositorState::new::<Self, _>(&display_handle, None);
+        let compositor_state = CompositorState::new::<Self>(&display_handle);
 
         // Setup XDG Shell.
-        let xdg_shell_state = XdgShellState::new::<Self, _>(&display_handle, None);
+        let xdg_shell_state = XdgShellState::new::<Self>(&display_handle);
 
         // Setup layer shell.
-        let layer_shell_state = WlrLayerShellState::new::<Self, _>(&display_handle, None);
+        let layer_shell_state = WlrLayerShellState::new::<Self>(&display_handle);
 
         // Advertise support for rendering from CPU-based shared memory buffers.
-        let shm_state = ShmState::new::<Self, _>(&display_handle, Vec::new(), None);
+        let shm_state = ShmState::new::<Self>(&display_handle, Vec::new());
 
         // Advertise support for rendering GPU-based buffers.
         let dmabuf_state = DmabufState::new();
@@ -165,9 +165,9 @@ impl Catacomb {
         OutputManagerState::new_with_xdg_output::<Self>(&display_handle);
 
         // Force server-side decorations.
-        XdgDecorationState::new::<Self, _>(&display_handle, None);
+        XdgDecorationState::new::<Self>(&display_handle);
         let kde_decoration_state =
-            KdeDecorationState::new::<Self, _>(&display_handle, ManagerMode::Server, None);
+            KdeDecorationState::new::<Self>(&display_handle, ManagerMode::Server);
 
         // Initialize screencopy protocol.
         ScreencopyManagerState::new::<Self>(&display_handle);
@@ -179,7 +179,7 @@ impl Catacomb {
         // Initialize seat.
         let seat_name = backend.seat_name();
         let mut seat_state = SeatState::new();
-        let mut seat = seat_state.new_wl_seat(&display_handle, seat_name.clone(), None);
+        let mut seat = seat_state.new_wl_seat(&display_handle, seat_name.clone());
 
         // Initialize IME and virtual keyboard.
         InputMethodManagerState::new::<Self>(&display_handle);
@@ -188,7 +188,7 @@ impl Catacomb {
         VirtualKeyboardManagerState::new::<Self, _>(&display_handle, |_| true);
 
         // Initialize keyboard/touch/data device.
-        let data_device_state = DataDeviceState::new::<Self, _>(&display_handle, None);
+        let data_device_state = DataDeviceState::new::<Self>(&display_handle);
         seat.add_keyboard(XkbConfig::default(), 200, 25).expect("adding keyboard");
 
         // Initialize touch state.

@@ -52,7 +52,7 @@ pub fn run() {
     let mut catacomb = Catacomb::new(event_loop.handle(), udev);
 
     // Create backend and add presently connected devices.
-    let backend = UdevBackend::new(&catacomb.seat_name, None).expect("init udev");
+    let backend = UdevBackend::new(&catacomb.seat_name).expect("init udev");
     for (_, path) in backend.device_list() {
         add_device(&mut catacomb, path.into());
     }
@@ -60,11 +60,9 @@ pub fn run() {
     // Setup hardware acceleration.
     let output_device = catacomb.backend.output_device.as_ref();
     let formats = output_device.map(|device| device.gles2.dmabuf_formats().copied().collect());
-    catacomb.dmabuf_state.create_global::<Catacomb, _>(
-        &catacomb.display_handle,
-        formats.unwrap_or_default(),
-        None,
-    );
+    catacomb
+        .dmabuf_state
+        .create_global::<Catacomb>(&catacomb.display_handle, formats.unwrap_or_default());
 
     // Handle device events.
     event_loop
@@ -119,7 +117,7 @@ pub struct Udev {
 impl Udev {
     fn new(event_loop: LoopHandle<'static, Catacomb>) -> Self {
         // Initialize the VT session.
-        let (session, notifier) = match LibSeatSession::new(None) {
+        let (session, notifier) = match LibSeatSession::new() {
             Ok(session) => session,
             Err(_) => {
                 eprintln!(
@@ -136,7 +134,7 @@ impl Udev {
             Libinput::new_with_udev::<LibinputSessionInterface<_>>(session.clone().into());
         context.udev_assign_seat(&session.seat()).expect("assign seat");
 
-        let input_backend = LibinputInputBackend::new(context.clone(), None);
+        let input_backend = LibinputInputBackend::new(context.clone());
         event_loop
             .insert_source(input_backend, |event, _, catacomb| catacomb.handle_input(event))
             .expect("insert input source");
@@ -243,15 +241,15 @@ impl Udev {
     ) -> Result<(), Box<dyn Error>> {
         let open_flags = OFlag::O_RDWR | OFlag::O_CLOEXEC | OFlag::O_NOCTTY | OFlag::O_NONBLOCK;
         let fd = self.session.open(&path, open_flags)?;
-        let device_fd = unsafe { DrmDeviceFd::new(DeviceFd::from_raw_fd(fd), None) };
+        let device_fd = unsafe { DrmDeviceFd::new(DeviceFd::from_raw_fd(fd)) };
 
-        let drm = DrmDevice::new(device_fd.clone(), true, None)?;
+        let drm = DrmDevice::new(device_fd.clone(), true)?;
         let gbm = GbmDevice::new(device_fd)?;
 
-        let display = EGLDisplay::new(gbm.clone(), None)?;
-        let context = EGLContext::new(&display, None)?;
+        let display = EGLDisplay::new(gbm.clone())?;
+        let context = EGLContext::new(&display)?;
 
-        let mut gles2 = unsafe { Gles2Renderer::new(context, None).expect("create renderer") };
+        let mut gles2 = unsafe { Gles2Renderer::new(context).expect("create renderer") };
 
         // Initialize GPU for EGL rendering.
         if Some(path) == self.gpu {
@@ -365,7 +363,7 @@ impl Udev {
             .find_map(|surface| {
                 let gbm_flags = GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT;
                 let allocator = GbmAllocator::new(gbm.clone(), gbm_flags);
-                GbmBufferedSurface::new(surface, allocator, formats.clone(), None).ok()
+                GbmBufferedSurface::new(surface, allocator, formats.clone()).ok()
             })?;
 
         let (width, height) = connector_mode.size();
@@ -442,9 +440,7 @@ impl OutputDevice {
 
         // Render all textures.
         let textures = windows.textures(&mut self.gles2, &mut self.graphics);
-        self.renderer
-            .render_output(&mut self.gles2, age as usize, textures, CLEAR_COLOR, None)
-            .unwrap();
+        self.renderer.render_output(&mut self.gles2, age as usize, textures, CLEAR_COLOR).unwrap();
 
         // Queue buffer for rendering.
         self.gbm_surface.queue_buffer(None, ())?;

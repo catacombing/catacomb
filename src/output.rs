@@ -44,7 +44,7 @@ impl Output {
         mode: Mode,
         properties: PhysicalProperties,
     ) -> Self {
-        let output = SmithayOutput::new(name.into(), properties, None);
+        let output = SmithayOutput::new(name.into(), properties);
         let global = Some(output.create_global::<Catacomb>(display));
 
         let mut output =

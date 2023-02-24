@@ -201,7 +201,6 @@ impl RenderElement<Gles2Renderer> for RenderTexture {
         src: Rectangle<f64, BufferSpace>,
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
-        _log: &slog::Logger,
     ) -> Result<(), <Gles2Renderer as Renderer>::Error> {
         frame.render_texture_from_to(&self.texture, src, dst, damage, self.transform, 1.)
     }
@@ -276,9 +275,8 @@ impl RenderElement<Gles2Renderer> for CatacombElement {
         src: Rectangle<f64, BufferSpace>,
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
-        log: &slog::Logger,
     ) -> Result<(), <Gles2Renderer as Renderer>::Error> {
-        self.0.draw(frame, src, dst, damage, log)
+        self.0.draw(frame, src, dst, damage)
     }
 }
 
