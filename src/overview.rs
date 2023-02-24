@@ -49,7 +49,6 @@ const OVERDRAG_LIMIT: f64 = 0.25;
 #[derive(Debug)]
 pub struct Overview {
     pub hold_timer: Option<RegistrationToken>,
-    pub closing_window: Weak<RefCell<Window>>,
     pub last_drag_point: Point<f64, Logical>,
     pub last_animation_step: Option<Instant>,
     pub drag_action: DragAction,
@@ -63,7 +62,6 @@ impl Overview {
             x_offset: active_offset,
             last_animation_step: Default::default(),
             last_drag_point: Default::default(),
-            closing_window: Default::default(),
             drag_action: Default::default(),
             hold_timer: Default::default(),
             y_offset: Default::default(),

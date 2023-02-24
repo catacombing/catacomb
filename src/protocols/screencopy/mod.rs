@@ -1,21 +1,18 @@
 //! wlr-screencopy protocol.
 
-use std::error::Error;
-
 use _screencopy::zwlr_screencopy_frame_v1::ZwlrScreencopyFrameV1;
 use _screencopy::zwlr_screencopy_manager_v1::{Request, ZwlrScreencopyManagerV1};
 #[cfg(feature = "screencopy_dma")]
 use smithay::backend::allocator::Fourcc;
 use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server as _screencopy;
-use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_shm;
 use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
 };
-use smithay::utils::{Physical, Rectangle};
+use smithay::utils::Rectangle;
 
 use crate::output::Output;
-use crate::protocols::screencopy::frame::ScreencopyFrameState;
+use crate::protocols::screencopy::frame::{Screencopy, ScreencopyFrameState};
 
 pub mod frame;
 
@@ -132,13 +129,8 @@ pub trait ScreencopyHandler {
     /// Get the physical size of an output.
     fn output(&mut self) -> &Output;
 
-    /// Copy a region from the framebuffer into the supplied buffer.
-    fn copy(
-        &mut self,
-        buffer: &WlBuffer,
-        region: Rectangle<i32, Physical>,
-        overlay_cursor: bool,
-    ) -> Result<Vec<Rectangle<i32, Physical>>, Box<dyn Error>>;
+    /// Handle new screencopy request.
+    fn frame(&mut self, frame: Screencopy);
 }
 
 #[allow(missing_docs)]

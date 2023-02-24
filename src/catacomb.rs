@@ -1,7 +1,6 @@
 //! Catacomb compositor state.
 
 use std::cell::RefCell;
-use std::error::Error;
 use std::os::unix::io::AsRawFd;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -26,7 +25,7 @@ use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Display, DisplayHandle, Resource};
-use smithay::utils::{Physical, Rectangle, Serial, SERIAL_COUNTER};
+use smithay::utils::{Serial, SERIAL_COUNTER};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{CompositorHandler, CompositorState};
 use smithay::wayland::data_device::{
@@ -60,6 +59,7 @@ use crate::delegate_screencopy_manager;
 use crate::input::{PhysicalButtonState, TouchState};
 use crate::orientation::{Accelerometer, AccelerometerSource};
 use crate::output::Output;
+use crate::protocols::screencopy::frame::Screencopy;
 use crate::protocols::screencopy::{ScreencopyHandler, ScreencopyManagerState};
 use crate::udev::Udev;
 use crate::vibrate::Vibrator;
@@ -280,7 +280,8 @@ impl Catacomb {
             }
 
             // Draw all visible clients.
-            self.backend.render(&mut self.windows);
+            let rendered = self.backend.render(&mut self.windows);
+            self.stalled = !rendered;
         } else if let Some(deadline) = transaction_deadline {
             // Force a redraw after the transaction has timed out.
             self.backend.schedule_redraw(deadline);
@@ -396,6 +397,7 @@ impl DmabufHandler for Catacomb {
         Ok(())
     }
 }
+
 delegate_dmabuf!(Catacomb);
 
 impl XdgShellHandler for Catacomb {
@@ -523,17 +525,12 @@ impl ScreencopyHandler for Catacomb {
         self.windows.output()
     }
 
-    fn copy(
-        &mut self,
-        buffer: &WlBuffer,
-        rect: Rectangle<i32, Physical>,
-        _overlay_cursor: bool,
-    ) -> Result<Vec<Rectangle<i32, Physical>>, Box<dyn Error>> {
-        // Copy the framebuffer to the target buffer.
-        self.backend.copy_framebuffer(buffer, rect)?;
+    fn frame(&mut self, screencopy: Screencopy) {
+        self.backend.request_screencopy(screencopy);
 
-        // Always mark entire buffer as damaged.
-        Ok(vec![rect])
+        // Force redraw, to prevent screencopy stalling.
+        self.windows.dirty = true;
+        self.unstall();
     }
 }
 delegate_screencopy_manager!(Catacomb);

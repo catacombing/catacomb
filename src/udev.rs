@@ -1,21 +1,24 @@
 //! Udev backend.
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::os::unix::io::FromRawFd;
 use std::path::PathBuf;
-use std::process;
 use std::time::Duration;
+use std::{mem, process, ptr};
 
+use _linux_dmabuf::zv1::server::zwp_linux_dmabuf_feedback_v1::TrancheFlags;
 use smithay::backend::allocator::dmabuf::Dmabuf;
-use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
-use smithay::backend::allocator::{Format as DrmFormat, Fourcc, Modifier};
-use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent, GbmBufferedSurface};
+use smithay::backend::allocator::gbm::{GbmAllocator, GbmBuffer, GbmBufferFlags, GbmDevice};
+use smithay::backend::drm::compositor::{DrmCompositor as SmithayDrmCompositor, RenderFrameResult};
+use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent};
 use smithay::backend::egl::context::EGLContext;
 use smithay::backend::egl::display::EGLDisplay;
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::damage::DamageTrackedRenderer;
-use smithay::backend::renderer::gles2::{ffi, Gles2Renderer};
-use smithay::backend::renderer::{self, Bind, BufferType, ImportAll, ImportDma, ImportEgl};
+use smithay::backend::renderer::element::RenderElementStates;
+use smithay::backend::renderer::gles2::{ffi, Gles2Renderbuffer, Gles2Renderer};
+use smithay::backend::renderer::{self, Bind, BufferType, ImportEgl, Offscreen};
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev;
@@ -31,16 +34,19 @@ use smithay::reexports::drm::control::Device;
 use smithay::reexports::input::Libinput;
 use smithay::reexports::nix::fcntl::OFlag;
 use smithay::reexports::nix::sys::stat::dev_t as DeviceId;
+use smithay::reexports::wayland_protocols::wp::linux_dmabuf as _linux_dmabuf;
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_shm;
 use smithay::reexports::wayland_server::DisplayHandle;
-use smithay::utils::{DevPath, DeviceFd, Physical, Rectangle};
-use smithay::wayland::shm;
+use smithay::utils::{DevPath, DeviceFd, Physical, Rectangle, Size, Transform};
+use smithay::wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder};
+use smithay::wayland::{dmabuf, shm};
 
 use crate::catacomb::Catacomb;
-use crate::drawing::Graphics;
+use crate::drawing::{CatacombElement, Graphics};
 use crate::ipc_server;
 use crate::output::Output;
+use crate::protocols::screencopy::frame::Screencopy;
 use crate::windows::Windows;
 
 /// Default background color.
@@ -58,11 +64,11 @@ pub fn run() {
     }
 
     // Setup hardware acceleration.
-    let output_device = catacomb.backend.output_device.as_ref();
-    let formats = output_device.map(|device| device.gles2.dmabuf_formats().copied().collect());
-    catacomb
-        .dmabuf_state
-        .create_global::<Catacomb>(&catacomb.display_handle, formats.unwrap_or_default());
+    let dmabuf_feedback = catacomb.backend.default_dmabuf_feedback().expect("dmabuf feedback");
+    catacomb.dmabuf_state.create_global_with_default_feedback::<Catacomb>(
+        &catacomb.display_handle,
+        &dmabuf_feedback,
+    );
 
     // Handle device events.
     event_loop
@@ -157,8 +163,8 @@ impl Udev {
         let gpu = udev::primary_gpu(session.seat()).ok().flatten();
 
         Self {
-            session,
             event_loop,
+            session,
             gpu,
             scheduled_redraws: Default::default(),
             output_device: Default::default(),
@@ -191,27 +197,20 @@ impl Udev {
     }
 
     /// Render a frame.
-    pub fn render(&mut self, windows: &mut Windows) {
-        if let Some(output_device) = &mut self.output_device {
-            let _ = output_device.render(windows);
-        }
+    ///
+    /// Will return `true` if something was rendered.
+    pub fn render(&mut self, windows: &mut Windows) -> bool {
+        let output_device = match &mut self.output_device {
+            Some(output_device) => output_device,
+            None => return false,
+        };
+
+        output_device.render(windows).unwrap_or(false)
     }
 
     /// Get the current output's renderer.
     pub fn renderer(&mut self) -> Option<&mut Gles2Renderer> {
         self.output_device.as_mut().map(|output_device| &mut output_device.gles2)
-    }
-
-    /// Copy framebuffer region into another buffer.
-    pub fn copy_framebuffer(
-        &mut self,
-        buffer: &WlBuffer,
-        rect: Rectangle<i32, Physical>,
-    ) -> Result<(), Box<dyn Error>> {
-        if let Some(output_device) = &mut self.output_device {
-            output_device.copy_framebuffer(buffer, rect)?;
-        }
-        Ok(())
     }
 
     /// Request a redraw once `duration` has passed.
@@ -233,6 +232,25 @@ impl Udev {
         }
     }
 
+    /// Stage a screencopy request for the next frame.
+    pub fn request_screencopy(&mut self, screencopy: Screencopy) {
+        let output_device = match &mut self.output_device {
+            Some(output_device) => output_device,
+            None => return,
+        };
+
+        // Stage new screencopy.
+        output_device.screencopy = Some(screencopy);
+    }
+
+    /// Default dma surface feedback.
+    fn default_dmabuf_feedback(&self) -> Result<DmabufFeedback, Box<dyn Error>> {
+        match &self.output_device {
+            Some(output_device) => output_device.default_dmabuf_feedback(),
+            None => Err("missing output device".into()),
+        }
+    }
+
     fn add_device(
         &mut self,
         display_handle: &DisplayHandle,
@@ -243,7 +261,7 @@ impl Udev {
         let fd = self.session.open(&path, open_flags)?;
         let device_fd = unsafe { DrmDeviceFd::new(DeviceFd::from_raw_fd(fd)) };
 
-        let drm = DrmDevice::new(device_fd.clone(), true)?;
+        let (drm, drm_notifier) = DrmDevice::new(device_fd.clone(), true)?;
         let gbm = GbmDevice::new(device_fd)?;
 
         let display = EGLDisplay::new(gbm.clone())?;
@@ -256,46 +274,54 @@ impl Udev {
             let _ = gles2.bind_wl_display(display_handle);
         }
 
-        // Create the surface we will render to.
-        let gbm_surface = self
-            .create_gbm_surface(display_handle, windows, &gles2, &drm, &gbm)
-            .ok_or("gbm surface")?;
+        // Create the DRM compositor.
+        let drm_compositor = self
+            .create_drm_compositor(display_handle, windows, &gles2, &drm, &gbm)
+            .ok_or("drm compositor")?;
 
         // Listen for VBlanks.
         let device_id = drm.device_id();
-        let dispatcher = Dispatcher::new(drm, move |event, metadata, catacomb: &mut Catacomb| {
-            match event {
-                DrmEvent::VBlank(_crtc) => {
-                    if let Some(output_device) = &mut catacomb.backend.output_device {
+        let dispatcher =
+            Dispatcher::new(drm_notifier, move |event, metadata, catacomb: &mut Catacomb| {
+                match event {
+                    DrmEvent::VBlank(_crtc) => {
+                        let output_device = match &mut catacomb.backend.output_device {
+                            Some(output_device) => output_device,
+                            None => return,
+                        };
+
                         // Mark the last frame as submitted.
-                        let _ = output_device.gbm_surface.frame_submitted();
+                        let _ = output_device.drm_compositor.frame_submitted();
 
-                        // Send presentation-time feedback.
-                        catacomb.windows.mark_presented(metadata);
-                    }
+                        // Send presentation time feedback.
+                        catacomb
+                            .windows
+                            .mark_presented(&output_device.last_render_states, metadata);
 
-                    catacomb.create_frame();
-                },
-                DrmEvent::Error(error) => eprintln!("DRM error: {error}"),
-            };
-        });
+                        // Draw the next frame.
+                        catacomb.create_frame();
+                    },
+                    DrmEvent::Error(error) => eprintln!("DRM error: {error}"),
+                };
+            });
         let token = self.event_loop.register_dispatcher(dispatcher.clone())?;
 
         // Create OpenGL textures.
         let graphics = Graphics::new(&mut gles2);
 
-        // Create Smithay element renderer.
-        let renderer = DamageTrackedRenderer::from_output(windows.output().smithay_output());
+        // Initialize last render state as empty.
+        let last_render_states = RenderElementStates { states: HashMap::new() };
 
         self.output_device = Some(OutputDevice {
-            gbm_surface,
+            last_render_states,
+            drm_compositor,
             graphics,
-            renderer,
             gles2,
             token,
             gbm,
-            drm: dispatcher,
+            drm,
             id: device_id,
+            screencopy: Default::default(),
         });
 
         Ok(())
@@ -329,17 +355,16 @@ impl Udev {
         Ok(())
     }
 
-    /// Create a new GBM surface for a device.
-    fn create_gbm_surface(
+    /// Create the DRM compositor.
+    fn create_drm_compositor(
         &mut self,
         display: &DisplayHandle,
         windows: &mut Windows,
         gles2: &Gles2Renderer,
         drm: &DrmDevice,
         gbm: &GbmDevice<DrmDeviceFd>,
-    ) -> Option<GbmBufferedSurface<GbmAllocator<DrmDeviceFd>, ()>> {
-        let mut formats = Bind::<Dmabuf>::supported_formats(gles2)?;
-        formats.insert(DrmFormat { code: Fourcc::Argb8888, modifier: Modifier::Linear });
+    ) -> Option<DrmCompositor> {
+        let formats = Bind::<Dmabuf>::supported_formats(gles2)?;
         let resources = drm.resource_handles().ok()?;
 
         // Find the first connected output port.
@@ -355,22 +380,32 @@ impl Udev {
             .encoders()
             .iter()
             .flat_map(|handle| drm.get_encoder(*handle))
-            // Get all CRTCs compatible with the encoder.
-            .flat_map(|encoder| resources.filter_crtcs(encoder.possible_crtcs()))
+            // Find the ideal CRTC.
+            .flat_map(|encoder| {
+                // Get all CRTCs compatible with the encoder.
+                let mut crtcs = resources.filter_crtcs(encoder.possible_crtcs());
+
+                // Sort by maximum number of overlay planes.
+                crtcs.sort_by_cached_key(|crtc| {
+                    drm.planes(crtc).map_or(0, |planes| -(planes.overlay.len() as isize))
+                });
+
+                crtcs
+            })
             // Try to create a DRM surface.
-            .flat_map(|crtc| drm.create_surface(crtc, connector_mode, &[connector.handle()]))
-            // Yield the first successful GBM buffer creation.
-            .find_map(|surface| {
-                let gbm_flags = GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT;
-                let allocator = GbmAllocator::new(gbm.clone(), gbm_flags);
-                GbmBufferedSurface::new(surface, allocator, formats.clone()).ok()
-            })?;
+            .find_map(|crtc| drm.create_surface(crtc, connector_mode, &[connector.handle()]).ok())?;
+
+        // Create GBM allocator.
+        let gbm_flags = GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT;
+        let allocator = GbmAllocator::new(gbm.clone(), gbm_flags);
 
         let (width, height) = connector_mode.size();
         let mode = Mode {
             size: (width as i32, height as i32).into(),
             refresh: connector_mode.vrefresh() as i32 * 1000,
         };
+
+        // Update the output mode.
 
         let (physical_width, physical_height) = connector.size().unwrap_or((0, 0));
         let output_name = format!("{:?}", connector.interface());
@@ -382,18 +417,30 @@ impl Udev {
             make: "Catacomb".into(),
         }));
 
-        Some(surface)
+        // Create the compositor.
+        DrmCompositor::new(
+            windows.output().smithay_output(),
+            surface,
+            None,
+            allocator,
+            gbm.clone(),
+            formats,
+            Size::default(),
+            None,
+        )
+        .ok()
     }
 }
 
 /// Target device for rendering.
 pub struct OutputDevice {
-    gbm_surface: GbmBufferedSurface<GbmAllocator<DrmDeviceFd>, ()>,
-    drm: Dispatcher<'static, DrmDevice, Catacomb>,
-    renderer: DamageTrackedRenderer,
+    last_render_states: RenderElementStates,
+    screencopy: Option<Screencopy>,
+    drm_compositor: DrmCompositor,
     gbm: GbmDevice<DrmDeviceFd>,
     gles2: Gles2Renderer,
     graphics: Graphics,
+    drm: DrmDevice,
     id: DeviceId,
 
     token: RegistrationToken,
@@ -401,17 +448,16 @@ pub struct OutputDevice {
 
 impl OutputDevice {
     /// Get DRM property handle.
-    pub fn get_drm_property(&self, name: &str) -> Option<PropertyHandle> {
-        let crtc = self.gbm_surface.crtc();
-        let drm = self.drm.as_source_ref();
+    fn get_drm_property(&self, name: &str) -> Option<PropertyHandle> {
+        let crtc = self.drm_compositor.crtc();
 
         // Get all available properties.
-        let properties = drm.get_properties(crtc).ok()?;
+        let properties = self.drm.get_properties(crtc).ok()?;
         let (property_handles, _) = properties.as_props_and_values();
 
         // Find property matching the requested name.
         property_handles.iter().find_map(|handle| {
-            let property_info = drm.get_property(*handle).ok()?;
+            let property_info = self.drm.get_property(*handle).ok()?;
             let property_name = property_info.name().to_str().ok()?;
 
             (property_name == name).then_some(*handle)
@@ -425,57 +471,108 @@ impl OutputDevice {
             None => return,
         };
 
-        let crtc = self.gbm_surface.crtc();
-        let drm = self.drm.as_source_ref();
+        let crtc = self.drm_compositor.crtc();
 
         let value = PropertyValue::Boolean(enabled);
-        let _ = drm.set_property(crtc, property, value.into());
+        let _ = self.drm.set_property(crtc, property, value.into());
     }
 
     /// Render a frame.
-    fn render(&mut self, windows: &mut Windows) -> Result<(), Box<dyn Error>> {
-        // Bind the next buffer to render into.
-        let (dmabuf, age) = self.gbm_surface.next_buffer()?;
-        self.gles2.bind(dmabuf)?;
-
-        // Render all textures.
+    ///
+    /// Will return `true` if something was rendered.
+    fn render(&mut self, windows: &mut Windows) -> Result<bool, Box<dyn Error>> {
         let textures = windows.textures(&mut self.gles2, &mut self.graphics);
-        self.renderer.render_output(&mut self.gles2, age as usize, textures, CLEAR_COLOR).unwrap();
+        let mut frame_result = self.drm_compositor.render_frame::<_, _, Gles2Renderbuffer>(
+            &mut self.gles2,
+            textures,
+            CLEAR_COLOR,
+        )?;
+        let rendered = frame_result.damage.is_some();
 
-        // Queue buffer for rendering.
-        self.gbm_surface.queue_buffer(None, ())?;
+        // TODO: Replace with `mem::take` once smithay/smithay#920 is merged.
+        //
+        // Update last render states.
+        self.last_render_states =
+            RenderElementStates { states: mem::take(&mut frame_result.states.states) };
+
+        // Copy framebuffer for screencopy.
+        if let Some(mut screencopy) = self.screencopy.take() {
+            // Mark entire buffer as damaged.
+            let region = screencopy.region();
+            let damage = [Rectangle::from_loc_and_size((0, 0), region.size)];
+            screencopy.damage(&damage);
+
+            let buffer = screencopy.buffer();
+            if let Ok(dmabuf) = dmabuf::get_dmabuf(buffer) {
+                Self::copy_framebuffer_dma(&mut self.gles2, &frame_result, region, dmabuf)?;
+            } else {
+                // Ignore unknown buffer types.
+                let buffer_type = renderer::buffer_type(buffer);
+                if !matches!(buffer_type, Some(BufferType::Shm)) {
+                    return Err(format!("unsupported buffer format: {buffer_type:?}").into());
+                }
+
+                self.copy_framebuffer_shm(windows, region, buffer)?;
+            }
+
+            // Mark screencopy frame as successful.
+            screencopy.submit();
+        }
+
+        // Skip frame submission if everything used direct scanout.
+        if rendered {
+            self.drm_compositor.queue_frame(())?;
+        }
+
+        Ok(rendered)
+    }
+
+    /// Copy a region of the framebuffer to a DMA buffer.
+    fn copy_framebuffer_dma(
+        gles2: &mut Gles2Renderer,
+        frame_result: &RenderFrameResult<GbmBuffer<()>, CatacombElement>,
+        region: Rectangle<i32, Physical>,
+        buffer: Dmabuf,
+    ) -> Result<(), Box<dyn Error>> {
+        // Bind the screencopy buffer as render target.
+        gles2.bind(buffer)?;
+
+        // Blit the framebuffer into the target buffer.
+        let damage = [Rectangle::from_loc_and_size((0, 0), region.size)];
+        frame_result.blit_frame_result(region.size, Transform::Normal, 1., gles2, damage, [])?;
 
         Ok(())
     }
 
-    /// Copy framebuffer region into a Wayland buffer.
-    fn copy_framebuffer(
-        &mut self,
-        buffer: &WlBuffer,
-        rect: Rectangle<i32, Physical>,
-    ) -> Result<(), Box<dyn Error>> {
-        match renderer::buffer_type(buffer) {
-            Some(BufferType::Shm) => self.copy_framebuffer_shm(buffer, rect),
-            Some(BufferType::Dma) => self.copy_framebuffer_dma(buffer, rect),
-            Some(format) => Err(format!("unsupported buffer format: {format:?}").into()),
-            None => Err("invalid target buffer".into()),
-        }
-    }
-
-    /// Copy framebuffer region into a SHM buffer.
-    #[allow(clippy::identity_op)]
+    /// Copy a region of the framebuffer to an SHM buffer.
     fn copy_framebuffer_shm(
         &mut self,
+        windows: &mut Windows,
+        region: Rectangle<i32, Physical>,
         buffer: &WlBuffer,
-        rect: Rectangle<i32, Physical>,
     ) -> Result<(), Box<dyn Error>> {
+        // Create offscreen buffer for rendering.
+        let buffer_dimensions = renderer::buffer_dimensions(buffer).unwrap();
+        let offscreen_buffer: Gles2Renderbuffer = self.gles2.create_buffer(buffer_dimensions)?;
+
+        // Bind the offscreen buffer for rendering.
+        self.gles2.bind(offscreen_buffer)?;
+
+        // Create a renderer which doesn't use DRM planes.
+        let output = windows.output().smithay_output();
+        let mut renderer = DamageTrackedRenderer::from_output(output);
+
+        // Render everything to the offscreen buffer.
+        let textures = windows.textures(&mut self.gles2, &mut self.graphics);
+        renderer.render_output(&mut self.gles2, 0, textures, CLEAR_COLOR)?;
+
         // Manually copy array to SHM buffer to account for stride.
-        shm::with_buffer_contents_mut(buffer, |shm_buffer, buffer_data| {
+        shm::with_buffer_contents_mut(buffer, |shm_buffer, shm_len, buffer_data| {
             // Ensure buffer is in an acceptable format.
             if buffer_data.format != wl_shm::Format::Argb8888
-                || buffer_data.stride != rect.size.w * 4
-                || buffer_data.height != rect.size.h
-                || shm_buffer.len() as i32 != buffer_data.stride * buffer_data.height
+                || buffer_data.stride != region.size.w * 4
+                || buffer_data.height != region.size.h
+                || shm_len as i32 != buffer_data.stride * buffer_data.height
             {
                 return Err::<(), Box<dyn Error>>("Invalid buffer format".into());
             }
@@ -483,50 +580,62 @@ impl OutputDevice {
             // Copy framebuffer data to the SHM buffer.
             self.gles2.with_context(|gl| unsafe {
                 gl.ReadPixels(
-                    rect.loc.x,
-                    rect.loc.y,
-                    rect.size.w,
-                    rect.size.h,
+                    region.loc.x,
+                    region.loc.y,
+                    region.size.w,
+                    region.size.h,
                     ffi::RGBA,
                     ffi::UNSIGNED_BYTE,
-                    shm_buffer.as_mut_ptr().cast(),
+                    shm_buffer.cast(),
                 );
             })?;
 
             // Convert OpenGL's RGBA to ARGB.
-            for i in 0..(rect.size.w * rect.size.h) as usize {
-                shm_buffer.swap(i * 4, i * 4 + 2);
+            for i in 0..(region.size.w * region.size.h) as usize {
+                unsafe {
+                    let src = shm_buffer.offset(i as isize * 4);
+                    let dst = shm_buffer.offset(i as isize * 4 + 2);
+                    ptr::swap(src, dst);
+                }
             }
 
             Ok(())
-        })?
-    }
-
-    /// Copy framebuffer region into a DMA buffer.
-    fn copy_framebuffer_dma(
-        &mut self,
-        buffer: &WlBuffer,
-        rect: Rectangle<i32, Physical>,
-    ) -> Result<(), Box<dyn Error>> {
-        let buffer_size = renderer::buffer_dimensions(buffer).ok_or("unexpected buffer type")?;
-        let damage = [Rectangle::from_loc_and_size((0, 0), buffer_size)];
-        let texture =
-            self.gles2.import_buffer(buffer, None, &damage).ok_or("unexpected buffer type")??;
-
-        self.gles2.with_context(|gl| unsafe {
-            gl.BindTexture(ffi::TEXTURE_2D, texture.tex_id());
-            gl.CopyTexSubImage2D(
-                ffi::TEXTURE_2D,
-                0,
-                0,
-                0,
-                rect.loc.x,
-                rect.loc.y,
-                rect.size.w,
-                rect.size.h,
-            );
-        })?;
+        })??;
 
         Ok(())
     }
+
+    /// Default dma surface feedback.
+    fn default_dmabuf_feedback(&self) -> Result<DmabufFeedback, Box<dyn Error>> {
+        // Get planes for the DRM surface.
+        let surface = self.drm_compositor.surface();
+        let planes = surface.planes()?;
+
+        // Get supported plane formats.
+        let primary_formats = surface.supported_formats(planes.primary.handle)?;
+        let overlay_planes = planes.overlay.iter();
+        let overlay_formats =
+            overlay_planes.flat_map(|plane| surface.supported_formats(plane.handle)).flatten();
+
+        // Setup feedback builder.
+        let gbm_id = self.gbm.dev_id()?;
+        let dmabuf_formats = Bind::<Dmabuf>::supported_formats(&self.gles2).unwrap();
+        let feedback_builder = DmabufFeedbackBuilder::new(gbm_id, dmabuf_formats);
+
+        // Create default feedback preference.
+        let surface_id = surface.device_fd().dev_id()?;
+        let flags = Some(TrancheFlags::Scanout);
+        let feedback = feedback_builder
+            // Ideally pick a format which can be scanned out on an overlay plane.
+            .add_preference_tranche(surface_id, flags, overlay_formats)
+            // Fallback to primary formats, still supporting direct scanout in fullscreen.
+            .add_preference_tranche(surface_id, flags, primary_formats)
+            .build()?;
+
+        Ok(feedback)
+    }
 }
+
+/// DRM compositor type alias.
+type DrmCompositor =
+    SmithayDrmCompositor<GbmAllocator<DrmDeviceFd>, GbmDevice<DrmDeviceFd>, (), DrmDeviceFd>;

@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use smithay::backend::drm::DrmEventMetadata;
+use smithay::backend::renderer::element::RenderElementStates;
 use smithay::backend::renderer::gles2::Gles2Renderer;
 use smithay::reexports::calloop::LoopHandle;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
@@ -59,6 +60,9 @@ pub fn start_transaction() {
 /// Container tracking all known clients.
 #[derive(Debug)]
 pub struct Windows {
+    /// Client-independent damage.
+    pub dirty: bool,
+
     orphan_popups: Vec<Window<PopupSurface>>,
     layouts: Layouts,
     layers: Layers,
@@ -82,9 +86,6 @@ pub struct Windows {
     /// Orientation independent from [`Windows::orientation_locked`] state.
     unlocked_orientation: Orientation,
     orientation_locked: bool,
-
-    /// Client-independent damage.
-    dirty: bool,
 }
 
 impl Windows {
@@ -330,15 +331,19 @@ impl Windows {
     }
 
     /// Mark all rendered clients as presented for `wp_presentation`.
-    pub fn mark_presented(&mut self, metadata: &Option<DrmEventMetadata>) {
+    pub fn mark_presented(
+        &mut self,
+        states: &RenderElementStates,
+        metadata: &Option<DrmEventMetadata>,
+    ) {
         // Update XDG client presentation time.
         for mut window in self.layouts.windows_mut() {
-            window.mark_presented(metadata, &self.output, &self.start_time);
+            window.mark_presented(states, metadata, &self.output, &self.start_time);
         }
 
         // Update layer-shell client presentation time.
         for layer in self.layers.iter_mut() {
-            layer.mark_presented(metadata, &self.output, &self.start_time);
+            layer.mark_presented(states, metadata, &self.output, &self.start_time);
         }
     }
 

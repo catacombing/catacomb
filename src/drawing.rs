@@ -6,11 +6,12 @@ use std::rc::Rc;
 use smithay::backend::renderer::element::utils::{
     CropRenderElement, Relocate, RelocateRenderElement, RescaleRenderElement,
 };
-use smithay::backend::renderer::element::{Element, Id, RenderElement};
+use smithay::backend::renderer::element::{Element, Id, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles2::{ffi, Gles2Frame, Gles2Renderer, Gles2Texture};
-use smithay::backend::renderer::utils::{CommitCounter, DamageTracker, DamageTrackerSnapshot};
+use smithay::backend::renderer::utils::{
+    Buffer, CommitCounter, DamageTracker, DamageTrackerSnapshot,
+};
 use smithay::backend::renderer::{self, Frame, Renderer};
-use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{
     Buffer as BufferSpace, Logical, Physical, Point, Rectangle, Scale, Size, Transform,
@@ -41,6 +42,7 @@ pub struct Texture {
     tracker: DamageTrackerSnapshot<i32, Physical>,
     location: Point<i32, Logical>,
     size: Size<i32, Logical>,
+    buffer: Option<Buffer>,
     texture: Gles2Texture,
     transform: Transform,
     scale: i32,
@@ -67,6 +69,7 @@ impl Texture {
             scale: 1,
             transform: Default::default(),
             location: Default::default(),
+            buffer: Default::default(),
         }
     }
 
@@ -94,9 +97,10 @@ impl Texture {
             location,
             texture,
             tracker: buffer.damage.tracker.snapshot(),
-            id: Id::from_wayland_resource(surface),
+            buffer: buffer.buffer.clone(),
             transform: buffer.transform,
             scale: buffer.scale,
+            id: surface.into(),
             size: buffer.size,
         }
     }
@@ -204,6 +208,10 @@ impl RenderElement<Gles2Renderer> for RenderTexture {
     ) -> Result<(), <Gles2Renderer as Renderer>::Error> {
         frame.render_texture_from_to(&self.texture, src, dst, damage, self.transform, 1.)
     }
+
+    fn underlying_storage(&self, _renderer: &mut Gles2Renderer) -> Option<UnderlyingStorage> {
+        self.buffer.clone().map(UnderlyingStorage::Wayland)
+    }
 }
 
 /// Catacomb render element type.
@@ -277,6 +285,10 @@ impl RenderElement<Gles2Renderer> for CatacombElement {
         damage: &[Rectangle<i32, Physical>],
     ) -> Result<(), <Gles2Renderer as Renderer>::Error> {
         self.0.draw(frame, src, dst, damage)
+    }
+
+    fn underlying_storage(&self, renderer: &mut Gles2Renderer) -> Option<UnderlyingStorage> {
+        self.0.underlying_storage(renderer)
     }
 }
 
@@ -388,7 +400,7 @@ impl CatacombSurfaceData {
                     .to_logical(self.scale, self.transform);
                 self.transform = attributes.buffer_transform.into();
                 self.scale = attributes.buffer_scale;
-                self.buffer = Some(Buffer(buffer));
+                self.buffer = Some(Buffer::from(buffer));
                 self.texture = None;
 
                 // Reset damage on buffer resize.
@@ -420,23 +432,6 @@ impl CatacombSurfaceData {
         };
         self.damage.tracker.add([logical.to_physical(self.scale)]);
         self.damage.buffer.push(buffer);
-    }
-}
-
-/// Container for automatically releasing a buffer on drop.
-pub struct Buffer(WlBuffer);
-
-impl Drop for Buffer {
-    fn drop(&mut self) {
-        self.0.release();
-    }
-}
-
-impl Deref for Buffer {
-    type Target = WlBuffer;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
 

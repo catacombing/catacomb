@@ -2,7 +2,7 @@
 
 use std::fs::File;
 use std::io::Write;
-use std::os::fd::AsRawFd;
+use std::os::unix::io::AsRawFd;
 use std::time::Duration;
 use std::{fmt, mem, slice};
 

@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use _presentation_time::wp_presentation_feedback::Kind as FeedbackKind;
 use smithay::backend::drm::{DrmEventMetadata, DrmEventTime};
+use smithay::backend::renderer::element::{RenderElementPresentationState, RenderElementStates};
 use smithay::backend::renderer::gles2::Gles2Renderer;
 use smithay::backend::renderer::{self, BufferType, ImportAll};
 use smithay::reexports::wayland_protocols::wp::presentation_time::server as _presentation_time;
@@ -63,7 +64,7 @@ pub struct Window<S = ToplevelSurface> {
     popups: Vec<Window<PopupSurface>>,
 
     /// Pending wp_presentation callbacks.
-    presentation_callbacks: Vec<PresentationFeedbackCallback>,
+    presentation_callbacks: Vec<PresentationCallback>,
 
     /// Window liveliness override.
     dead: bool,
@@ -247,7 +248,10 @@ impl<S: Surface + 'static> Window<S> {
                 // Stage presentation callbacks for submission.
                 let mut feedback_state =
                     surface_data.cached_state.current::<PresentationFeedbackCachedState>();
-                self.presentation_callbacks.append(&mut feedback_state.callbacks);
+                for callback in feedback_state.callbacks.drain(..) {
+                    let callback = PresentationCallback::new(surface.clone(), callback);
+                    self.presentation_callbacks.push(callback);
+                }
 
                 // Retrieve buffer damage.
                 let damage = data.damage.buffer();
@@ -301,6 +305,7 @@ impl<S: Surface + 'static> Window<S> {
     /// Mark all rendered clients as presented for `wp_presentation`.
     pub fn mark_presented(
         &mut self,
+        states: &RenderElementStates,
         metadata: &Option<DrmEventMetadata>,
         output: &Output,
         start_time: &Instant,
@@ -328,7 +333,13 @@ impl<S: Surface + 'static> Window<S> {
             None => (start_time.elapsed(), FeedbackKind::Vsync),
         };
 
-        for callback in self.presentation_callbacks.drain(..) {
+        for PresentationCallback { callback, surface } in self.presentation_callbacks.drain(..) {
+            // Set zero-copy flag if direct scanout was used.
+            let zero_copy = states.element_render_state(&surface).map_or(false, |states| {
+                states.presentation_state == RenderElementPresentationState::ZeroCopy
+            });
+            let flags = if zero_copy { FeedbackKind::ZeroCopy } else { flags };
+
             callback.presented(output, time, refresh, seq as u64, flags);
         }
     }
@@ -715,5 +726,18 @@ impl TextureCache {
     /// Get the size of the cached texture.
     fn size(&self) -> Size<i32, Logical> {
         self.geometry_size.unwrap_or(self.texture_size)
+    }
+}
+
+/// Surface callback for wp_presentation_time.
+#[derive(Debug)]
+struct PresentationCallback {
+    callback: PresentationFeedbackCallback,
+    surface: WlSurface,
+}
+
+impl PresentationCallback {
+    fn new(surface: WlSurface, callback: PresentationFeedbackCallback) -> Self {
+        Self { callback, surface }
     }
 }
