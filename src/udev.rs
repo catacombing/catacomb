@@ -15,10 +15,11 @@ use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent};
 use smithay::backend::egl::context::EGLContext;
 use smithay::backend::egl::display::EGLDisplay;
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
-use smithay::backend::renderer::damage::DamageTrackedRenderer;
 use smithay::backend::renderer::element::RenderElementStates;
 use smithay::backend::renderer::gles2::{ffi, Gles2Renderbuffer, Gles2Renderer};
-use smithay::backend::renderer::{self, Bind, BufferType, ImportEgl, Offscreen};
+use smithay::backend::renderer::{
+    self, utils, Bind, BufferType, Frame, ImportEgl, Offscreen, Renderer,
+};
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev;
@@ -551,24 +552,34 @@ impl OutputDevice {
         region: Rectangle<i32, Physical>,
         buffer: &WlBuffer,
     ) -> Result<(), Box<dyn Error>> {
-        // Create offscreen buffer for rendering.
+        // Create and bind an offscreen render buffer.
         let buffer_dimensions = renderer::buffer_dimensions(buffer).unwrap();
         let offscreen_buffer: Gles2Renderbuffer = self.gles2.create_buffer(buffer_dimensions)?;
-
-        // Bind the offscreen buffer for rendering.
         self.gles2.bind(offscreen_buffer)?;
 
-        // Create a renderer which doesn't use DRM planes.
-        let output = windows.output().smithay_output();
-        let mut renderer = DamageTrackedRenderer::from_output(output);
+        let output = windows.output();
+        let output_size = output.physical_resolution();
+        let transform = output.orientation().output_transform();
+
+        // Calculate drawing area after output transform.
+        let damage = transform.transform_rect_in(region, &output_size);
+
+        // Collect textures for rendering.
+        let textures = windows.textures(&mut self.gles2, &mut self.graphics);
+
+        // Initialize the buffer to our clear color.
+        let mut frame = self.gles2.render(output_size, transform)?;
+        frame.clear(CLEAR_COLOR, &[damage])?;
 
         // Render everything to the offscreen buffer.
-        let textures = windows.textures(&mut self.gles2, &mut self.graphics);
-        renderer.render_output(&mut self.gles2, 0, textures, CLEAR_COLOR)?;
+        utils::draw_render_elements(&mut frame, 1., textures, &[damage])?;
 
-        // Manually copy array to SHM buffer to account for stride.
+        // Ensure rendering was fully completed.
+        frame.finish()?;
+
+        // Copy offscreen buffer's content to the SHM buffer.
         shm::with_buffer_contents_mut(buffer, |shm_buffer, shm_len, buffer_data| {
-            // Ensure buffer is in an acceptable format.
+            // Ensure SHM buffer is in an acceptable format.
             if buffer_data.format != wl_shm::Format::Argb8888
                 || buffer_data.stride != region.size.w * 4
                 || buffer_data.height != region.size.h
@@ -600,9 +611,7 @@ impl OutputDevice {
             }
 
             Ok(())
-        })??;
-
-        Ok(())
+        })?
     }
 
     /// Default dma surface feedback.
