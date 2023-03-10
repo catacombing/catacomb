@@ -157,7 +157,7 @@ impl Windows {
 
         // Handle XDG surface commits.
         if let Some(mut window) = find_window!(self.layouts.windows_mut()) {
-            window.surface_commit_common(surface, &self.output);
+            window.surface_commit_common(surface);
             return;
         }
 
@@ -166,7 +166,7 @@ impl Windows {
 
         // Apply popup surface commits.
         for mut window in self.layouts.windows_mut() {
-            if window.popup_surface_commit(&root_surface, surface, &self.output) {
+            if window.popup_surface_commit(&root_surface, surface) {
                 // Abort as soon as we found the parent.
                 return;
             }

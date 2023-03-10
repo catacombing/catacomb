@@ -417,7 +417,7 @@ impl<S: Surface + 'static> Window<S> {
     }
 
     /// Handle common surface commit logic for surfaces of any kind.
-    pub fn surface_commit_common(&mut self, surface: &WlSurface, output: &Output) {
+    pub fn surface_commit_common(&mut self, surface: &WlSurface) {
         // Cancel transactions on the commit after the configure was acked.
         self.acked_size = self.surface.acked_size();
 
@@ -461,11 +461,6 @@ impl<S: Surface + 'static> Window<S> {
         if !self.initial_configure_sent {
             self.initial_configure_sent = true;
             self.reconfigure();
-        }
-
-        // Advertise current output to visible surfaces.
-        if self.visible {
-            output.enter(surface);
         }
     }
 
@@ -547,20 +542,15 @@ impl<S: Surface + 'static> Window<S> {
     }
 
     /// Apply surface commits for popups.
-    pub fn popup_surface_commit(
-        &mut self,
-        root_surface: &WlSurface,
-        surface: &WlSurface,
-        output: &Output,
-    ) -> bool {
+    pub fn popup_surface_commit(&mut self, root_surface: &WlSurface, surface: &WlSurface) -> bool {
         self.popups.iter_mut().any(|window| {
             if window.surface.surface() == root_surface {
-                window.surface_commit_common(surface, output);
+                window.surface_commit_common(surface);
                 window.rectangle.loc = window.position();
                 return true;
             }
 
-            window.popup_surface_commit(root_surface, surface, output)
+            window.popup_surface_commit(root_surface, surface)
         })
     }
 
@@ -617,7 +607,7 @@ impl Window<CatacombLayerSurface> {
     ) {
         self.update_layer_state(output);
         self.update_dimensions(output, fullscreen_active);
-        self.surface_commit_common(surface, output);
+        self.surface_commit_common(surface);
     }
 
     /// Recompute the window's size and location.
