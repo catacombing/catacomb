@@ -5,7 +5,7 @@ use std::error::Error;
 use std::os::unix::io::FromRawFd;
 use std::path::PathBuf;
 use std::time::Duration;
-use std::{mem, process, ptr};
+use std::{env, mem, process, ptr};
 
 use _linux_dmabuf::zv1::server::zwp_linux_dmabuf_feedback_v1::TrancheFlags;
 use smithay::backend::allocator::dmabuf::Dmabuf;
@@ -54,6 +54,14 @@ use crate::windows::Windows;
 const CLEAR_COLOR: [f32; 4] = [1., 0., 1., 1.];
 
 pub fn run() {
+    // Disable ARM framebuffer compression formats.
+    //
+    // This is necessary due to a driver bug which causes random artifacts to show
+    // up on the primary plane when rendering buffers with the AFBC modifier:
+    //
+    // https://gitlab.freedesktop.org/mesa/mesa/-/issues/7968#note_1799187
+    env::set_var("PAN_MESA_DEBUG", "noafbc");
+
     let mut event_loop = EventLoop::try_new().expect("event loop");
     let udev = Udev::new(event_loop.handle());
     let mut catacomb = Catacomb::new(event_loop.handle(), udev);
