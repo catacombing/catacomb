@@ -395,11 +395,11 @@ impl CatacombSurfaceData {
         match assignment {
             BufferAssignment::NewBuffer(buffer) => {
                 let old_size = self.size;
+                self.scale = attributes.buffer_scale;
                 self.size = renderer::buffer_dimensions(&buffer)
                     .unwrap_or_default()
                     .to_logical(self.scale, self.transform);
                 self.transform = attributes.buffer_transform.into();
-                self.scale = attributes.buffer_scale;
                 self.buffer = Some(Buffer::from(buffer));
                 self.texture = None;
 
