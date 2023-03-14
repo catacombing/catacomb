@@ -1,11 +1,11 @@
 //! Catacomb compositor state.
 
 use std::cell::RefCell;
+use std::env;
 use std::os::unix::io::AsRawFd;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
-use std::{env, fs};
 
 use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use _server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as ManagerMode;
@@ -55,7 +55,6 @@ use smithay::{
     delegate_xdg_decoration, delegate_xdg_shell,
 };
 
-use crate::delegate_screencopy_manager;
 use crate::input::{PhysicalButtonState, TouchState};
 use crate::orientation::{Accelerometer, AccelerometerSource};
 use crate::output::Output;
@@ -64,6 +63,7 @@ use crate::protocols::screencopy::{ScreencopyHandler, ScreencopyManagerState};
 use crate::udev::Udev;
 use crate::vibrate::Vibrator;
 use crate::windows::Windows;
+use crate::{dbus, delegate_screencopy_manager};
 
 /// The script to run after compositor start.
 const POST_START_SCRIPT: &str = "post_start.sh";
@@ -340,6 +340,9 @@ impl Catacomb {
 
     /// Resume after sleep.
     pub fn resume(&mut self) {
+        // Update resume time to ignore buttons pressed during sleep.
+        self.last_resume = Instant::now();
+
         let _ = self.event_loop.enable(&self.accelerometer_token);
         self.backend.set_sleep(false);
         self.sleeping = false;
@@ -347,16 +350,8 @@ impl Catacomb {
 
     /// Suspend to RAM.
     pub fn suspend(&mut self) {
-        match fs::write("/sys/power/state", "mem") {
-            // Execution will pause after write here, so resume once it continues.
-            Ok(_) => {
-                // Update resume time to ignore buttons pressed during sleep.
-                self.last_resume = Instant::now();
-
-                self.resume();
-            },
-            // Keep screen disabled when suspend failed.
-            Err(err) => eprintln!("Failed suspending to RAM: {err}"),
+        if let Err(err) = dbus::suspend() {
+            eprintln!("Failed suspending to RAM: {err}");
         }
     }
 }

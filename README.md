@@ -12,3 +12,20 @@ responsive window management without cutting down on useful features.
   <img src="https://user-images.githubusercontent.com/8886672/213074577-28b081dc-d614-443e-beb1-8681e060595c.png" width="30%"/>
   <img src="https://user-images.githubusercontent.com/8886672/210189206-3d9d738f-dd60-47bb-99ab-7a6450be9da1.png" width="30%"/>
 </p>
+
+## Polkit
+
+Catacomb uses logind's DBus API to automatically suspend the system when the
+power button is pressed. To allow users of the group `wheel` to suspend the
+system, the following polkit rule can be added:
+
+> /etc/polkit-1/rules.d/20-logind.rules
+
+```
+// Allow wheel users to suspend.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.login1.suspend" && subject.isInGroup("wheel")) {
+        return "yes";
+    }
+});
+```

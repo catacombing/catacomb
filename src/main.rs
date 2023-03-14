@@ -8,6 +8,7 @@ use clap::{self, Parser, Subcommand};
 
 mod catacomb;
 mod config;
+mod dbus;
 mod drawing;
 mod geometry;
 mod input;
