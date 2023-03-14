@@ -315,7 +315,7 @@ impl<S: Surface + 'static> Window<S> {
             return;
         }
 
-        let refresh = output.refresh() as u32;
+        let refresh = output.frame_interval().as_nanos() as u32;
         let output = output.smithay_output();
 
         // Try to get monitor clock.

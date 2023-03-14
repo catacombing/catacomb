@@ -105,9 +105,9 @@ impl Output {
         }
     }
 
-    /// Duration between frames in milliseconds.
+    /// Duration between frames.
     pub fn frame_interval(&self) -> Duration {
-        Duration::from_millis(1_000_000 / self.canvas.mode.refresh as u64)
+        Duration::from_nanos(1_000_000_000 / self.canvas.mode.refresh as u64)
     }
 
     /// Update the device orientation.
@@ -268,11 +268,6 @@ impl Canvas {
     /// Output scale.
     pub fn scale(&self) -> i32 {
         self.scale
-    }
-
-    /// Get output's refresh rate.
-    pub fn refresh(&self) -> i32 {
-        self.mode.refresh
     }
 }
 

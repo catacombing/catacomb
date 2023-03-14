@@ -281,7 +281,15 @@ impl Catacomb {
 
             // Draw all visible clients.
             let rendered = self.backend.render(&mut self.windows);
-            self.stalled = !rendered;
+
+            // Create artificial VBlank if renderer didn't draw.
+            //
+            // This is necessary, since rendering might have been skipped due to DRM planes
+            // and the next frame could still contain more damage like overview animations.
+            if !rendered {
+                let frame_interval = self.windows.output().frame_interval();
+                self.backend.schedule_redraw(frame_interval);
+            }
         } else if let Some(deadline) = transaction_deadline {
             // Force a redraw after the transaction has timed out.
             self.backend.schedule_redraw(deadline);

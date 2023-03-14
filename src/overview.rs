@@ -276,7 +276,7 @@ impl Overview {
     }
 
     /// Check if overview animations are active.
-    pub fn animating_drag(&self, window_count: usize) -> bool {
+    pub fn animating(&self, window_count: usize) -> bool {
         let min_offset = -(window_count as f64) + 1.;
         self.x_offset > 0.
             || self.x_offset < min_offset

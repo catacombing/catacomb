@@ -490,11 +490,8 @@ impl OutputDevice {
         )?;
         let rendered = frame_result.damage.is_some();
 
-        // TODO: Replace with `mem::take` once smithay/smithay#920 is merged.
-        //
         // Update last render states.
-        self.last_render_states =
-            RenderElementStates { states: mem::take(&mut frame_result.states.states) };
+        self.last_render_states = mem::take(&mut frame_result.states);
 
         // Copy framebuffer for screencopy.
         if let Some(mut screencopy) = self.screencopy.take() {

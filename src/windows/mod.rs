@@ -616,7 +616,7 @@ impl Windows {
                 window.borrow().dirty() || self.layers.overlay().any(Window::dirty)
             },
             // Redraw continuously during overview animations.
-            View::Overview(overview) if overview.animating_drag(self.layouts.len()) => true,
+            View::Overview(overview) if overview.animating(self.layouts.len()) => true,
             // Check all windows for damage outside of fullscreen.
             _ => {
                 self.layouts.windows().any(|window| window.dirty())
