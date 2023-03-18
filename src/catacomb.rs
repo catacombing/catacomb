@@ -32,6 +32,7 @@ use smithay::wayland::data_device::{
     ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
 };
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportError};
+use smithay::wayland::fractional_scale::{self, FractionScaleHandler, FractionalScaleManagerState};
 use smithay::wayland::input_method::{InputMethodManagerState, InputMethodSeat};
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::presentation::PresentationState;
@@ -49,10 +50,10 @@ use smithay::wayland::text_input::{TextInputHandle, TextInputManagerState};
 use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 use smithay::wayland::{compositor, data_device};
 use smithay::{
-    delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_input_method_manager,
-    delegate_kde_decoration, delegate_layer_shell, delegate_output, delegate_presentation,
-    delegate_seat, delegate_shm, delegate_text_input_manager, delegate_virtual_keyboard_manager,
-    delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_fractional_scale,
+    delegate_input_method_manager, delegate_kde_decoration, delegate_layer_shell, delegate_output,
+    delegate_presentation, delegate_seat, delegate_shm, delegate_text_input_manager,
+    delegate_virtual_keyboard_manager, delegate_xdg_decoration, delegate_xdg_shell,
 };
 
 use crate::input::{PhysicalButtonState, TouchState};
@@ -163,6 +164,9 @@ impl Catacomb {
 
         // XDG output protocol.
         OutputManagerState::new_with_xdg_output::<Self>(&display_handle);
+
+        // Fractional scale protocol.
+        FractionalScaleManagerState::new::<Self>(&display_handle);
 
         // Force server-side decorations.
         XdgDecorationState::new::<Self>(&display_handle);
@@ -539,3 +543,15 @@ impl ScreencopyHandler for Catacomb {
 delegate_screencopy_manager!(Catacomb);
 
 delegate_presentation!(Catacomb);
+
+impl FractionScaleHandler for Catacomb {
+    fn new_fractional_scale(&mut self, surface: WlSurface) {
+        compositor::with_states(&surface, |states| {
+            fractional_scale::with_fractional_scale(states, |fractional_scale| {
+                let scale = self.windows.output().fractional_scale();
+                fractional_scale.set_preferred_scale(scale);
+            });
+        });
+    }
+}
+delegate_fractional_scale!(Catacomb);

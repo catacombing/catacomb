@@ -16,7 +16,7 @@ use crate::catacomb::Catacomb;
 const DEVICE_PATH: &str = "/dev/input/by-path/platform-vibrator-event";
 
 /// Force-feedback event type constant.
-/// https://github.com/torvalds/linux/blob/9f4211bf7f811b653aa6acfb9aea38222436a458/include/uapi/linux/input-event-codes.h#L47
+/// <https://github.com/torvalds/linux/blob/9f4211bf7f811b653aa6acfb9aea38222436a458/include/uapi/linux/input-event-codes.h#L47>
 const EV_FF: u16 = 0x15;
 
 /// Force-feedback interface.

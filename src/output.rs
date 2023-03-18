@@ -17,7 +17,7 @@ use crate::orientation::Orientation;
 pub const GESTURE_HANDLE_HEIGHT: i32 = 15;
 
 /// Use a fixed output scale.
-const SCALE: i32 = 2;
+const SCALE: f64 = 2.;
 
 /// Wayland output, typically a screen.
 #[derive(Debug)]
@@ -70,7 +70,10 @@ impl Output {
     /// Update the output's active mode.
     #[inline]
     pub fn set_mode(&mut self, mode: Mode) {
-        let scale = Some(Scale::Integer(self.canvas.scale));
+        let scale = Some(Scale::Custom {
+            advertised_integer: self.scale(),
+            fractional: self.fractional_scale(),
+        });
         let transform = Some(self.orientation.surface_transform());
         self.output.change_current_state(Some(mode), transform, scale, None);
         self.output.set_preferred(mode);
@@ -157,7 +160,7 @@ impl Deref for Output {
 pub struct Canvas {
     exclusive: ExclusiveSpace,
     orientation: Orientation,
-    scale: i32,
+    scale: f64,
     mode: Mode,
 }
 
@@ -177,7 +180,7 @@ impl Canvas {
     /// This represents the size of the display before applying any
     /// transformations.
     pub fn resolution(&self) -> Size<i32, Logical> {
-        self.mode.size.to_logical(self.scale)
+        self.mode.size.to_logical(self.scale())
     }
 
     /// Output device resolution in physical coordinates.
@@ -265,8 +268,13 @@ impl Canvas {
         Rectangle::from_loc_and_size(loc, size)
     }
 
-    /// Output scale.
+    /// Output integer scale.
     pub fn scale(&self) -> i32 {
+        self.scale.round() as i32
+    }
+
+    /// Output fractional scale.
+    pub fn fractional_scale(&self) -> f64 {
         self.scale
     }
 }
