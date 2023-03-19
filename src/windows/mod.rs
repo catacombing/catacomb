@@ -228,12 +228,12 @@ impl Windows {
         for mut window in self.layouts.windows_mut() {
             // Ignore overview updates unless buffer size changed because of rotation.
             if !overview_active || window.pending_buffer_resize() {
-                window.import_buffers(renderer);
+                window.import_buffers(renderer, self.canvas.scale());
             }
         }
 
         for window in self.layers.iter_mut() {
-            window.import_buffers(renderer);
+            window.import_buffers(renderer, self.canvas.scale());
         }
     }
 
@@ -246,7 +246,7 @@ impl Windows {
         // Clear global damage.
         self.dirty = false;
 
-        let scale = self.output.scale();
+        let scale = self.canvas.scale();
         self.textures.clear();
 
         // Draw gesture handle when not in fullscreen view.

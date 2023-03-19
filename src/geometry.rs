@@ -140,6 +140,7 @@ where
     T: IntoVector,
     T: From<(i32, i32)>,
 {
+    #[must_use]
     fn scale(&self, scale: f64) -> Self {
         let tuple = self.as_vector();
         Self::from((
@@ -148,18 +149,21 @@ where
         ))
     }
 
+    #[must_use]
     fn min(&self, other: impl Into<Self>) -> Self {
         let tuple = self.as_vector();
         let other = other.into().as_vector();
         Self::from((cmp::min(tuple.0, other.0), cmp::min(tuple.1, other.1)))
     }
 
+    #[must_use]
     fn max(&self, other: impl Into<Self>) -> Self {
         let tuple = self.as_vector();
         let other = other.into().as_vector();
         Self::from((cmp::max(tuple.0, other.0), cmp::max(tuple.1, other.1)))
     }
 
+    #[must_use]
     fn sub(&self, other: impl Into<Self>) -> Self {
         let lhs = self.as_vector();
         let rhs = other.into().as_vector();

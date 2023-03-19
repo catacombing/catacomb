@@ -17,8 +17,9 @@ use smithay::utils::{
     Buffer as BufferSpace, Logical, Physical, Point, Rectangle, Scale, Size, Transform,
 };
 use smithay::wayland::compositor::{
-    BufferAssignment, Damage as SurfaceDamage, RectangleKind, SurfaceAttributes,
+    BufferAssignment, Damage as SurfaceDamage, RectangleKind, SurfaceAttributes, SurfaceData,
 };
+use smithay::wayland::viewporter::{self, ViewportCachedState};
 
 use crate::geometry::SubtractRectFast;
 use crate::output::{Canvas, GESTURE_HANDLE_HEIGHT};
@@ -41,6 +42,8 @@ pub struct Texture {
     opaque_regions: Vec<Rectangle<i32, Physical>>,
     tracker: DamageTrackerSnapshot<i32, Physical>,
     location: Point<i32, Logical>,
+    src_rect: Rectangle<f64, Logical>,
+    dst_size: Size<i32, Logical>,
     size: Size<i32, Logical>,
     buffer: Option<Buffer>,
     texture: Gles2Texture,
@@ -52,19 +55,20 @@ pub struct Texture {
 impl Texture {
     /// Create a texture from an OpenGL texture.
     pub fn new(texture: Gles2Texture, size: impl Into<Size<i32, Logical>>, opaque: bool) -> Self {
-        // Ensure fully opaque textures are treated as such.
         let size = size.into();
-        let opaque_regions = if opaque {
-            vec![Rectangle::from_loc_and_size((0, 0), size).to_physical(1)]
-        } else {
-            Vec::new()
-        };
+        let src_rect = Rectangle::from_loc_and_size((0, 0), size);
+        let dst_size = src_rect.size;
+
+        // Ensure fully opaque textures are treated as such.
+        let opaque_regions = if opaque { vec![src_rect.to_physical(1)] } else { Vec::new() };
 
         Self {
             opaque_regions,
+            dst_size,
             texture,
             size,
             tracker: DamageTrackerSnapshot::empty(),
+            src_rect: src_rect.to_f64(),
             id: Id::new(),
             scale: 1,
             transform: Default::default(),
@@ -78,6 +82,7 @@ impl Texture {
         texture: Gles2Texture,
         location: impl Into<Point<i32, Logical>>,
         buffer: &CatacombSurfaceData,
+        surface_data: &SurfaceData,
         surface: &WlSurface,
     ) -> Self {
         let location = location.into();
@@ -92,9 +97,27 @@ impl Texture {
             }
         }
 
+        // Calculate surface's src rect and dst size.
+
+        // Check for a viewporter viewport.
+        let viewport_valid = viewporter::ensure_viewport_valid(surface_data, buffer.size);
+        let (viewport_src, viewport_dst) = if viewport_valid {
+            let viewport = surface_data.cached_state.current::<ViewportCachedState>();
+            (viewport.src, viewport.size())
+        } else {
+            (None, None)
+        };
+
+        // Fallback to surface size without viewporter.
+        let src_rect = viewport_src
+            .unwrap_or_else(|| Rectangle::from_loc_and_size((0.0, 0.0), buffer.size.to_f64()));
+        let dst_size = viewport_dst.unwrap_or(buffer.size);
+
         Self {
             opaque_regions,
             location,
+            src_rect,
+            dst_size,
             texture,
             tracker: buffer.damage.tracker.snapshot(),
             buffer: buffer.buffer.clone(),
@@ -144,6 +167,11 @@ impl Texture {
 
         Texture::new(texture, (width, height), opaque)
     }
+
+    /// Target size after rendering.
+    pub fn size(&self) -> Size<i32, Physical> {
+        self.dst_size.to_physical(self.scale)
+    }
 }
 
 /// Newtype to implement element traits on `Rc<Texture>`.
@@ -174,12 +202,11 @@ impl Element for RenderTexture {
     }
 
     fn src(&self) -> Rectangle<f64, BufferSpace> {
-        let size = self.size.to_buffer(self.scale, self.transform).to_f64();
-        Rectangle::from_loc_and_size((0., 0.), size)
+        self.src_rect.to_buffer(self.scale as f64, self.transform, &self.size.to_f64())
     }
 
     fn geometry(&self, _scale: Scale<f64>) -> Rectangle<i32, Physical> {
-        Rectangle::from_loc_and_size(self.location, self.size).to_physical(self.scale)
+        Rectangle::from_loc_and_size(self.location, self.dst_size).to_physical(self.scale)
     }
 
     fn damage_since(

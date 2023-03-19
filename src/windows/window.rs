@@ -190,7 +190,7 @@ impl<S: Surface + 'static> Window<S> {
     }
 
     /// Import the buffers of all surfaces into the renderer.
-    pub fn import_buffers(&mut self, renderer: &mut Gles2Renderer) {
+    pub fn import_buffers(&mut self, renderer: &mut Gles2Renderer, output_scale: i32) {
         // Do not import buffers during a transaction.
         if self.transaction.is_some() {
             return;
@@ -198,7 +198,7 @@ impl<S: Surface + 'static> Window<S> {
 
         // Import buffers for all popup windows.
         for popup in &mut self.popups {
-            popup.import_buffers(renderer);
+            popup.import_buffers(renderer, output_scale);
         }
 
         // Short-circuit if we know no new buffer is waiting for import.
@@ -209,7 +209,6 @@ impl<S: Surface + 'static> Window<S> {
         self.texture_cache.requested_size = self.rectangle.size;
         self.texture_cache.textures.clear();
 
-        let mut window_rect = Rectangle::default();
         let geometry = self.surface.geometry();
 
         compositor::with_surface_tree_upward(
@@ -230,13 +229,9 @@ impl<S: Surface + 'static> Window<S> {
                     location += subsurface.location;
                 }
 
-                // Update texture cache's combined buffer size.
-                let buffer_rect = Rectangle::from_loc_and_size(location, data.size);
-                window_rect = window_rect.merge(buffer_rect);
-
                 // Skip surface if buffer was already imported.
                 if let Some(texture) = &data.texture {
-                    self.texture_cache.push(texture.clone());
+                    self.texture_cache.push(output_scale, texture.clone(), location);
                     return TraversalAction::DoChildren(location);
                 }
 
@@ -265,9 +260,10 @@ impl<S: Surface + 'static> Window<S> {
                         }
 
                         // Update and cache the texture.
-                        let texture = Texture::from_surface(texture, location, &data, surface);
+                        let texture =
+                            Texture::from_surface(texture, location, &data, surface_data, surface);
                         let render_texture = RenderTexture::new(texture);
-                        self.texture_cache.push(render_texture.clone());
+                        self.texture_cache.push(output_scale, render_texture.clone(), location);
                         data.texture = Some(render_texture);
 
                         TraversalAction::DoChildren(location)
@@ -288,12 +284,6 @@ impl<S: Surface + 'static> Window<S> {
             |_, _, _| (),
             |_, _, _| true,
         );
-
-        // Update the texture cache's dimensions.
-        self.texture_cache.geometry_size = geometry.map(|geometry| geometry.size);
-        window_rect.size.w += window_rect.loc.x;
-        window_rect.size.h += window_rect.loc.y;
-        self.texture_cache.texture_size = window_rect.size;
     }
 
     /// Check whether there is a new buffer pending with an updated geometry
@@ -709,7 +699,12 @@ pub struct TextureCache {
 
 impl TextureCache {
     /// Add a new texture.
-    fn push(&mut self, texture: RenderTexture) {
+    fn push(&mut self, output_scale: i32, texture: RenderTexture, location: Point<i32, Logical>) {
+        // Update the combined texture size.
+        let mut max_size = texture.size().to_logical(output_scale);
+        max_size += location.max((0, 0)).to_size();
+        self.texture_size = self.texture_size.max(max_size);
+
         self.textures.push(texture);
     }
 
