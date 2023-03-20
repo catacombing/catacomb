@@ -732,7 +732,11 @@ impl Windows {
     /// Handle touch drag release.
     pub fn on_drag_release(&mut self) {
         match &mut self.view {
-            View::Overview(overview) => overview.last_animation_step = Some(Instant::now()),
+            View::Overview(overview) => {
+                // Use synthetic last frame to ensure animation starts immediately.
+                let last_frame = Instant::now() - self.output.frame_interval();
+                overview.last_animation_step = Some(last_frame);
+            },
             View::DragAndDrop(dnd) => {
                 let (primary_bounds, secondary_bounds) = dnd.drop_bounds(&self.output);
                 if primary_bounds.to_f64().contains(dnd.touch_position) {

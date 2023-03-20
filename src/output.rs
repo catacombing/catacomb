@@ -110,7 +110,7 @@ impl Output {
 
     /// Duration between frames.
     pub fn frame_interval(&self) -> Duration {
-        Duration::from_nanos(1_000_000_000 / self.canvas.mode.refresh as u64)
+        Duration::from_nanos(1_000_000_000_000 / self.canvas.mode.refresh as u64)
     }
 
     /// Update the device orientation.
