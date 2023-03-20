@@ -190,7 +190,7 @@ impl<S: Surface + 'static> Window<S> {
     }
 
     /// Import the buffers of all surfaces into the renderer.
-    pub fn import_buffers(&mut self, renderer: &mut Gles2Renderer, output_scale: i32) {
+    pub fn import_buffers(&mut self, renderer: &mut Gles2Renderer) {
         // Do not import buffers during a transaction.
         if self.transaction.is_some() {
             return;
@@ -198,7 +198,7 @@ impl<S: Surface + 'static> Window<S> {
 
         // Import buffers for all popup windows.
         for popup in &mut self.popups {
-            popup.import_buffers(renderer, output_scale);
+            popup.import_buffers(renderer);
         }
 
         // Short-circuit if we know no new buffer is waiting for import.
@@ -231,7 +231,7 @@ impl<S: Surface + 'static> Window<S> {
 
                 // Skip surface if buffer was already imported.
                 if let Some(texture) = &data.texture {
-                    self.texture_cache.push(output_scale, texture.clone(), location);
+                    self.texture_cache.push(texture.clone(), location);
                     return TraversalAction::DoChildren(location);
                 }
 
@@ -263,7 +263,7 @@ impl<S: Surface + 'static> Window<S> {
                         let texture =
                             Texture::from_surface(texture, location, &data, surface_data, surface);
                         let render_texture = RenderTexture::new(texture);
-                        self.texture_cache.push(output_scale, render_texture.clone(), location);
+                        self.texture_cache.push(render_texture.clone(), location);
                         data.texture = Some(render_texture);
 
                         TraversalAction::DoChildren(location)
@@ -699,10 +699,9 @@ pub struct TextureCache {
 
 impl TextureCache {
     /// Add a new texture.
-    fn push(&mut self, output_scale: i32, texture: RenderTexture, location: Point<i32, Logical>) {
+    fn push(&mut self, texture: RenderTexture, location: Point<i32, Logical>) {
         // Update the combined texture size.
-        let mut max_size = texture.size().to_logical(output_scale);
-        max_size += location.max((0, 0)).to_size();
+        let max_size = texture.size() + location.max((0, 0)).to_size();
         self.texture_size = self.texture_size.max(max_size);
 
         self.textures.push(texture);

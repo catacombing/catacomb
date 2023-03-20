@@ -44,33 +44,37 @@ pub struct Texture {
     location: Point<i32, Logical>,
     src_rect: Rectangle<f64, Logical>,
     dst_size: Size<i32, Logical>,
-    size: Size<i32, Logical>,
+    buffer_size: Size<i32, Logical>,
     buffer: Option<Buffer>,
     texture: Gles2Texture,
     transform: Transform,
-    scale: i32,
+    scale: f64,
     id: Id,
 }
 
 impl Texture {
     /// Create a texture from an OpenGL texture.
-    pub fn new(texture: Gles2Texture, size: impl Into<Size<i32, Logical>>, opaque: bool) -> Self {
-        let size = size.into();
-        let src_rect = Rectangle::from_loc_and_size((0, 0), size);
-        let dst_size = src_rect.size;
+    pub fn new(
+        texture: Gles2Texture,
+        buffer_size: impl Into<Size<i32, Logical>>,
+        scale: f64,
+        opaque: bool,
+    ) -> Self {
+        let buffer_size = buffer_size.into();
+        let src_rect = Rectangle::from_loc_and_size((0, 0), buffer_size);
 
         // Ensure fully opaque textures are treated as such.
         let opaque_regions = if opaque { vec![src_rect.to_physical(1)] } else { Vec::new() };
 
         Self {
             opaque_regions,
-            dst_size,
+            buffer_size,
             texture,
-            size,
+            scale,
             tracker: DamageTrackerSnapshot::empty(),
             src_rect: src_rect.to_f64(),
+            dst_size: buffer_size,
             id: Id::new(),
-            scale: 1,
             transform: Default::default(),
             location: Default::default(),
             buffer: Default::default(),
@@ -122,15 +126,16 @@ impl Texture {
             tracker: buffer.damage.tracker.snapshot(),
             buffer: buffer.buffer.clone(),
             transform: buffer.transform,
-            scale: buffer.scale,
+            scale: buffer.scale as f64,
+            buffer_size: buffer.size,
             id: surface.into(),
-            size: buffer.size,
         }
     }
 
     /// Create a texture from an RGBA buffer.
     pub fn from_buffer(
         renderer: &mut Gles2Renderer,
+        scale: f64,
         buffer: &[u8],
         width: i32,
         height: i32,
@@ -165,12 +170,12 @@ impl Texture {
         let texture =
             unsafe { Gles2Texture::from_raw(renderer, texture_id, (width, height).into()) };
 
-        Texture::new(texture, (width, height), opaque)
+        Texture::new(texture, (width, height), scale, opaque)
     }
 
     /// Target size after rendering.
-    pub fn size(&self) -> Size<i32, Physical> {
-        self.dst_size.to_physical(self.scale)
+    pub fn size(&self) -> Size<i32, Logical> {
+        self.dst_size
     }
 }
 
@@ -202,11 +207,14 @@ impl Element for RenderTexture {
     }
 
     fn src(&self) -> Rectangle<f64, BufferSpace> {
-        self.src_rect.to_buffer(self.scale as f64, self.transform, &self.size.to_f64())
+        self.src_rect.to_buffer(self.scale, self.transform, &self.buffer_size.to_f64())
     }
 
-    fn geometry(&self, _scale: Scale<f64>) -> Rectangle<i32, Physical> {
-        Rectangle::from_loc_and_size(self.location, self.dst_size).to_physical(self.scale)
+    fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        Rectangle::from_loc_and_size(self.location, self.dst_size)
+            .to_f64()
+            .to_physical(scale)
+            .to_i32_round()
     }
 
     fn damage_since(
@@ -330,8 +338,8 @@ pub struct Graphics {
 impl Graphics {
     pub fn new(renderer: &mut Gles2Renderer) -> Self {
         let active_drop_target =
-            Texture::from_buffer(renderer, &ACTIVE_DROP_TARGET_RGBA, 1, 1, false);
-        let drop_target = Texture::from_buffer(renderer, &DROP_TARGET_RGBA, 1, 1, false);
+            Texture::from_buffer(renderer, 1., &ACTIVE_DROP_TARGET_RGBA, 1, 1, false);
+        let drop_target = Texture::from_buffer(renderer, 1., &DROP_TARGET_RGBA, 1, 1, false);
         Self {
             active_drop_target: RenderTexture::new(active_drop_target),
             drop_target: RenderTexture::new(drop_target),
@@ -351,7 +359,7 @@ impl Graphics {
         if self
             .gesture_handle
             .as_ref()
-            .map_or(true, |handle| handle.size.w != width || handle.size.h != height)
+            .map_or(true, |handle| handle.size().w != width || handle.size().h != height)
         {
             // Initialize a white buffer with the correct size.
             let mut buffer = vec![255; (height * width * 4) as usize];
@@ -374,7 +382,8 @@ impl Graphics {
                 }
             }
 
-            let texture = Texture::from_buffer(renderer, &buffer, width, height, true);
+            let scale = canvas.fractional_scale();
+            let texture = Texture::from_buffer(renderer, scale, &buffer, width, height, true);
             self.gesture_handle = Some(RenderTexture(Rc::new(texture)));
         }
 

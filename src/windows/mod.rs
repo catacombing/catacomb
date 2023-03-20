@@ -228,12 +228,12 @@ impl Windows {
         for mut window in self.layouts.windows_mut() {
             // Ignore overview updates unless buffer size changed because of rotation.
             if !overview_active || window.pending_buffer_resize() {
-                window.import_buffers(renderer, self.canvas.scale());
+                window.import_buffers(renderer);
             }
         }
 
         for window in self.layers.iter_mut() {
-            window.import_buffers(renderer, self.canvas.scale());
+            window.import_buffers(renderer);
         }
     }
 
