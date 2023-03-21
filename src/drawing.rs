@@ -11,7 +11,7 @@ use smithay::backend::renderer::gles2::{ffi, Gles2Frame, Gles2Renderer, Gles2Tex
 use smithay::backend::renderer::utils::{
     Buffer, CommitCounter, DamageTracker, DamageTrackerSnapshot,
 };
-use smithay::backend::renderer::{self, Frame, Renderer};
+use smithay::backend::renderer::{self, Renderer};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{
     Buffer as BufferSpace, Logical, Physical, Point, Rectangle, Scale, Size, Transform,
@@ -241,7 +241,7 @@ impl RenderElement<Gles2Renderer> for RenderTexture {
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
     ) -> Result<(), <Gles2Renderer as Renderer>::Error> {
-        frame.render_texture_from_to(&self.texture, src, dst, damage, self.transform, 1.)
+        frame.render_texture_from_to(&self.texture, src, dst, damage, self.transform, 1., None, &[])
     }
 
     fn underlying_storage(&self, _renderer: &mut Gles2Renderer) -> Option<UnderlyingStorage> {
