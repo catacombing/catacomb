@@ -1,7 +1,6 @@
 //! Application overview.
 
 use std::cell::RefCell;
-use std::cmp;
 use std::rc::{Rc, Weak};
 use std::time::Instant;
 
@@ -337,13 +336,13 @@ impl DragAndDrop {
         graphics: &Graphics,
     ) {
         let scale = canvas.scale();
-        let available = canvas.available_overview().to_physical(scale);
+        let available = canvas.available_overview().to_f64().to_physical(scale);
 
         // Get bounds of the drop areas.
         let (primary_bounds, secondary_bounds) = self.drop_bounds(canvas);
 
         // Render the drop areas.
-        let area_scale = cmp::max(available.size.w, available.size.h) as f64;
+        let area_scale = available.size.w.max(available.size.h);
         for bounds in [primary_bounds, secondary_bounds] {
             // Get correctly colored texture for the drop area.
             let texture = if bounds.to_f64().contains(self.touch_position) {
@@ -353,7 +352,7 @@ impl DragAndDrop {
             };
 
             // Rescale and crop texture to the desired dimensions.
-            let bounds = bounds.to_physical(scale);
+            let bounds = bounds.to_physical_precise_round(scale);
             CatacombElement::add_element(textures, texture, bounds.loc, bounds, area_scale);
         }
 

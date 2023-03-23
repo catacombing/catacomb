@@ -555,7 +555,7 @@ impl FractionalScaleHandler for Catacomb {
     fn new_fractional_scale(&mut self, surface: WlSurface) {
         compositor::with_states(&surface, |states| {
             fractional_scale::with_fractional_scale(states, |fractional_scale| {
-                let scale = self.windows.output().fractional_scale();
+                let scale = self.windows.output().scale();
                 fractional_scale.set_preferred_scale(scale);
             });
         });

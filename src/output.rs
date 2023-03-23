@@ -68,12 +68,8 @@ impl Output {
     }
 
     /// Update the output's active mode.
-    #[inline]
     pub fn set_mode(&mut self, mode: Mode) {
-        let scale = Some(Scale::Custom {
-            advertised_integer: self.scale(),
-            fractional: self.fractional_scale(),
-        });
+        let scale = Some(Scale::Fractional(self.scale()));
         let transform = Some(self.orientation.surface_transform());
         self.output.change_current_state(Some(mode), transform, scale, None);
         self.output.set_preferred(mode);
@@ -175,28 +171,33 @@ impl Canvas {
         self.orientation
     }
 
+    /// Output device resolution in physical coordinates.
+    pub fn physical_resolution(&self) -> Size<i32, Physical> {
+        self.mode.size
+    }
+
+    /// Output device size with transformations applied.
+    pub fn physical_size(&self) -> Size<i32, Physical> {
+        let (w, h) = self.physical_resolution().into();
+        match self.orientation {
+            Orientation::Portrait | Orientation::InversePortrait => (w, h).into(),
+            Orientation::Landscape | Orientation::InverseLandscape => (h, w).into(),
+        }
+    }
+
     /// Output device resolution.
     ///
     /// This represents the size of the display before applying any
     /// transformations.
     pub fn resolution(&self) -> Size<i32, Logical> {
-        self.mode.size.to_logical(self.scale())
-    }
-
-    /// Output device resolution in physical coordinates.
-    pub fn physical_resolution(&self) -> Size<i32, Physical> {
-        self.mode.size
+        self.physical_resolution().to_f64().to_logical(self.scale()).to_i32_round()
     }
 
     /// Output size.
     ///
     /// Output size with all transformations applied.
     pub fn size(&self) -> Size<i32, Logical> {
-        let (w, h) = self.resolution().into();
-        match self.orientation {
-            Orientation::Portrait | Orientation::InversePortrait => (w, h).into(),
-            Orientation::Landscape | Orientation::InverseLandscape => (h, w).into(),
-        }
+        self.physical_size().to_f64().to_logical(self.scale()).to_i32_round()
     }
 
     /// Size available for windowing.
@@ -268,13 +269,8 @@ impl Canvas {
         Rectangle::from_loc_and_size(loc, size)
     }
 
-    /// Output integer scale.
-    pub fn scale(&self) -> i32 {
-        self.scale.round() as i32
-    }
-
     /// Output fractional scale.
-    pub fn fractional_scale(&self) -> f64 {
+    pub fn scale(&self) -> f64 {
         self.scale
     }
 }

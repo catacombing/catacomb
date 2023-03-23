@@ -211,10 +211,7 @@ impl Element for RenderTexture {
     }
 
     fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
-        Rectangle::from_loc_and_size(self.location, self.dst_size)
-            .to_f64()
-            .to_physical(scale)
-            .to_i32_round()
+        Rectangle::from_loc_and_size(self.location, self.dst_size).to_physical_precise_round(scale)
     }
 
     fn damage_since(
@@ -354,8 +351,9 @@ impl Graphics {
         canvas: &Canvas,
     ) -> RenderTexture {
         // Initialize texture or replace it after scale change.
-        let width = canvas.size().to_physical(canvas.scale()).w;
-        let height = GESTURE_HANDLE_HEIGHT * canvas.scale();
+        let scale = canvas.scale();
+        let width = canvas.physical_size().w;
+        let height = (GESTURE_HANDLE_HEIGHT as f64 * scale).round() as i32;
         if self
             .gesture_handle
             .as_ref()
@@ -382,7 +380,6 @@ impl Graphics {
                 }
             }
 
-            let scale = canvas.fractional_scale();
             let texture = Texture::from_buffer(renderer, scale, &buffer, width, height, true);
             self.gesture_handle = Some(RenderTexture(Rc::new(texture)));
         }

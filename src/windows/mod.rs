@@ -246,15 +246,15 @@ impl Windows {
         // Clear global damage.
         self.dirty = false;
 
-        let scale = self.canvas.scale();
+        let scale = self.output.scale();
         self.textures.clear();
 
         // Draw gesture handle when not in fullscreen view.
         if !matches!(self.view, View::Fullscreen(_)) {
             // Calculate position for gesture handle.
-            let scale = self.output.scale();
-            let output_height = self.output.size().to_physical(scale).h;
-            let handle_location = (0, output_height - GESTURE_HANDLE_HEIGHT * scale);
+            let output_height = self.output.physical_size().h;
+            let handle_height = (GESTURE_HANDLE_HEIGHT as f64 * scale).round();
+            let handle_location = (0, output_height - handle_height as i32);
 
             // Get gesture handle texture and move it to the right location.
             let gesture_handle = graphics.gesture_handle(renderer, &self.output);

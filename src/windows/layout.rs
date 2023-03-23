@@ -398,7 +398,7 @@ impl Layouts {
     }
 
     /// Add all visible windows' textures to the supplied buffer.
-    pub fn textures(&self, textures: &mut Vec<CatacombElement>, scale: i32) {
+    pub fn textures(&self, textures: &mut Vec<CatacombElement>, scale: f64) {
         let layout = self.active();
 
         if let Some(secondary) = layout.secondary().map(|window| window.borrow()) {

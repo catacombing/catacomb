@@ -85,7 +85,7 @@ where
                 let output = state.output();
                 let output_transform = output.orientation().output_transform();
                 let rotated_rect = output_transform.transform_rect_in(rect, &output.size());
-                let physical_rect = rotated_rect.to_physical(output.scale());
+                let physical_rect = rotated_rect.to_physical_precise_round(output.scale());
 
                 // Clamp captured region to the output.
                 let clamped_rect = physical_rect

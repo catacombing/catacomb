@@ -118,7 +118,7 @@ impl<S: Surface + 'static> Window<S> {
     pub fn textures(
         &self,
         textures: &mut Vec<CatacombElement>,
-        output_scale: i32,
+        output_scale: f64,
         window_scale: impl Into<Option<f64>>,
         location: impl Into<Option<Point<i32, Logical>>>,
     ) {
@@ -132,7 +132,7 @@ impl<S: Surface + 'static> Window<S> {
     fn textures_internal(
         &self,
         textures: &mut Vec<CatacombElement>,
-        output_scale: i32,
+        output_scale: f64,
         window_scale: impl Into<Option<f64>>,
         location: impl Into<Option<Point<i32, Logical>>>,
         bounds: impl Into<Option<Rectangle<i32, Physical>>>,
@@ -142,8 +142,8 @@ impl<S: Surface + 'static> Window<S> {
 
         // Calculate window bounds only for the toplevel window.
         let bounds = bounds.into().unwrap_or_else(|| {
-            let mut bounds = self.bounds().to_physical(output_scale);
-            bounds.loc = location.to_physical(output_scale);
+            let mut bounds = self.bounds().to_physical_precise_round(output_scale);
+            bounds.loc = location.to_physical_precise_round(output_scale);
             bounds
         });
 
@@ -160,7 +160,7 @@ impl<S: Surface + 'static> Window<S> {
         }
 
         // Add windows' textures.
-        let physical_location = location.to_physical(output_scale);
+        let physical_location = location.to_physical_precise_round(output_scale);
         for texture in self.texture_cache.textures.iter().rev() {
             CatacombElement::add_element(
                 textures,
