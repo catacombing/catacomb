@@ -68,7 +68,10 @@ impl Output {
     }
 
     /// Update the output's scale factor.
-    pub fn set_scale(&mut self, scale: f64) {
+    pub fn set_scale(&mut self, mut scale: f64) {
+        // Ensure scale factor is divisible by 120, to support wp_fractional_scale.
+        scale = (scale * 120.).round() / 120.;
+
         // Update the scale.
         self.canvas.scale = scale;
 
