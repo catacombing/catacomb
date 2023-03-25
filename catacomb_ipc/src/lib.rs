@@ -31,6 +31,11 @@ pub enum IpcMessage {
         #[cfg_attr(feature = "clap", clap(long))]
         unlock: bool,
     },
+    /// Update output scale factor.
+    Scale {
+        /// New scale factor.
+        scale: f64,
+    },
 }
 
 /// Device orientation.

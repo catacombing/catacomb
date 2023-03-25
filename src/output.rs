@@ -67,6 +67,15 @@ impl Output {
         })
     }
 
+    /// Update the output's scale factor.
+    pub fn set_scale(&mut self, scale: f64) {
+        // Update the scale.
+        self.canvas.scale = scale;
+
+        // Update the Wayland output.
+        self.set_mode(self.canvas.mode);
+    }
+
     /// Update the output's active mode.
     pub fn set_mode(&mut self, mode: Mode) {
         let scale = Some(Scale::Fractional(self.scale()));

@@ -59,5 +59,6 @@ fn handle_message(buffer: &mut String, stream: UnixStream, catacomb: &mut Cataco
         IpcMessage::Orientation { lock: orientation, .. } => {
             catacomb.windows.lock_orientation(orientation);
         },
+        IpcMessage::Scale { scale } => catacomb.windows.set_scale(scale),
     }
 }

@@ -867,6 +867,12 @@ impl Windows {
         self.canvas = *output.canvas();
         self.output = output;
     }
+
+    /// Update the output's scale.
+    pub fn set_scale(&mut self, scale: f64) {
+        self.output.set_scale(scale);
+        self.resize_all();
+    }
 }
 
 /// Atomic changes to [`Windows`].
