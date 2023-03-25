@@ -55,6 +55,9 @@ use crate::windows::Windows;
 /// Default background color.
 const CLEAR_COLOR: [f32; 4] = [1., 0., 1., 1.];
 
+/// Time before a VBlank reserved for rendering compositor updates.
+const RENDER_TIME_OFFSET: Duration = Duration::from_millis(10);
+
 pub fn run() {
     // Disable ARM framebuffer compression formats.
     //
@@ -323,8 +326,10 @@ impl Udev {
                             .windows
                             .mark_presented(&output_device.last_render_states, metadata);
 
-                        // Draw the next frame.
-                        catacomb.create_frame();
+                        // Request redraw before the next VBlank.
+                        let frame_interval = catacomb.windows.output().frame_interval();
+                        let duration = frame_interval - RENDER_TIME_OFFSET;
+                        catacomb.backend.schedule_redraw(duration);
                     },
                     DrmEvent::Error(error) => eprintln!("DRM error: {error}"),
                 };
