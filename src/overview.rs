@@ -353,7 +353,7 @@ impl DragAndDrop {
 
             // Rescale and crop texture to the desired dimensions.
             let bounds = bounds.to_physical_precise_round(scale);
-            CatacombElement::add_element(textures, texture, bounds.loc, bounds, area_scale);
+            CatacombElement::add_element(textures, texture, bounds.loc, bounds, area_scale, scale);
         }
 
         // Offset by dragged distance.

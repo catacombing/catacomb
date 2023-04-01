@@ -259,6 +259,7 @@ impl CatacombElement {
         location: impl Into<Point<i32, Physical>>,
         bounds: impl Into<Option<Rectangle<i32, Physical>>>,
         window_scale: impl Into<Option<f64>>,
+        output_scale: f64,
     ) {
         let bounds = bounds
             .into()
@@ -270,7 +271,8 @@ impl CatacombElement {
             RescaleRenderElement::from_element(texture, (0, 0).into(), window_scale);
         let relocated_element =
             RelocateRenderElement::from_element(rescaled_element, location, Relocate::Relative);
-        let cropped_element = CropRenderElement::from_element(relocated_element, 1., bounds);
+        let cropped_element =
+            CropRenderElement::from_element(relocated_element, output_scale, bounds);
 
         if let Some(cropped_element) = cropped_element {
             textures.push(Self(cropped_element));

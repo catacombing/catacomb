@@ -168,6 +168,7 @@ impl<S: Surface + 'static> Window<S> {
                 physical_location,
                 bounds,
                 window_scale,
+                output_scale,
             );
         }
     }

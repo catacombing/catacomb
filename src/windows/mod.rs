@@ -264,6 +264,7 @@ impl Windows {
                 handle_location,
                 None,
                 None,
+                scale,
             );
         }
 
