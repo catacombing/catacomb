@@ -10,6 +10,7 @@ use std::{env, mem, process, ptr};
 use _linux_dmabuf::zv1::server::zwp_linux_dmabuf_feedback_v1::TrancheFlags;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBuffer, GbmBufferFlags, GbmDevice};
+use smithay::backend::allocator::Fourcc;
 use smithay::backend::drm::compositor::{DrmCompositor as SmithayDrmCompositor, RenderFrameResult};
 use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent};
 use smithay::backend::egl::context::EGLContext;
@@ -57,6 +58,12 @@ const CLEAR_COLOR: [f32; 4] = [1., 0., 1., 1.];
 
 /// Time before a VBlank reserved for rendering compositor updates.
 const RENDER_TIME_OFFSET: Duration = Duration::from_millis(10);
+
+/// Supported DRM color formats.
+///
+/// These are formats supported by most devices which have at least 8 bits per
+/// channel, to ensure we're not falling back to reduced color palettes.
+const SUPPORTED_COLOR_FORMATS: &[Fourcc] = &[Fourcc::Argb8888, Fourcc::Abgr8888];
 
 pub fn run() {
     // Disable ARM framebuffer compression formats.
@@ -454,6 +461,7 @@ impl Udev {
             None,
             allocator,
             gbm.clone(),
+            SUPPORTED_COLOR_FORMATS,
             formats,
             Size::default(),
             None,

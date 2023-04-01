@@ -8,9 +8,7 @@ use smithay::backend::renderer::element::utils::{
 };
 use smithay::backend::renderer::element::{Element, Id, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles2::{ffi, Gles2Frame, Gles2Renderer, Gles2Texture};
-use smithay::backend::renderer::utils::{
-    Buffer, CommitCounter, DamageTracker, DamageTrackerSnapshot,
-};
+use smithay::backend::renderer::utils::{Buffer, CommitCounter, DamageBag, DamageSnapshot};
 use smithay::backend::renderer::{self, Renderer};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{
@@ -40,7 +38,7 @@ const GESTURE_NOTCH_PERCENTAGE: f64 = 0.2;
 #[derive(Clone, Debug)]
 pub struct Texture {
     opaque_regions: Vec<Rectangle<i32, Physical>>,
-    tracker: DamageTrackerSnapshot<i32, Physical>,
+    tracker: DamageSnapshot<i32, Physical>,
     location: Point<i32, Logical>,
     src_rect: Rectangle<f64, Logical>,
     dst_size: Size<i32, Logical>,
@@ -71,7 +69,7 @@ impl Texture {
             buffer_size,
             texture,
             scale,
-            tracker: DamageTrackerSnapshot::empty(),
+            tracker: DamageSnapshot::empty(),
             src_rect: src_rect.to_f64(),
             dst_size: buffer_size,
             id: Id::new(),
@@ -474,7 +472,7 @@ impl CatacombSurfaceData {
 #[derive(Default)]
 pub struct Damage {
     buffer: Vec<Rectangle<i32, BufferSpace>>,
-    tracker: DamageTracker<i32, Physical>,
+    tracker: DamageBag<i32, Physical>,
 }
 
 impl Damage {
