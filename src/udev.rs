@@ -519,6 +519,8 @@ impl OutputDevice {
     ///
     /// Will return `true` if something was rendered.
     fn render(&mut self, windows: &mut Windows) -> Result<bool, Box<dyn Error>> {
+        let scale = windows.output().scale();
+
         let textures = windows.textures(&mut self.gles2, &mut self.graphics);
         let mut frame_result = self.drm_compositor.render_frame::<_, _, Gles2Renderbuffer>(
             &mut self.gles2,
@@ -539,7 +541,7 @@ impl OutputDevice {
 
             let buffer = screencopy.buffer();
             if let Ok(dmabuf) = dmabuf::get_dmabuf(buffer) {
-                Self::copy_framebuffer_dma(&mut self.gles2, &frame_result, region, dmabuf)?;
+                Self::copy_framebuffer_dma(&mut self.gles2, scale, &frame_result, region, dmabuf)?;
             } else {
                 // Ignore unknown buffer types.
                 let buffer_type = renderer::buffer_type(buffer);
@@ -565,6 +567,7 @@ impl OutputDevice {
     /// Copy a region of the framebuffer to a DMA buffer.
     fn copy_framebuffer_dma(
         gles2: &mut Gles2Renderer,
+        scale: f64,
         frame_result: &RenderFrameResult<GbmBuffer<()>, CatacombElement>,
         region: Rectangle<i32, Physical>,
         buffer: Dmabuf,
@@ -574,7 +577,7 @@ impl OutputDevice {
 
         // Blit the framebuffer into the target buffer.
         let damage = [Rectangle::from_loc_and_size((0, 0), region.size)];
-        frame_result.blit_frame_result(region.size, Transform::Normal, 1., gles2, damage, [])?;
+        frame_result.blit_frame_result(region.size, Transform::Normal, scale, gles2, damage, [])?;
 
         Ok(())
     }
@@ -592,6 +595,7 @@ impl OutputDevice {
         self.gles2.bind(offscreen_buffer)?;
 
         let output = windows.output();
+        let scale = output.scale();
         let output_size = output.physical_resolution();
         let transform = output.orientation().output_transform();
 
@@ -606,7 +610,7 @@ impl OutputDevice {
         frame.clear(CLEAR_COLOR, &[damage])?;
 
         // Render everything to the offscreen buffer.
-        utils::draw_render_elements(&mut frame, 1., textures, &[damage])?;
+        utils::draw_render_elements(&mut frame, scale, textures, &[damage])?;
 
         // Ensure rendering was fully completed.
         frame.finish()?;
