@@ -1,9 +1,10 @@
 //! Wayland client window.
 
 use std::cell::RefCell;
-use std::mem;
+use std::ops::{Deref, DerefMut};
 use std::sync::Mutex;
 use std::time::Instant;
+use std::{cmp, mem};
 
 use _presentation_time::wp_presentation_feedback::Kind as FeedbackKind;
 use smithay::backend::drm::{DrmEventMetadata, DrmEventTime};
@@ -11,6 +12,9 @@ use smithay::backend::renderer::element::{RenderElementPresentationState, Render
 use smithay::backend::renderer::gles2::Gles2Renderer;
 use smithay::backend::renderer::{self, BufferType, ImportAll};
 use smithay::reexports::wayland_protocols::wp::presentation_time::server as _presentation_time;
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_positioner::{
+    self, ConstraintAdjustment, Gravity,
+};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Physical, Point, Rectangle, Size};
 use smithay::wayland::compositor::{
@@ -22,7 +26,9 @@ use smithay::wayland::presentation::{
 use smithay::wayland::shell::wlr_layer::{
     Anchor, ExclusiveZone, KeyboardInteractivity, Layer, LayerSurfaceCachedState,
 };
-use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface, XdgPopupSurfaceRoleAttributes};
+use smithay::wayland::shell::xdg::{
+    PopupSurface, PositionerState, ToplevelSurface, XdgPopupSurfaceRoleAttributes,
+};
 
 use crate::drawing::{CatacombElement, CatacombSurfaceData, RenderTexture, Texture};
 use crate::geometry::Vector;
@@ -148,8 +154,11 @@ impl<S: Surface + 'static> Window<S> {
         });
 
         // Add popup textures.
+        let logical_bounds = bounds.to_f64().to_logical(output_scale).to_i32_round();
         for popup in self.popups.iter().rev() {
-            let popup_location = location + popup.bounds().loc.scale(window_scale);
+            let unconstrained_location = location + popup.bounds().loc.scale(window_scale);
+            let popup_location = popup.constrain_location(unconstrained_location, logical_bounds);
+
             popup.textures_internal(
                 textures,
                 output_scale,
@@ -586,6 +595,18 @@ impl Window<PopupSurface> {
     fn position(&self) -> Point<i32, Logical> {
         self.surface.with_pending_state(|state| state.positioner.get_geometry().loc)
     }
+
+    /// Calculate constrained popup location.
+    fn constrain_location(
+        &self,
+        location: Point<i32, Logical>,
+        bounds: Rectangle<i32, Logical>,
+    ) -> Point<i32, Logical> {
+        let size = self.texture_cache.size();
+        self.surface.with_pending_state(|state| {
+            PopupConstrainer(&mut state.positioner).constrain(bounds, location, size)
+        })
+    }
 }
 
 impl Window<CatacombLayerSurface> {
@@ -724,5 +745,179 @@ struct PresentationCallback {
 impl PresentationCallback {
     fn new(surface: WlSurface, callback: PresentationFeedbackCallback) -> Self {
         Self { callback, surface }
+    }
+}
+
+/// Helper for applying constraints to popup locations.
+struct PopupConstrainer<'a>(&'a mut PositionerState);
+
+impl<'a> PopupConstrainer<'a> {
+    /// Get a popup's constrained location.
+    fn constrain(
+        &mut self,
+        bounds: Rectangle<i32, Logical>,
+        mut location: Point<i32, Logical>,
+        size: Size<i32, Logical>,
+    ) -> Point<i32, Logical> {
+        // Skip if no constraint is necessary.
+        let rect = Rectangle::from_loc_and_size(location, size);
+        if bounds.contains_rect(rect) {
+            return location;
+        }
+
+        // Store `self` accesses so we can borrow it to `flip` closure.
+        let flip_y = self.constraint_adjustment.contains(ConstraintAdjustment::FlipY);
+        let flip_x = self.constraint_adjustment.contains(ConstraintAdjustment::FlipX);
+        let old_anchor = self.anchor_edges;
+        let old_gravity = self.gravity;
+
+        // Flip anchor and gravity if axis requires constraining.
+        let mut flip = |bounds_loc, bounds_size, loc, size, x_axis| {
+            if loc < bounds_loc || loc + size > bounds_loc + bounds_size {
+                self.anchor_edges = Self::flip_anchor(self.anchor_edges, x_axis);
+                self.gravity = Self::flip_gravity(self.gravity, x_axis);
+            }
+        };
+
+        // Slide single dimension to be within bounds.
+        //
+        // The protocol specification's language is over-complicated, but boils
+        // down to just moving the edge outside of the bounds inwards until the
+        // opposite edge touches the opposing bounds. If both sides are outside
+        // of the bounds from the start, it is a no-op.
+        let slide = |bounds_loc, bounds_size, loc, size| {
+            if loc < bounds_loc && loc + size < bounds_loc + bounds_size {
+                cmp::min(bounds_loc + bounds_size - size, bounds_loc)
+            } else if loc > bounds_loc && loc + size > bounds_loc + bounds_size {
+                cmp::max(bounds_loc + bounds_size - size, bounds_loc)
+            } else {
+                loc
+            }
+        };
+
+        // Attempt flip constraint resolution.
+        if flip_x {
+            flip(bounds.loc.x, bounds.size.w, location.x, size.w, true);
+        }
+        if flip_y {
+            flip(bounds.loc.y, bounds.size.h, location.y, size.h, false);
+        }
+
+        // Return new location if flip solved our constraint violations.
+        let new_location = self.get_geometry().loc;
+        let new_rect = Rectangle::from_loc_and_size(new_location, size);
+        if bounds.contains_rect(new_rect) {
+            return new_location;
+        }
+
+        // Revert flip transforms if they didn't resolve the constraint violation.
+        self.anchor_edges = old_anchor;
+        self.gravity = old_gravity;
+
+        // Attempt slide constraint resolution.
+        if self.constraint_adjustment.contains(ConstraintAdjustment::SlideX) {
+            location.x = slide(bounds.loc.x, bounds.size.w, location.x, size.w);
+        }
+        if self.constraint_adjustment.contains(ConstraintAdjustment::SlideY) {
+            location.y = slide(bounds.loc.y, bounds.size.h, location.y, size.h);
+        }
+
+        location
+    }
+
+    /// Flip an anchor on one axis.
+    fn flip_anchor(anchor: xdg_positioner::Anchor, x_axis: bool) -> xdg_positioner::Anchor {
+        match (anchor, x_axis) {
+            (xdg_positioner::Anchor::Right, true) => xdg_positioner::Anchor::Left,
+            (xdg_positioner::Anchor::TopRight, true) => xdg_positioner::Anchor::TopLeft,
+            (xdg_positioner::Anchor::BottomRight, true) => xdg_positioner::Anchor::BottomLeft,
+            (xdg_positioner::Anchor::Left, true) => xdg_positioner::Anchor::Right,
+            (xdg_positioner::Anchor::TopLeft, true) => xdg_positioner::Anchor::TopRight,
+            (xdg_positioner::Anchor::BottomLeft, true) => xdg_positioner::Anchor::BottomRight,
+            (xdg_positioner::Anchor::Top, false) => xdg_positioner::Anchor::Bottom,
+            (xdg_positioner::Anchor::TopRight, false) => xdg_positioner::Anchor::BottomRight,
+            (xdg_positioner::Anchor::TopLeft, false) => xdg_positioner::Anchor::BottomLeft,
+            (xdg_positioner::Anchor::Bottom, false) => xdg_positioner::Anchor::Top,
+            (xdg_positioner::Anchor::BottomRight, false) => xdg_positioner::Anchor::TopRight,
+            (xdg_positioner::Anchor::BottomLeft, false) => xdg_positioner::Anchor::TopLeft,
+            (anchor, _) => anchor,
+        }
+    }
+
+    /// Flip a gravity on one axis.
+    fn flip_gravity(gravity: Gravity, x_axis: bool) -> Gravity {
+        match (gravity, x_axis) {
+            (Gravity::Right, true) => Gravity::Left,
+            (Gravity::TopRight, true) => Gravity::TopLeft,
+            (Gravity::BottomRight, true) => Gravity::BottomLeft,
+            (Gravity::Left, true) => Gravity::Right,
+            (Gravity::TopLeft, true) => Gravity::TopRight,
+            (Gravity::BottomLeft, true) => Gravity::BottomRight,
+            (Gravity::Top, false) => Gravity::Bottom,
+            (Gravity::TopRight, false) => Gravity::BottomRight,
+            (Gravity::TopLeft, false) => Gravity::BottomLeft,
+            (Gravity::Bottom, false) => Gravity::Top,
+            (Gravity::BottomRight, false) => Gravity::TopRight,
+            (Gravity::BottomLeft, false) => Gravity::TopLeft,
+            (gravity, _) => gravity,
+        }
+    }
+}
+
+impl<'a> Deref for PopupConstrainer<'a> {
+    type Target = PositionerState;
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
+impl<'a> DerefMut for PopupConstrainer<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn positioner_constraints_slide() {
+        let mut positioner = dummy_positioner();
+
+        // Slide left.
+        positioner.constraint_adjustment =
+            ConstraintAdjustment::SlideX | ConstraintAdjustment::SlideY;
+        positioner.offset = (95, 95).into();
+        assert_eq!(constrain(&mut positioner), (90, 90).into());
+
+        // Slide right.
+        positioner.offset = (-5, -5).into();
+        assert_eq!(constrain(&mut positioner), (0, 0).into());
+
+        // No-op because both sides out of bounds.
+        positioner.rect_size = (1000, 1000).into();
+        positioner.offset = (-100, -100).into();
+        assert_eq!(constrain(&mut positioner), (-100, -100).into());
+    }
+
+    // Get a dummy positioner.
+    fn dummy_positioner() -> PositionerState {
+        let mut positioner = PositionerState::default();
+        positioner.rect_size = (10, 10).into();
+        positioner.anchor_rect = Rectangle::from_loc_and_size((0, 0), (10, 10));
+        positioner.anchor_edges = xdg_positioner::Anchor::TopLeft;
+        positioner.gravity = Gravity::BottomRight;
+        positioner.constraint_adjustment = ConstraintAdjustment::None;
+        positioner
+    }
+
+    fn constrain(positioner: &mut PositionerState) -> Point<i32, Logical> {
+        PopupConstrainer(&mut positioner.clone()).constrain(
+            Rectangle::from_loc_and_size((0, 0), (100, 100)),
+            positioner.offset,
+            positioner.rect_size,
+        )
     }
 }
