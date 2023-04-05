@@ -38,7 +38,7 @@ const GESTURE_NOTCH_PERCENTAGE: f64 = 0.2;
 #[derive(Clone, Debug)]
 pub struct Texture {
     opaque_regions: Vec<Rectangle<i32, Physical>>,
-    tracker: DamageSnapshot<i32, Physical>,
+    tracker: DamageSnapshot<i32, Logical>,
     location: Point<i32, Logical>,
     src_rect: Rectangle<f64, Logical>,
     dst_size: Size<i32, Logical>,
@@ -217,10 +217,27 @@ impl Element for RenderTexture {
         scale: Scale<f64>,
         commit: Option<CommitCounter>,
     ) -> Vec<Rectangle<i32, Physical>> {
-        self.tracker.damage_since(commit).unwrap_or_else(|| {
+        let mut damage = match self.tracker.damage_since(commit) {
+            Some(damage) => damage,
             // Fallback to fully damage.
-            vec![Rectangle::from_loc_and_size((0, 0), self.geometry(scale).size)]
-        })
+            None => return vec![Rectangle::from_loc_and_size((0, 0), self.geometry(scale).size)],
+        };
+
+        // Apply viewporter transforms to damage.
+        let viewporter_scale = self.dst_size.to_f64() / self.src_rect.size;
+        damage
+            .drain(..)
+            .flat_map(|damage| {
+                // Limit damage to element's source rect.
+                let mut damage = damage.to_f64().intersection(self.src_rect)?;
+
+                // Scale source damage to dst space.
+                damage = damage.upscale(viewporter_scale);
+
+                // Convert damage to physical coordinates.
+                Some(damage.to_physical_precise_round(scale))
+            })
+            .collect()
     }
 
     fn opaque_regions(&self, _scale: Scale<f64>) -> Vec<Rectangle<i32, Physical>> {
@@ -429,10 +446,10 @@ impl CatacombSurfaceData {
             BufferAssignment::NewBuffer(buffer) => {
                 let old_size = self.size;
                 self.scale = attributes.buffer_scale;
+                self.transform = attributes.buffer_transform.into();
                 self.size = renderer::buffer_dimensions(&buffer)
                     .unwrap_or_default()
                     .to_logical(self.scale, self.transform);
-                self.transform = attributes.buffer_transform.into();
                 self.buffer = Some(Buffer::from(buffer));
                 self.texture = None;
 
@@ -444,27 +461,27 @@ impl CatacombSurfaceData {
             BufferAssignment::Removed => *self = Self::default(),
         }
 
-        // Store pending damage.
-        for damage in attributes.damage.drain(..) {
-            self.add_damage(damage);
-        }
-    }
+        // Store new damage updates.
+        let physical_damage = attributes.damage.drain(..).map(|damage| {
+            // Get damage in buffer and logical space.
+            let (buffer, logical) = match damage {
+                SurfaceDamage::Buffer(buffer) => {
+                    let buffer_size = self.size.to_buffer(self.scale, self.transform);
+                    let logical = buffer.to_logical(self.scale, self.transform, &buffer_size);
+                    (buffer, logical)
+                },
+                SurfaceDamage::Surface(logical) => {
+                    let buffer = logical.to_buffer(self.scale, self.transform, &self.size);
+                    (buffer, logical)
+                },
+            };
 
-    /// Add new surface damage.
-    fn add_damage(&mut self, damage: SurfaceDamage) {
-        let (buffer, logical) = match damage {
-            SurfaceDamage::Buffer(buffer) => {
-                let buffer_size = self.size.to_buffer(self.scale, self.transform);
-                let logical = buffer.to_logical(self.scale, self.transform, &buffer_size);
-                (buffer, logical)
-            },
-            SurfaceDamage::Surface(logical) => {
-                let buffer = logical.to_buffer(self.scale, self.transform, &self.size);
-                (buffer, logical)
-            },
-        };
-        self.damage.tracker.add([logical.to_physical(self.scale)]);
-        self.damage.buffer.push(buffer);
+            // Store buffer space damage for buffer import.
+            self.damage.buffer.push(buffer);
+
+            logical
+        });
+        self.damage.tracker.add(physical_damage);
     }
 }
 
@@ -472,7 +489,7 @@ impl CatacombSurfaceData {
 #[derive(Default)]
 pub struct Damage {
     buffer: Vec<Rectangle<i32, BufferSpace>>,
-    tracker: DamageBag<i32, Physical>,
+    tracker: DamageBag<i32, Logical>,
 }
 
 impl Damage {
