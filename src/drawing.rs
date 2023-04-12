@@ -225,19 +225,17 @@ impl Element for RenderTexture {
 
         // Apply viewporter transforms to damage.
         let viewporter_scale = self.dst_size.to_f64() / self.src_rect.size;
-        damage
-            .drain(..)
-            .flat_map(|damage| {
-                // Limit damage to element's source rect.
-                let mut damage = damage.to_f64().intersection(self.src_rect)?;
+        let damage = damage.drain(..).flat_map(|damage| {
+            // Limit damage to element's source rect.
+            let mut damage = damage.to_f64().intersection(self.src_rect)?;
 
-                // Scale source damage to dst space.
-                damage = damage.upscale(viewporter_scale);
+            // Scale source damage to dst space.
+            damage = damage.upscale(viewporter_scale);
 
-                // Convert damage to physical coordinates.
-                Some(damage.to_physical_precise_round(scale))
-            })
-            .collect()
+            // Convert damage to physical coordinates.
+            Some(damage.to_physical_precise_up(scale))
+        });
+        damage.collect()
     }
 
     fn opaque_regions(&self, _scale: Scale<f64>) -> Vec<Rectangle<i32, Physical>> {

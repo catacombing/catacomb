@@ -5,10 +5,11 @@ use std::cmp::Ordering;
 use std::mem;
 use std::rc::{Rc, Weak};
 
+use smithay::utils::{Logical, Point};
 use smithay::wayland::shell::xdg::ToplevelSurface;
 
 use crate::drawing::CatacombElement;
-use crate::windows::{self, Output, Window};
+use crate::windows::{self, OffsetSurface, Output, Window};
 
 /// Default layout as const for borrowing purposes.
 const DEFAULT_LAYOUT: Layout = Layout { primary: None, secondary: None };
@@ -426,7 +427,7 @@ impl Layouts {
             .map(|window| window.borrow_mut())
     }
 
-    /// Get layout position of a window.
+    /// Get overview layout position of a window.
     pub fn position(&self, window: &Rc<RefCell<Window>>) -> Option<LayoutPosition> {
         for (i, layout) in self.layouts.iter().enumerate() {
             match (&layout.primary, &layout.secondary) {
@@ -442,7 +443,7 @@ impl Layouts {
         None
     }
 
-    /// Convert layout position to winow.
+    /// Convert overview layout position to winow.
     pub fn window_at(&self, position: LayoutPosition) -> Option<&Rc<RefCell<Window>>> {
         self.layouts.get(position.index).and_then(|layout| {
             if position.secondary {
@@ -459,6 +460,21 @@ impl Layouts {
             .iter()
             .flat_map(|layout| layout.primary.iter().chain(&layout.secondary))
             .find(|window| &window.borrow().surface == surface)
+    }
+
+    /// Touch and return surface at the specified location.
+    pub fn touch_surface_at(&mut self, position: Point<f64, Logical>) -> Option<OffsetSurface> {
+        let active_layout = self.active_layout.and_then(|index| self.layouts.get(index))?;
+
+        for window in active_layout.primary.iter().chain(&active_layout.secondary) {
+            let window_ref = window.borrow();
+            if window_ref.contains(position) {
+                self.focus = Some(Rc::downgrade(window));
+                return window_ref.surface_at(position);
+            }
+        }
+
+        None
     }
 
     /// Check if there are any layouts.

@@ -824,14 +824,9 @@ impl Windows {
             return focus_layer_surface!(window);
         }
 
-        let active_layout = self.layouts.active().clone();
-        for window in active_layout.primary().iter().chain(&active_layout.secondary()) {
-            let window_ref = window.borrow();
-            if window_ref.contains(position) {
-                self.layouts.focus = Some(Rc::downgrade(window));
-                self.layers.focus = None;
-                return window_ref.surface_at(position);
-            }
+        if let Some(surface) = self.layouts.touch_surface_at(position) {
+            self.layers.focus = None;
+            return Some(surface);
         }
 
         if let Some(window) = self.layers.background_window_at(position) {
