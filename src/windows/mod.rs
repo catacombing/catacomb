@@ -658,7 +658,7 @@ impl Windows {
 
         // Click inside window opens it as new primary.
         if let Some(position) = overview.layout_position(&self.output, &self.layouts, point) {
-            self.layouts.set_active(&self.output, Some(position.index));
+            self.layouts.set_active(&self.output, Some(position.index), true);
         }
 
         // Return to workspace view.
@@ -763,7 +763,7 @@ impl Windows {
     pub fn on_gesture(&mut self, gesture: Gesture) {
         match (gesture, &self.view) {
             (Gesture::Up, View::Overview(_)) => {
-                self.layouts.set_active(&self.output, None);
+                self.layouts.set_active(&self.output, None, true);
                 self.set_view(View::Workspace);
             },
             (Gesture::Up, _) if !self.layouts.is_empty() => {

@@ -4,6 +4,7 @@ use std::cell::{Ref, RefCell, RefMut};
 use std::cmp::Ordering;
 use std::mem;
 use std::rc::{Rc, Weak};
+use std::sync::atomic::{self, AtomicU64};
 
 use smithay::utils::{Logical, Point};
 use smithay::wayland::shell::xdg::ToplevelSurface;
@@ -12,12 +13,22 @@ use crate::drawing::CatacombElement;
 use crate::windows::{self, OffsetSurface, Output, Window};
 
 /// Default layout as const for borrowing purposes.
-const DEFAULT_LAYOUT: Layout = Layout { primary: None, secondary: None };
+const DEFAULT_LAYOUT: Layout = Layout { primary: None, secondary: None, id: LayoutId(0) };
+
+/// Counter for layout IDs.
+static NEXT_LAYOUT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Active workspaces.
 #[derive(Debug, Default)]
 pub struct Layouts {
     pub focus: Option<Weak<RefCell<Window>>>,
+
+    /// Layout calltree.
+    ///
+    /// This stores the layout from which the active layout was created and its
+    /// respective ancestors. Used to restore the previous layout after the
+    /// window is closed.
+    parent_layouts: Vec<LayoutId>,
 
     transactions: Vec<Transaction>,
     active_layout: Option<usize>,
@@ -42,6 +53,12 @@ impl Layouts {
 
     /// Create and activate a new layout using the desired primary window.
     pub fn create(&mut self, output: &Output, primary: Rc<RefCell<Window>>) {
+        // Update ancestors.
+        let active_layout = self.active();
+        if active_layout.id != DEFAULT_LAYOUT.id {
+            self.parent_layouts.push(active_layout.id);
+        }
+
         // Issue resize for the new window.
         let rectangle = output.primary_rectangle(false);
         primary.borrow_mut().set_dimensions(rectangle);
@@ -50,17 +67,27 @@ impl Layouts {
         self.layouts.push(Layout::new(primary));
 
         // Stage switch to the new layout.
-        self.set_active(output, Some(self.layouts.len() - 1));
+        self.set_active(output, Some(self.layouts.len() - 1), false);
     }
 
     /// Switch the active layout.
-    pub fn set_active(&mut self, output: &Output, layout_index: Option<usize>) {
+    pub fn set_active(
+        &mut self,
+        output: &Output,
+        layout_index: Option<usize>,
+        clear_parents: bool,
+    ) {
         // Send enter events for new layout's windows.
         self.focus = None;
         let layout = layout_index.and_then(|i| self.layouts.get(i)).unwrap_or(&DEFAULT_LAYOUT);
         for window in layout.secondary.iter().chain(&layout.primary) {
             self.focus = Some(Rc::downgrade(window));
             window.borrow_mut().enter(output);
+        }
+
+        // Clear layout history.
+        if clear_parents {
+            self.parent_layouts.clear();
         }
 
         self.add_transaction(Transaction::Active(layout_index));
@@ -80,7 +107,7 @@ impl Layouts {
         };
 
         let target_layout = (active_index as isize + n).rem_euclid(self.layouts.len() as isize);
-        self.set_active(output, Some(target_layout as usize));
+        self.set_active(output, Some(target_layout as usize), true);
     }
 
     /// Update the active layout's primary window.
@@ -92,7 +119,7 @@ impl Layouts {
 
         // Perform simple layout swap when no resize is necessary.
         if layout.secondary.is_none() {
-            self.set_active(output, Some(position.index));
+            self.set_active(output, Some(position.index), true);
             return;
         }
 
@@ -229,6 +256,7 @@ impl Layouts {
         self.transactions.clear();
 
         // Reap dead windows and apply window transactions.
+        let mut clear_active = false;
         let mut index = 0;
         self.layouts.retain_mut(|layout| {
             // Update secondary window transaction and liveliness.
@@ -263,8 +291,7 @@ impl Layouts {
                     self.active_layout =
                         self.active_layout.and_then(|active| active.checked_sub(1));
                 },
-                // Clear active layout when it was removed.
-                Ordering::Equal if !retain => self.active_layout = None,
+                Ordering::Equal if !retain => clear_active = true,
                 _ => (),
             }
 
@@ -272,6 +299,17 @@ impl Layouts {
 
             retain
         });
+
+        if clear_active {
+            // Set active layout to parent or clear it.
+            let parent = self.parent_layouts.pop();
+            self.active_layout = self.layouts.iter().position(|layout| Some(layout.id) == parent);
+
+            // Abandon history.
+            if self.active_layout.is_none() {
+                self.parent_layouts.clear();
+            }
+        }
     }
 
     /// Apply a layout switch transaction.
@@ -355,7 +393,7 @@ impl Layouts {
             },
             // Create new layout when none is currently active.
             None => {
-                self.layouts.push(Layout::default());
+                self.layouts.push(DEFAULT_LAYOUT);
                 let index = self.layouts.len() - 1;
                 self.active_layout = Some(index);
                 &mut self.layouts[index]
@@ -489,15 +527,17 @@ impl Layouts {
 }
 
 /// Workspace window layout.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug)]
 pub struct Layout {
     primary: Option<Rc<RefCell<Window>>>,
     secondary: Option<Rc<RefCell<Window>>>,
+    id: LayoutId,
 }
 
 impl Layout {
     fn new(primary: Rc<RefCell<Window>>) -> Self {
-        Self { primary: Some(primary), secondary: None }
+        let id = LayoutId(NEXT_LAYOUT_ID.fetch_add(1, atomic::Ordering::Relaxed));
+        Self { id, primary: Some(primary), secondary: None }
     }
 
     /// Get layout's primary window.
@@ -517,6 +557,10 @@ impl Layout {
         primary_count + secondary_count
     }
 }
+
+/// Unique layout ID.
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+struct LayoutId(u64);
 
 /// Transactional layout change.
 #[derive(Debug)]
