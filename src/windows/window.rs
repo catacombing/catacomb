@@ -39,9 +39,6 @@ use crate::windows::surface::{CatacombLayerSurface, OffsetSurface, Surface};
 /// Wayland client window state.
 #[derive(Debug)]
 pub struct Window<S = ToplevelSurface> {
-    /// Initial size configure status.
-    pub initial_configure_sent: bool,
-
     /// Last configure size acked by the client.
     pub acked_size: Size<i32, Logical>,
 
@@ -81,7 +78,6 @@ impl<S: Surface + 'static> Window<S> {
     pub fn new(surface: S) -> Self {
         Window {
             surface,
-            initial_configure_sent: Default::default(),
             presentation_callbacks: Default::default(),
             texture_cache: Default::default(),
             transaction: Default::default(),
@@ -344,16 +340,6 @@ impl<S: Surface + 'static> Window<S> {
         }
     }
 
-    /// Send a configure for the latest window properties.
-    fn reconfigure(&mut self) {
-        let size = match &self.transaction {
-            Some(transaction) => transaction.rectangle.size,
-            None => self.rectangle.size,
-        };
-
-        self.surface.reconfigure(size);
-    }
-
     /// Change the window dimensions.
     pub fn set_dimensions(&mut self, rectangle: Rectangle<i32, Logical>) {
         // Skip if we're already at the correct size.
@@ -365,10 +351,8 @@ impl<S: Surface + 'static> Window<S> {
         // Transactionally update geometry.
         self.start_transaction().rectangle = rectangle;
 
-        // Send reconfigures after the initial commit.
-        if self.initial_configure_sent {
-            self.reconfigure();
-        }
+        // Apply the dimensional changes.
+        self.surface.resize(rectangle.size);
     }
 
     /// Send output enter event to this window's surfaces.
@@ -458,10 +442,7 @@ impl<S: Surface + 'static> Window<S> {
         );
 
         // Send initial configure after the first commit.
-        if !self.initial_configure_sent {
-            self.initial_configure_sent = true;
-            self.reconfigure();
-        }
+        self.surface.initial_configure();
     }
 
     /// Find subsurface at the specified location.

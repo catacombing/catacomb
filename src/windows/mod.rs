@@ -7,10 +7,12 @@ use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
+use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use smithay::backend::drm::DrmEventMetadata;
 use smithay::backend::renderer::element::RenderElementStates;
 use smithay::backend::renderer::gles2::Gles2Renderer;
 use smithay::reexports::calloop::LoopHandle;
+use smithay::reexports::wayland_protocols::xdg::decoration as _decoration;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::DisplayHandle;
@@ -113,6 +115,25 @@ impl Windows {
 
     /// Add a new window.
     pub fn add(&mut self, surface: ToplevelSurface) {
+        // Set general window states.
+        surface.with_pending_state(|state| {
+            // Mark window as tiled, using maximized fallback if tiling is unsupported.
+            if surface.version() >= 2 {
+                state.states.set(State::TiledBottom);
+                state.states.set(State::TiledRight);
+                state.states.set(State::TiledLeft);
+                state.states.set(State::TiledTop);
+            } else {
+                state.states.set(State::Maximized);
+            }
+
+            // Always use server-side decoration.
+            state.decoration_mode = Some(DecorationMode::ServerSide);
+
+            // Activate by default to avoid reconfigure.
+            state.states.set(State::Activated);
+        });
+
         let window = Rc::new(RefCell::new(Window::new(surface)));
         self.layouts.create(&self.output, window);
     }
@@ -459,9 +480,15 @@ impl Windows {
 
             // Set new activated flag.
             if let Some(surface) = &surface {
-                surface.set_state(|state| {
-                    state.states.set(State::Activated);
-                });
+                // Check for activation to avoid double-configure on startup.
+                let activated =
+                    surface.with_pending_state(|state| state.states.contains(State::Activated));
+
+                if !activated {
+                    surface.set_state(|state| {
+                        state.states.set(State::Activated);
+                    });
+                }
             }
             self.activated = surface.clone();
         }

@@ -67,6 +67,7 @@ use crate::protocols::screencopy::frame::Screencopy;
 use crate::protocols::screencopy::{ScreencopyHandler, ScreencopyManagerState};
 use crate::udev::Udev;
 use crate::vibrate::Vibrator;
+use crate::windows::surface::Surface;
 use crate::windows::Windows;
 use crate::{dbus, delegate_screencopy_manager};
 
@@ -511,10 +512,9 @@ delegate_output!(Catacomb);
 
 impl XdgDecorationHandler for Catacomb {
     fn new_decoration(&mut self, toplevel: ToplevelSurface) {
-        toplevel.with_pending_state(|state| {
+        toplevel.set_state(|state| {
             state.decoration_mode = Some(DecorationMode::ServerSide);
         });
-        toplevel.send_configure();
     }
 
     fn request_mode(&mut self, _toplevel: ToplevelSurface, _mode: DecorationMode) {}

@@ -3,9 +3,6 @@
 use std::ops::Deref;
 use std::sync::Mutex;
 
-use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
-use smithay::reexports::wayland_protocols::xdg::decoration as _decoration;
-use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::compositor;
@@ -14,7 +11,7 @@ use smithay::wayland::shell::wlr_layer::{
 };
 use smithay::wayland::shell::xdg::{
     PopupState, PopupSurface, SurfaceCachedState, ToplevelState, ToplevelSurface,
-    XdgToplevelSurfaceRoleAttributes,
+    XdgPopupSurfaceData, XdgToplevelSurfaceData, XdgToplevelSurfaceRoleAttributes,
 };
 
 /// Common surface functionality.
@@ -31,11 +28,17 @@ pub trait Surface {
     /// Request application shutdown.
     fn send_close(&self);
 
+    /// Send the initial configure.
+    fn initial_configure(&self);
+
+    /// Check whether the initial configure was already sent.
+    fn initial_configure_sent(&self) -> bool;
+
     /// Update surface state.
     fn set_state<F: FnMut(&mut Self::State)>(&self, f: F);
 
-    /// Send a configure for the latest window properties.
-    fn reconfigure(&self, size: Size<i32, Logical>);
+    /// Update surface's dimensions.
+    fn resize(&self, size: Size<i32, Logical>);
 
     /// Window's acknowledged size.
     fn acked_size(&self) -> Size<i32, Logical>;
@@ -63,27 +66,31 @@ impl Surface for ToplevelSurface {
         self.send_close();
     }
 
-    fn set_state<F: FnMut(&mut Self::State)>(&self, f: F) {
-        self.with_pending_state(f);
-        self.send_configure();
+    fn initial_configure(&self) {
+        if !self.initial_configure_sent() {
+            self.send_configure();
+        }
     }
 
-    fn reconfigure(&self, size: Size<i32, Logical>) {
+    fn initial_configure_sent(&self) -> bool {
+        compositor::with_states(self.surface(), |states| {
+            let surface_data = states.data_map.get::<XdgToplevelSurfaceData>().unwrap();
+            surface_data.lock().unwrap().initial_configure_sent
+        })
+    }
+
+    fn set_state<F: FnMut(&mut Self::State)>(&self, f: F) {
+        self.with_pending_state(f);
+
+        // Ignore configures before the initial one.
+        if self.initial_configure_sent() {
+            self.send_configure();
+        }
+    }
+
+    fn resize(&self, size: Size<i32, Logical>) {
         self.set_state(|state| {
             state.size = Some(size);
-
-            // Mark window as tiled, using maximized fallback if tiling is unsupported.
-            if self.version() >= 2 {
-                state.states.set(State::TiledBottom);
-                state.states.set(State::TiledRight);
-                state.states.set(State::TiledLeft);
-                state.states.set(State::TiledTop);
-            } else {
-                state.states.set(State::Maximized);
-            }
-
-            // Always use server-side decoration.
-            state.decoration_mode = Some(DecorationMode::ServerSide);
         });
     }
 
@@ -113,14 +120,31 @@ impl Surface for PopupSurface {
 
     fn send_close(&self) {}
 
-    fn set_state<F: FnMut(&mut Self::State)>(&self, f: F) {
-        self.with_pending_state(f);
+    fn initial_configure(&self) {
+        if self.initial_configure_sent() {
+            return;
+        }
+
         let _ = self.send_configure();
     }
 
-    fn reconfigure(&self, _size: Size<i32, Logical>) {
-        let _ = self.send_configure();
+    fn initial_configure_sent(&self) -> bool {
+        compositor::with_states(self.surface(), |states| {
+            let surface_data = states.data_map.get::<XdgPopupSurfaceData>().unwrap();
+            surface_data.lock().unwrap().initial_configure_sent
+        })
     }
+
+    fn set_state<F: FnMut(&mut Self::State)>(&self, f: F) {
+        self.with_pending_state(f);
+
+        // Ignore configures before the initial one.
+        if self.initial_configure_sent() {
+            let _ = self.send_configure();
+        }
+    }
+
+    fn resize(&self, _size: Size<i32, Logical>) {}
 
     fn acked_size(&self) -> Size<i32, Logical> {
         self.with_pending_state(|state| state.positioner.rect_size)
@@ -155,12 +179,31 @@ impl Surface for CatacombLayerSurface {
         self.surface.send_close();
     }
 
-    fn set_state<F: FnMut(&mut Self::State)>(&self, f: F) {
-        self.surface.with_pending_state(f);
-        self.surface.send_configure();
+    fn initial_configure(&self) {
+        if self.initial_configure_sent() {
+            return;
+        }
+
+        self.send_configure();
     }
 
-    fn reconfigure(&self, size: Size<i32, Logical>) {
+    fn initial_configure_sent(&self) -> bool {
+        compositor::with_states(self.surface(), |states| {
+            let surface_data = states.data_map.get::<Mutex<LayerSurfaceAttributes>>().unwrap();
+            surface_data.lock().unwrap().initial_configure_sent
+        })
+    }
+
+    fn set_state<F: FnMut(&mut Self::State)>(&self, f: F) {
+        self.surface.with_pending_state(f);
+
+        // Ignore configures before the initial one.
+        if self.initial_configure_sent() {
+            self.surface.send_configure();
+        }
+    }
+
+    fn resize(&self, size: Size<i32, Logical>) {
         self.set_state(|state| {
             state.size = Some(size);
         });
