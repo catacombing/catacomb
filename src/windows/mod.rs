@@ -480,15 +480,9 @@ impl Windows {
 
             // Set new activated flag.
             if let Some(surface) = &surface {
-                // Check for activation to avoid double-configure on startup.
-                let activated =
-                    surface.with_pending_state(|state| state.states.contains(State::Activated));
-
-                if !activated {
-                    surface.set_state(|state| {
-                        state.states.set(State::Activated);
-                    });
-                }
+                surface.set_state(|state| {
+                    state.states.set(State::Activated);
+                });
             }
             self.activated = surface.clone();
         }
