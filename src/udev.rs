@@ -48,7 +48,6 @@ use smithay::wayland::{dmabuf, shm};
 use crate::catacomb::Catacomb;
 use crate::dbus::{self, DBusEvent};
 use crate::drawing::{CatacombElement, Graphics};
-use crate::ipc_server;
 use crate::output::Output;
 use crate::protocols::screencopy::frame::Screencopy;
 use crate::windows::Windows;
@@ -120,10 +119,6 @@ pub fn run() {
         },
         Err(err) => eprintln!("DBus signal listener creation failed: {err}"),
     }
-
-    // Start IPC socket listener.
-    ipc_server::spawn_ipc_socket(&event_loop.handle(), &catacomb.socket_name)
-        .expect("spawn IPC socket");
 
     // Continously dispatch event loop.
     while !catacomb.terminated {

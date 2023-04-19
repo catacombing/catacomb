@@ -69,7 +69,7 @@ use crate::udev::Udev;
 use crate::vibrate::Vibrator;
 use crate::windows::surface::Surface;
 use crate::windows::Windows;
-use crate::{dbus, delegate_screencopy_manager};
+use crate::{dbus, delegate_screencopy_manager, ipc_server};
 
 /// The script to run after compositor start.
 const POST_START_SCRIPT: &str = "post_start.sh";
@@ -214,6 +214,9 @@ impl Catacomb {
 
         // Setup rumble device.
         let vibrator = Vibrator::new(event_loop.clone());
+
+        // Start IPC socket listener.
+        ipc_server::spawn_ipc_socket(&event_loop, &socket_name).expect("spawn IPC socket");
 
         // Run user startup script.
         if let Some(mut script_path) = dirs::config_dir() {
