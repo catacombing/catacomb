@@ -16,7 +16,7 @@ use std::{env, process};
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "smithay")]
-use smithay::utils::Transform;
+use smithay::utils::{Logical, Point, Size, Transform};
 
 /// IPC message format.
 #[cfg_attr(feature = "clap", derive(Subcommand))]
@@ -35,6 +35,29 @@ pub enum IpcMessage {
     Scale {
         /// New scale factor.
         scale: f64,
+    },
+    /// Add a gesture.
+    Bind {
+        /// App ID regex for which the gesture.
+        app_id: String,
+        /// Starting sector of the gesture.
+        start: GestureSector,
+        /// Termination sector of the gesture.
+        end: GestureSector,
+        /// Programm this gesture should spawn.
+        program: String,
+        /// Arguments for this gesture's program.
+        #[cfg_attr(feature = "clap", clap(allow_hyphen_values = true, multiple_values = true))]
+        arguments: Vec<String>,
+    },
+    /// Remove a gesture.
+    Unbind {
+        /// App ID regex of the gesture.
+        app_id: String,
+        /// Starting sector of the gesture.
+        start: GestureSector,
+        /// Termination sector of the gesture.
+        end: GestureSector,
     },
 }
 
@@ -94,6 +117,65 @@ impl Orientation {
             Self::InversePortrait => Transform::_180,
             Self::Landscape => Transform::_270,
             Self::InverseLandscape => Transform::_90,
+        }
+    }
+}
+
+/// Gesture start/end sectors.
+#[derive(Deserialize, Serialize, PartialEq, Eq, Copy, Clone, Debug)]
+pub enum GestureSector {
+    TopLeft,
+    TopCenter,
+    TopRight,
+    MiddleLeft,
+    MiddleCenter,
+    MiddleRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+}
+
+impl FromStr for GestureSector {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "topleft" | "tl" => Ok(Self::TopLeft),
+            "topcenter" | "tc" => Ok(Self::TopCenter),
+            "topright" | "tr" => Ok(Self::TopRight),
+            "middleleft" | "ml" => Ok(Self::MiddleLeft),
+            "middlecenter" | "mc" => Ok(Self::MiddleCenter),
+            "middleright" | "mr" => Ok(Self::MiddleRight),
+            "bottomleft" | "bl" => Ok(Self::BottomLeft),
+            "bottomcenter" | "bc" => Ok(Self::BottomCenter),
+            "bottomright" | "br" => Ok(Self::BottomRight),
+            _ => Err(format!(
+                "Got {s:?}, expected one of topleft, topcenter, topright, middleleft, \
+                 middlecenter, middleright, bottomleft, bottomcenter, or bottomright"
+            )),
+        }
+    }
+}
+
+impl GestureSector {
+    /// Get output sector a point lies in.
+    #[cfg(feature = "smithay")]
+    pub fn from_point(output_size: Size<f64, Logical>, point: Point<f64, Logical>) -> Self {
+        // Map point in the range of 0..=2 for X and Y.
+        let x_mult = (point.x / (output_size.w / 3.)).floor() as u32;
+        let y_mult = (point.y / (output_size.h / 3.)).floor() as u32;
+
+        match (x_mult.min(2), y_mult.min(2)) {
+            (0, 0) => Self::TopLeft,
+            (1, 0) => Self::TopCenter,
+            (2, 0) => Self::TopRight,
+            (0, 1) => Self::MiddleLeft,
+            (1, 1) => Self::MiddleCenter,
+            (2, 1) => Self::MiddleRight,
+            (0, 2) => Self::BottomLeft,
+            (1, 2) => Self::BottomCenter,
+            (2, 2) => Self::BottomRight,
+            _ => unreachable!(),
         }
     }
 }

@@ -10,6 +10,7 @@ use catacomb_ipc::{self, IpcMessage};
 use smithay::reexports::calloop::LoopHandle;
 
 use crate::catacomb::Catacomb;
+use crate::config::GestureBinding;
 use crate::socket::SocketSource;
 
 /// Create an IPC socket.
@@ -60,5 +61,14 @@ fn handle_message(buffer: &mut String, stream: UnixStream, catacomb: &mut Cataco
             catacomb.windows.lock_orientation(orientation);
         },
         IpcMessage::Scale { scale } => catacomb.windows.set_scale(scale),
+        IpcMessage::Bind { app_id, start, end, program, arguments } => {
+            let gesture = GestureBinding { app_id, start, end, program, arguments };
+            catacomb.touch_state.user_gestures.push(gesture);
+        },
+        IpcMessage::Unbind { app_id, start, end } => {
+            catacomb.touch_state.user_gestures.retain(|gesture| {
+                gesture.app_id != app_id || gesture.start != start || gesture.end != end
+            });
+        },
     }
 }

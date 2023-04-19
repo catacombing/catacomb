@@ -1,6 +1,8 @@
 //! Window surfaces.
 
+use std::cell::RefCell;
 use std::ops::Deref;
+use std::rc::Weak;
 use std::sync::Mutex;
 
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -13,6 +15,8 @@ use smithay::wayland::shell::xdg::{
     PopupState, PopupSurface, SurfaceCachedState, ToplevelState, ToplevelSurface,
     XdgPopupSurfaceData, XdgToplevelSurfaceData, XdgToplevelSurfaceRoleAttributes,
 };
+
+use crate::windows::Window;
 
 /// Common surface functionality.
 pub trait Surface {
@@ -236,12 +240,19 @@ impl Deref for CatacombLayerSurface {
 
 /// Surface with offset from its window origin.
 pub struct OffsetSurface {
+    pub toplevel: Option<OffsetSurfaceToplevel>,
     pub offset: Point<i32, Logical>,
     pub surface: WlSurface,
 }
 
 impl OffsetSurface {
     pub fn new(surface: WlSurface, offset: Point<i32, Logical>) -> Self {
-        Self { surface, offset }
+        Self { surface, offset, toplevel: None }
     }
+}
+
+/// Focusable surface toplevel kinds.
+pub enum OffsetSurfaceToplevel {
+    Layout((Weak<RefCell<Window>>, Option<String>)),
+    Layer(WlSurface),
 }

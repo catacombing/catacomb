@@ -28,6 +28,7 @@ use smithay::wayland::shell::wlr_layer::{
 };
 use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ToplevelSurface, XdgPopupSurfaceRoleAttributes,
+    XdgToplevelSurfaceRoleAttributes,
 };
 
 use crate::drawing::{CatacombElement, CatacombSurfaceData, RenderTexture, Texture};
@@ -47,6 +48,9 @@ pub struct Window<S = ToplevelSurface> {
 
     /// Attached surface.
     pub surface: S,
+
+    /// Application ID.
+    pub app_id: Option<String>,
 
     /// Buffers pending to be updated.
     dirty: bool,
@@ -86,6 +90,7 @@ impl<S: Surface + 'static> Window<S> {
             rectangle: Default::default(),
             visible: Default::default(),
             popups: Default::default(),
+            app_id: Default::default(),
             dirty: Default::default(),
             dead: Default::default(),
         }
@@ -443,6 +448,18 @@ impl<S: Surface + 'static> Window<S> {
 
         // Send initial configure after the first commit.
         self.surface.initial_configure();
+
+        // Update App ID.
+        compositor::with_states(self.surface.surface(), |states| {
+            let attrs = states
+                .data_map
+                .get::<Mutex<XdgToplevelSurfaceRoleAttributes>>()
+                .and_then(|attributes| attributes.lock().ok());
+
+            if let Some(attributes) = attrs.filter(|attrs| attrs.app_id != self.app_id) {
+                self.app_id = attributes.app_id.clone();
+            }
+        })
     }
 
     /// Find subsurface at the specified location.

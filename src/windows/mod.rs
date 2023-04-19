@@ -23,13 +23,15 @@ use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface};
 
 use crate::catacomb::Catacomb;
 use crate::drawing::{CatacombElement, Graphics};
-use crate::input::{Gesture, TouchState};
+use crate::input::{HandleGesture, TouchState};
 use crate::layer::Layers;
 use crate::orientation::Orientation;
 use crate::output::{Canvas, Output, GESTURE_HANDLE_HEIGHT};
 use crate::overview::{DragAction, DragAndDrop, Overview};
 use crate::windows::layout::{LayoutPosition, Layouts};
-use crate::windows::surface::{CatacombLayerSurface, OffsetSurface, Surface};
+use crate::windows::surface::{
+    CatacombLayerSurface, OffsetSurface, OffsetSurfaceToplevel, Surface,
+};
 use crate::windows::window::Window;
 
 pub mod layout;
@@ -492,10 +494,10 @@ impl Windows {
             .or_else(|| self.layers.focus.clone())
     }
 
-    /// Clear all window focus.
-    fn clear_focus(&mut self) {
-        self.layouts.focus = None;
-        self.layers.focus = None;
+    /// Update the focused window.
+    pub fn set_focus(&mut self, layout: Option<Weak<RefCell<Window>>>, layer: Option<WlSurface>) {
+        self.layouts.focus = layout;
+        self.layers.focus = layer;
     }
 
     /// Start a new transaction.
@@ -649,16 +651,19 @@ impl Windows {
 
     /// Handle start of touch input.
     pub fn on_touch_start(&mut self, point: Point<f64, Logical>) {
-        if let View::Overview(overview) = &mut self.view {
-            // Hold on overview window stages it for D&D.
-            if let Some(position) = overview.layout_position(&self.output, &self.layouts, point) {
-                overview.start_hold(&self.event_loop, position);
-            }
+        let overview = match &mut self.view {
+            View::Overview(overview) => overview,
+            _ => return,
+        };
 
-            overview.drag_action = DragAction::None;
-            overview.last_drag_point = point;
-            overview.y_offset = 0.;
+        // Hold on overview window stages it for D&D.
+        if let Some(position) = overview.layout_position(&self.output, &self.layouts, point) {
+            overview.start_hold(&self.event_loop, position);
         }
+
+        overview.drag_action = DragAction::None;
+        overview.last_drag_point = point;
+        overview.y_offset = 0.;
     }
 
     /// Hand quick touch input.
@@ -668,7 +673,7 @@ impl Windows {
             View::Workspace => {
                 // Clear focus on gesture handle tap.
                 if point.y >= (self.output.size().h - GESTURE_HANDLE_HEIGHT) as f64 {
-                    self.clear_focus();
+                    self.set_focus(None, None);
                 }
                 return;
             },
@@ -781,13 +786,13 @@ impl Windows {
     }
 
     /// Handle touch gestures.
-    pub fn on_gesture(&mut self, gesture: Gesture) {
+    pub fn on_gesture(&mut self, gesture: HandleGesture) {
         match (gesture, &self.view) {
-            (Gesture::Up, View::Overview(_)) => {
+            (HandleGesture::Up, View::Overview(_)) => {
                 self.layouts.set_active(&self.output, None, true);
                 self.set_view(View::Workspace);
             },
-            (Gesture::Up, _) if !self.layouts.is_empty() => {
+            (HandleGesture::Up, _) if !self.layouts.is_empty() => {
                 // Unset fullscreen XDG state if it's currently active.
                 if let View::Fullscreen(window) = &self.view {
                     window.borrow().surface.set_state(|state| {
@@ -800,29 +805,28 @@ impl Windows {
                 self.set_view(View::Overview(overview));
                 self.resize_all();
             },
-            (Gesture::Left, View::Workspace) => self.layouts.cycle_active(&self.output, 1),
-            (Gesture::Right, View::Workspace) => self.layouts.cycle_active(&self.output, -1),
-            (Gesture::Up | Gesture::Left | Gesture::Right, _) => (),
+            (HandleGesture::Left, View::Workspace) => self.layouts.cycle_active(&self.output, 1),
+            (HandleGesture::Right, View::Workspace) => self.layouts.cycle_active(&self.output, -1),
+            (HandleGesture::Up | HandleGesture::Left | HandleGesture::Right, _) => (),
         }
     }
 
     /// Check which surface is at a specific touch point.
     ///
-    /// If the window at the touch location accepts keyboard input, this
-    /// function will also change focus to the root window associated with
-    /// the touch surface.
-    pub fn touch_surface_at(&mut self, position: Point<f64, Logical>) -> Option<OffsetSurface> {
+    /// This filters out non-interactive surfaces.
+    pub fn surface_at(&mut self, position: Point<f64, Logical>) -> Option<OffsetSurface> {
         /// Focus a layer shell surface and return it.
         macro_rules! focus_layer_surface {
             ($window:expr) => {{
-                let surface = $window.surface_at(position);
+                let mut surface = $window.surface_at(position)?;
 
+                // Only set new focus target if focus is accepted.
                 if !$window.deny_focus {
-                    self.layouts.focus = None;
-                    self.layers.focus = Some($window.surface().clone());
+                    let wl_surface = $window.surface().clone();
+                    surface.toplevel = Some(OffsetSurfaceToplevel::Layer(wl_surface));
                 }
 
-                surface
+                Some(surface)
             }};
         }
 
@@ -834,7 +838,16 @@ impl Windows {
                     return focus_layer_surface!(window);
                 }
 
-                return window.borrow().surface_at(position);
+                // Get surface of the fullscreened window.
+                let window_ref = window.borrow();
+                let mut surface = window_ref.surface_at(position)?;
+
+                // Set toplevel to update focus.
+                let app_id = window_ref.app_id.clone();
+                let window = Rc::downgrade(window);
+                surface.toplevel = Some(OffsetSurfaceToplevel::Layout((window, app_id)));
+
+                return Some(surface);
             },
             _ => return None,
         };
@@ -846,20 +859,12 @@ impl Windows {
         }
 
         if let Some(surface) = self.layouts.touch_surface_at(position) {
-            self.layers.focus = None;
             return Some(surface);
         }
 
         if let Some(window) = self.layers.background_window_at(position) {
             return focus_layer_surface!(window);
         }
-
-        // Clear focus if touch wasn't on any surface.
-        //
-        // NOTE: We can't just always clear focus since a layer shell surface that
-        // denies focus should still return the touched surface but not clear
-        // the focus.
-        self.clear_focus();
 
         None
     }

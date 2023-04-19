@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 
+use catacomb_ipc::GestureSector;
 use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Event, InputBackend, InputEvent, KeyState,
     KeyboardKeyEvent, MouseButton, PointerButtonEvent, TouchEvent as _, TouchSlot,
@@ -13,10 +14,11 @@ use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
 use smithay::wayland::seat::TouchHandle;
 
 use crate::catacomb::Catacomb;
-use crate::config::APP_DRAWER;
+use crate::config::{GestureBinding, APP_DRAWER};
+use crate::daemon;
 use crate::orientation::Orientation;
 use crate::output::{Output, GESTURE_HANDLE_HEIGHT};
-use crate::windows::surface::OffsetSurface;
+use crate::windows::surface::{OffsetSurface, OffsetSurfaceToplevel};
 
 /// Time before a tap is considered a hold.
 pub const HOLD_DURATION: Duration = Duration::from_secs(1);
@@ -45,10 +47,12 @@ const POINTER_TOUCH_SLOT: Option<u32> = Some(0);
 
 /// Touch input state.
 pub struct TouchState {
+    pub user_gestures: Vec<GestureBinding>,
     pub position: Point<f64, Logical>,
 
     event_loop: LoopHandle<'static, Catacomb>,
     velocity_timer: Option<RegistrationToken>,
+    active_app_id: Option<String>,
     velocity: Point<f64, Logical>,
     events: Vec<TouchEvent>,
     slot: Option<TouchSlot>,
@@ -63,6 +67,8 @@ impl TouchState {
             event_loop,
             touch,
             velocity_timer: Default::default(),
+            user_gestures: Default::default(),
+            active_app_id: Default::default(),
             position: Default::default(),
             velocity: Default::default(),
             is_drag: Default::default(),
@@ -102,11 +108,29 @@ impl TouchState {
 
     /// Get the updated active touch action.
     fn action(&mut self, output: &Output) -> Option<TouchAction> {
+        // Check if a gesture was completed.
         let touching = self.touching();
-        if self.start.is_gesture && !touching {
-            if let Some(gesture) = Gesture::from_points(output, self.start.position, self.position)
-            {
-                return Some(TouchAction::Gesture(gesture));
+        if !touching {
+            if self.start.is_handle_gesture {
+                // Check if a handle gesture was completed.
+                let gesture =
+                    HandleGesture::from_points(output, self.start.position, self.position);
+                if let Some(gesture) = gesture {
+                    return Some(TouchAction::HandleGesture(gesture));
+                }
+            } else {
+                // Find matching user gestures.
+                let app_id = self.active_app_id.as_ref();
+                let start = self.start.position;
+                let end = Some(self.position);
+                let mut gestures = self.matching_gestures(output, app_id, start, end);
+
+                if let Some(gesture) = gestures.next() {
+                    return Some(TouchAction::UserGesture((
+                        gesture.program.clone(),
+                        gesture.arguments.clone(),
+                    )));
+                }
             }
         }
 
@@ -117,49 +141,77 @@ impl TouchState {
             || self.start.time.elapsed() >= HOLD_DURATION
         {
             self.is_drag = true;
-            return (!self.start.is_gesture).then_some(TouchAction::Drag);
+            return Some(TouchAction::Drag);
         }
 
         (!touching).then_some(TouchAction::Tap)
+    }
+
+    /// Find gestures matching an origin point.
+    fn matching_gestures<'a>(
+        &'a self,
+        output: &'a Output,
+        app_id: Option<&'a String>,
+        start: Point<f64, Logical>,
+        end: Option<Point<f64, Logical>>,
+    ) -> impl Iterator<Item = &'a GestureBinding> {
+        let output_size = output.size().to_f64();
+        let start_sector = GestureSector::from_point(output_size, start);
+        let end_sector = end.map(|end| GestureSector::from_point(output_size, end));
+
+        self.user_gestures.iter().filter(move |gesture| {
+            gesture.start == start_sector
+                && end_sector.map_or(true, |sector| gesture.end == sector)
+                && (gesture.app_id == "*" || Some(&gesture.app_id) == app_id)
+        })
     }
 }
 
 /// Start of a touch interaction.
 struct TouchStart {
     position: Point<f64, Logical>,
-    is_gesture: bool,
+    is_handle_gesture: bool,
     time: Instant,
 }
 
 impl Default for TouchStart {
     fn default() -> Self {
-        Self { time: Instant::now(), position: Default::default(), is_gesture: Default::default() }
+        Self {
+            time: Instant::now(),
+            position: Default::default(),
+            is_handle_gesture: Default::default(),
+        }
     }
 }
 
 impl TouchStart {
     fn new(output: &Output, position: Point<f64, Logical>) -> Self {
-        Self { is_gesture: Gesture::is_start(output, position), time: Instant::now(), position }
+        Self {
+            is_handle_gesture: HandleGesture::is_start(output, position),
+            time: Instant::now(),
+            position,
+        }
     }
 }
 
 /// Available touch input actions.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug)]
 enum TouchAction {
-    Gesture(Gesture),
+    HandleGesture(HandleGesture),
+    UserGesture((String, Vec<String>)),
     Drag,
     Tap,
 }
 
-/// Touch gestures.
+/// Gesture handle touch gestures.
 #[derive(Debug, Copy, Clone)]
-pub enum Gesture {
+pub enum HandleGesture {
     Up,
     Left,
     Right,
 }
 
-impl Gesture {
+impl HandleGesture {
     /// Get a gesture from its start/end.
     fn from_points(
         output: &Output,
@@ -170,9 +222,9 @@ impl Gesture {
         if Self::is_start(output, end) {
             let delta = end.x - start.x;
             if delta < -MAX_TAP_DISTANCE {
-                return Some(Gesture::Left);
+                return Some(HandleGesture::Left);
             } else if delta > MAX_TAP_DISTANCE {
-                return Some(Gesture::Right);
+                return Some(HandleGesture::Right);
             }
         }
 
@@ -181,7 +233,7 @@ impl Gesture {
         let drag_up_rect =
             Rectangle::from_loc_and_size((0., 0.), (output_size.w, output_size.h * 0.75));
         if drag_up_rect.contains(end) {
-            return Some(Gesture::Up);
+            return Some(HandleGesture::Up);
         }
 
         None
@@ -310,12 +362,50 @@ impl Catacomb {
     /// Handle new touch input start.
     fn on_touch_down(&mut self, event: TouchEvent) {
         let TouchEvent { time, slot, position, .. } = event;
-        let surface = self.windows.touch_surface_at(event.position);
+
+        // Find surface at touch position.
+        let surface = self.windows.surface_at(event.position);
 
         // Notify client.
-        if let Some(OffsetSurface { surface, offset }) = surface {
-            let serial = SERIAL_COUNTER.next_serial();
-            self.touch_state.touch.down(serial, time, &surface, offset, slot, position);
+        self.touch_state.active_app_id = None;
+        match surface {
+            Some(OffsetSurface { mut toplevel, surface, offset }) => {
+                let app_id = match &mut toplevel {
+                    Some(OffsetSurfaceToplevel::Layout((_, app_id))) => app_id.take(),
+                    _ => None,
+                };
+
+                // Check if a user gesture is triggered by this touch event.
+                let gesture_active = self
+                    .touch_state
+                    .matching_gestures(self.windows.output(), app_id.as_ref(), event.position, None)
+                    .next()
+                    .is_some();
+                self.touch_state.active_app_id = app_id;
+
+                if !gesture_active {
+                    // Update window focus.
+                    match toplevel {
+                        Some(OffsetSurfaceToplevel::Layout((window, _))) => {
+                            self.windows.set_focus(Some(window), None);
+                        },
+                        Some(OffsetSurfaceToplevel::Layer(layer)) => {
+                            self.windows.set_focus(None, Some(layer));
+                        },
+                        // For surfaces denying focus, we send events but inhibit focus.
+                        None => (),
+                    }
+
+                    let serial = SERIAL_COUNTER.next_serial();
+                    self.touch_state.touch.down(serial, time, &surface, offset, slot, position);
+                }
+            },
+            // Clear focus if touch wasn't on any surface.
+            //
+            // NOTE: We can't just always clear focus since a layer shell surface that
+            // denies focus should still return the touched surface but not clear
+            // the focus.
+            None => self.windows.set_focus(None, None),
         }
 
         // Allow only a single touch at a time.
@@ -327,8 +417,8 @@ impl Catacomb {
         // Initialize the touch state.
         self.touch_state.start(self.windows.output(), position);
 
-        // Only send touch start if there's no gesture in progress.
-        if !self.touch_state.start.is_gesture {
+        // Only send touch start if there's no handle gesture in progress.
+        if !self.touch_state.start.is_handle_gesture {
             self.windows.on_touch_start(position);
         }
     }
@@ -349,7 +439,9 @@ impl Catacomb {
             Some(TouchAction::Tap) => {
                 self.windows.on_tap(self.touch_state.position);
             },
-            Some(TouchAction::Drag | TouchAction::Gesture(_)) => {
+            Some(
+                TouchAction::Drag | TouchAction::HandleGesture(_) | TouchAction::UserGesture(_),
+            ) => {
                 self.add_velocity_timeout();
                 self.update_position(self.touch_state.position);
             },
@@ -386,21 +478,31 @@ impl Catacomb {
                     self.windows.on_drag_release();
                 }
             },
-            Some(TouchAction::Gesture(gesture)) => self.on_gesture(gesture),
+            Some(TouchAction::HandleGesture(gesture)) => self.on_handle_gesture(gesture),
+            Some(TouchAction::UserGesture((program, args))) => self.on_user_gesture(program, args),
             _ => (),
         }
 
         self.touch_state.position = position;
     }
 
-    /// Dispatch gestures if it was completed.
-    fn on_gesture(&mut self, gesture: Gesture) {
-        // Only accept gestures when the touch input was released.
-        if self.touch_state.touching() {
-            return;
+    /// Dispatch handle gestures.
+    fn on_handle_gesture(&mut self, gesture: HandleGesture) {
+        self.windows.on_gesture(gesture);
+
+        self.touch_state.cancel_velocity();
+
+        // Notify client.
+        self.touch_state.touch.cancel();
+    }
+
+    /// Dispatch user gestures.
+    fn on_user_gesture(&mut self, program: String, args: Vec<String>) {
+        // Execute subcommand.
+        if let Err(err) = daemon::spawn(&program, &args) {
+            eprintln!("Failed gesture command {program} {args:?}: {err}");
         }
 
-        self.windows.on_gesture(gesture);
         self.touch_state.cancel_velocity();
 
         // Notify client.
