@@ -9,11 +9,10 @@ use std::error::Error;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::{env, process};
 
 #[cfg(feature = "clap")]
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "smithay")]
 use smithay::utils::{Logical, Point, Size, Transform};
@@ -25,7 +24,7 @@ pub enum IpcMessage {
     /// Screen rotation (un)locking.
     Orientation {
         /// Lock rotation in the specified orientation.
-        #[cfg_attr(feature = "clap", clap(long, min_values = 0, conflicts_with = "unlock"))]
+        #[cfg_attr(feature = "clap", clap(long, num_args = 0..=1, conflicts_with = "unlock"))]
         lock: Option<Orientation>,
         /// Clear screen rotation lock.
         #[cfg_attr(feature = "clap", clap(long))]
@@ -47,7 +46,7 @@ pub enum IpcMessage {
         /// Programm this gesture should spawn.
         program: String,
         /// Arguments for this gesture's program.
-        #[cfg_attr(feature = "clap", clap(allow_hyphen_values = true, multiple_values = true))]
+        #[cfg_attr(feature = "clap", clap(allow_hyphen_values = true, trailing_var_arg = true))]
         arguments: Vec<String>,
     },
     /// Remove a gesture.
@@ -62,6 +61,7 @@ pub enum IpcMessage {
 }
 
 /// Device orientation.
+#[cfg_attr(feature = "clap", derive(ValueEnum))]
 #[derive(Deserialize, Serialize, Default, PartialEq, Eq, Copy, Clone, Debug)]
 #[serde(rename_all = "kebab-case")]
 pub enum Orientation {
@@ -69,7 +69,7 @@ pub enum Orientation {
     #[default]
     Portrait,
 
-    // Inverse portrait mode.
+    /// Inverse portrait mode.
     InversePortrait,
 
     /// Landscape mode.
@@ -77,23 +77,6 @@ pub enum Orientation {
 
     /// Inverse landscape mode.
     InverseLandscape,
-}
-
-impl FromStr for Orientation {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "portrait" => Ok(Self::Portrait),
-            "inverse-portrait" => Ok(Self::InversePortrait),
-            "landscape" => Ok(Self::Landscape),
-            "inverse-landscape" => Ok(Self::InverseLandscape),
-            _ => Err(format!(
-                "Got {s:?}, expected one of portrait, inverse-portrait, landscape, or \
-                 inverse-landscape"
-            )),
-        }
-    }
 }
 
 #[cfg(feature = "smithay")]
@@ -122,39 +105,27 @@ impl Orientation {
 }
 
 /// Gesture start/end sectors.
+#[cfg_attr(feature = "clap", derive(ValueEnum))]
 #[derive(Deserialize, Serialize, PartialEq, Eq, Copy, Clone, Debug)]
 pub enum GestureSector {
+    #[cfg_attr(feature = "clap", clap(alias = "tl"))]
     TopLeft,
+    #[cfg_attr(feature = "clap", clap(alias = "tc"))]
     TopCenter,
+    #[cfg_attr(feature = "clap", clap(alias = "tr"))]
     TopRight,
+    #[cfg_attr(feature = "clap", clap(alias = "ml"))]
     MiddleLeft,
+    #[cfg_attr(feature = "clap", clap(alias = "mc"))]
     MiddleCenter,
+    #[cfg_attr(feature = "clap", clap(alias = "mr"))]
     MiddleRight,
+    #[cfg_attr(feature = "clap", clap(alias = "bl"))]
     BottomLeft,
+    #[cfg_attr(feature = "clap", clap(alias = "bc"))]
     BottomCenter,
+    #[cfg_attr(feature = "clap", clap(alias = "br"))]
     BottomRight,
-}
-
-impl FromStr for GestureSector {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "topleft" | "tl" => Ok(Self::TopLeft),
-            "topcenter" | "tc" => Ok(Self::TopCenter),
-            "topright" | "tr" => Ok(Self::TopRight),
-            "middleleft" | "ml" => Ok(Self::MiddleLeft),
-            "middlecenter" | "mc" => Ok(Self::MiddleCenter),
-            "middleright" | "mr" => Ok(Self::MiddleRight),
-            "bottomleft" | "bl" => Ok(Self::BottomLeft),
-            "bottomcenter" | "bc" => Ok(Self::BottomCenter),
-            "bottomright" | "br" => Ok(Self::BottomRight),
-            _ => Err(format!(
-                "Got {s:?}, expected one of topleft, topcenter, topright, middleleft, \
-                 middlecenter, middleright, bottomleft, bottomcenter, or bottomright"
-            )),
-        }
-    }
 }
 
 impl GestureSector {
