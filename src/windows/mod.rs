@@ -616,6 +616,7 @@ impl Windows {
     pub fn lock_orientation(&mut self, orientation: Option<Orientation>) {
         // Change to the new locked orientation.
         if let Some(orientation) = orientation {
+            self.orientation_locked = false;
             self.update_orientation(orientation);
         }
 
