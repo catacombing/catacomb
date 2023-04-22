@@ -98,6 +98,12 @@ impl Layouts {
     ///
     /// This will switch the layout to the one `n` layouts away from it.
     pub fn cycle_active(&mut self, output: &Output, mut n: isize) {
+        // Ignore cycle without any windows.
+        let layout_count = self.layouts.len();
+        if layout_count == 0 {
+            return;
+        }
+
         let active_index = match self.active_layout {
             Some(active_layout) => active_layout,
             // Use first "step" to cycle from no active layout to index 0.
@@ -107,7 +113,7 @@ impl Layouts {
             },
         };
 
-        let target_layout = (active_index as isize + n).rem_euclid(self.layouts.len() as isize);
+        let target_layout = (active_index as isize + n).rem_euclid(layout_count as isize);
         self.set_active(output, Some(target_layout as usize), true);
     }
 
