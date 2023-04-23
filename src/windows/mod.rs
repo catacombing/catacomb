@@ -544,12 +544,15 @@ impl Windows {
         // Update layer shell windows.
         self.layers.apply_transaction();
 
-        // Apply window management changes.
+        // Switch active view.
         if let Some(view) = self.transaction.take().and_then(|transaction| transaction.view) {
             self.dirty = true;
             self.view = view;
         }
-        self.canvas = *self.output.canvas();
+
+        // Update canvas and force redraw on orientation change.
+        let old_canvas = mem::replace(&mut self.canvas, *self.output.canvas());
+        self.dirty |= old_canvas.orientation() != self.canvas.orientation();
 
         // Close overview if all layouts died.
         if self.layouts.is_empty() {
