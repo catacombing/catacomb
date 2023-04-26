@@ -56,11 +56,18 @@ fn handle_message(buffer: &mut String, stream: UnixStream, catacomb: &mut Cataco
 
     // Handle IPC events.
     match message {
-        IpcMessage::Orientation { unlock: true, .. } => catacomb.windows.unlock_orientation(),
+        IpcMessage::Orientation { unlock: true, .. } => {
+            catacomb.windows.unlock_orientation();
+            catacomb.unstall();
+        },
         IpcMessage::Orientation { lock: orientation, .. } => {
             catacomb.windows.lock_orientation(orientation);
+            catacomb.unstall();
         },
-        IpcMessage::Scale { scale } => catacomb.windows.set_scale(scale),
+        IpcMessage::Scale { scale } => {
+            catacomb.windows.set_scale(scale);
+            catacomb.unstall();
+        },
         IpcMessage::Bind { app_id, start, end, program, arguments } => {
             let gesture = GestureBinding { app_id, start, end, program, arguments };
             catacomb.touch_state.user_gestures.push(gesture);

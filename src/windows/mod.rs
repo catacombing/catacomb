@@ -552,7 +552,8 @@ impl Windows {
 
         // Update canvas and force redraw on orientation change.
         let old_canvas = mem::replace(&mut self.canvas, *self.output.canvas());
-        self.dirty |= old_canvas.orientation() != self.canvas.orientation();
+        self.dirty |= old_canvas.orientation() != self.canvas.orientation()
+            || old_canvas.scale() != self.canvas.scale();
 
         // Close overview if all layouts died.
         if self.layouts.is_empty() {
@@ -596,15 +597,8 @@ impl Windows {
         }
     }
 
-    /// Update output orientation.
-    pub fn update_orientation(&mut self, orientation: Orientation) {
-        self.unlocked_orientation = orientation;
-
-        // Ignore orientation changes during orientation lock.
-        if self.orientation_locked {
-            return;
-        }
-
+    /// Set output orientation, completely bypassing locking logic.
+    fn set_orientation(&mut self, orientation: Orientation) {
         // Start transaction to ensure output transaction will be applied.
         start_transaction();
 
@@ -615,12 +609,23 @@ impl Windows {
         self.resize_all();
     }
 
+    /// Update output orientation.
+    pub fn update_orientation(&mut self, orientation: Orientation) {
+        self.unlocked_orientation = orientation;
+
+        // Ignore orientation changes during orientation lock.
+        if self.orientation_locked {
+            return;
+        }
+
+        self.set_orientation(orientation);
+    }
+
     /// Lock the output's orientation.
     pub fn lock_orientation(&mut self, orientation: Option<Orientation>) {
         // Change to the new locked orientation.
         if let Some(orientation) = orientation {
-            self.orientation_locked = false;
-            self.update_orientation(orientation);
+            self.set_orientation(orientation);
         }
 
         self.orientation_locked = true;
@@ -896,6 +901,7 @@ impl Windows {
 
     /// Update the output's scale.
     pub fn set_scale(&mut self, scale: f64) {
+        self.start_transaction();
         self.output.set_scale(scale);
         self.resize_all();
     }
