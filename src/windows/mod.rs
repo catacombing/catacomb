@@ -878,6 +878,13 @@ impl Windows {
         None
     }
 
+    /// Check if a surface is currently visible.
+    pub fn surface_visible(&self, surface: &WlSurface) -> bool {
+        let mut visible_xdg = false;
+        self.layouts.with_visible(|window| visible_xdg |= window.owns_surface(surface));
+        visible_xdg || self.layers.iter().any(|layer| layer.owns_surface(surface))
+    }
+
     /// Application runtime.
     pub fn runtime(&self) -> u32 {
         self.start_time.elapsed().as_millis() as u32

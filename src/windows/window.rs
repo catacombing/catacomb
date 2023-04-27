@@ -552,6 +552,13 @@ impl<S: Surface + 'static> Window<S> {
         })
     }
 
+    /// Check if window owns a surface.
+    pub fn owns_surface(&self, surface: &WlSurface) -> bool {
+        let mut owns_surface = false;
+        self.with_surfaces(|window_surface, _| owns_surface |= window_surface == surface);
+        owns_surface
+    }
+
     /// Refresh popup windows.
     pub fn refresh_popups(&mut self) {
         for i in (0..self.popups.len()).rev() {

@@ -35,9 +35,6 @@ const MAX_TAP_DISTANCE: f64 = 20.;
 /// Friction for velocity computation.
 const FRICTION: f64 = 0.1;
 
-/// Duration until suspend after screen is turned off.
-const SUSPEND_TIMEOUT: Duration = Duration::from_secs(30);
-
 /// Touch slot for pointer emulation.
 ///
 /// The touch slot `None`, which is usually used for devices that do not support
@@ -297,6 +294,9 @@ impl Catacomb {
         if self.sleeping && !matches!(event, InputEvent::Keyboard { .. }) {
             return;
         }
+
+        // Reset idle sleep timer.
+        self.reset_idle_timer();
 
         match event {
             InputEvent::Keyboard { event, .. } => self.on_keyboard_input(&event),
@@ -612,25 +612,6 @@ impl Catacomb {
                     // Toggle screen DPMS status on short press.
                     if catacomb.button_state.power.take().is_some() {
                         catacomb.toggle_sleep();
-
-                        // Remove timer on wakeup or if it was already staged.
-                        if let Some(suspend_timer) = catacomb.suspend_timer.take() {
-                            catacomb.event_loop.remove(suspend_timer);
-                        }
-
-                        // Timeout after prolonged inactivity.
-                        if catacomb.sleeping {
-                            let timer = Timer::from_duration(SUSPEND_TIMEOUT);
-                            catacomb.suspend_timer = Some(
-                                catacomb
-                                    .event_loop
-                                    .insert_source(timer, |_, _, catacomb| {
-                                        catacomb.suspend();
-                                        TimeoutAction::Drop
-                                    })
-                                    .expect("insert suspend timer"),
-                            );
-                        }
                     }
                 },
                 _ => return FilterResult::Forward,

@@ -5,7 +5,7 @@ use std::env;
 use std::os::unix::io::AsRawFd;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use _server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as ManagerMode;
@@ -15,6 +15,7 @@ use smithay::input::keyboard::XkbConfig;
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::signals::{Signal, Signals};
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{
     Interest, LoopHandle, Mode as TriggerMode, PostAction, RegistrationToken,
 };
@@ -63,13 +64,20 @@ use smithay::{
 use crate::input::{PhysicalButtonState, TouchState};
 use crate::orientation::{Accelerometer, AccelerometerSource};
 use crate::output::Output;
+use crate::protocols::idle_inhibit::{IdleInhibitHandler, IdleInhibitManagerState};
 use crate::protocols::screencopy::frame::Screencopy;
 use crate::protocols::screencopy::{ScreencopyHandler, ScreencopyManagerState};
 use crate::udev::Udev;
 use crate::vibrate::Vibrator;
 use crate::windows::surface::Surface;
 use crate::windows::Windows;
-use crate::{dbus, delegate_screencopy_manager, ipc_server};
+use crate::{dbus, delegate_idle_inhibit_manager, delegate_screencopy_manager, ipc_server};
+
+/// Duration until suspend after screen is turned off.
+const SUSPEND_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Idle duration before automatic sleep.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(60 * 5);
 
 /// The script to run after compositor start.
 const POST_START_SCRIPT: &str = "post_start.sh";
@@ -77,6 +85,7 @@ const POST_START_SCRIPT: &str = "post_start.sh";
 /// Shared compositor state.
 pub struct Catacomb {
     pub suspend_timer: Option<RegistrationToken>,
+    pub idle_timer: Option<RegistrationToken>,
     pub event_loop: LoopHandle<'static, Self>,
     pub button_state: PhysicalButtonState,
     pub display_handle: DisplayHandle,
@@ -101,6 +110,7 @@ pub struct Catacomb {
     shm_state: ShmState,
 
     accelerometer_token: RegistrationToken,
+    idle_inhibitors: Vec<WlSurface>,
     last_focus: Option<WlSurface>,
 
     // Indicates if rendering was intentionally stalled.
@@ -187,6 +197,9 @@ impl Catacomb {
         let clock_id = libc::CLOCK_MONOTONIC as u32;
         PresentationState::new::<Self>(&display_handle, clock_id);
 
+        // Initialize idle-inhibit protocol.
+        IdleInhibitManagerState::new::<Self>(&display_handle);
+
         // Initialize seat.
         let seat_name = backend.seat_name();
         let mut seat_state = SeatState::new();
@@ -230,7 +243,7 @@ impl Catacomb {
         // Create window manager.
         let windows = Windows::new(&display_handle, event_loop.clone());
 
-        Self {
+        let mut catacomb = Self {
             kde_decoration_state,
             layer_shell_state,
             data_device_state,
@@ -250,13 +263,20 @@ impl Catacomb {
             display: Rc::new(RefCell::new(display)),
             accelerometer_token: accel_token,
             last_resume: Instant::now(),
+            idle_inhibitors: Default::default(),
             suspend_timer: Default::default(),
             button_state: Default::default(),
             last_focus: Default::default(),
             terminated: Default::default(),
+            idle_timer: Default::default(),
             sleeping: Default::default(),
             stalled: Default::default(),
-        }
+        };
+
+        // Kick-off idle timer.
+        catacomb.reset_idle_timer();
+
+        catacomb
     }
 
     /// Handle Wayland event socket read readiness.
@@ -349,6 +369,22 @@ impl Catacomb {
 
         self.backend.set_sleep(true);
         self.sleeping = true;
+
+        // Remove existing suspend timer.
+        if let Some(suspend_timer) = self.suspend_timer.take() {
+            self.event_loop.remove(suspend_timer);
+        }
+
+        // Start timer for autosuspend.
+        let timer = Timer::from_duration(SUSPEND_TIMEOUT);
+        let suspend_timer = self
+            .event_loop
+            .insert_source(timer, |_, _, catacomb| {
+                catacomb.suspend();
+                TimeoutAction::Drop
+            })
+            .expect("insert suspend timer");
+        self.suspend_timer = Some(suspend_timer);
     }
 
     /// Resume after sleep.
@@ -359,6 +395,14 @@ impl Catacomb {
         let _ = self.event_loop.enable(&self.accelerometer_token);
         self.backend.set_sleep(false);
         self.sleeping = false;
+
+        // Remove suspend timer on wakeup.
+        if let Some(suspend_timer) = self.suspend_timer.take() {
+            self.event_loop.remove(suspend_timer);
+        }
+
+        // Restart idle timer.
+        self.reset_idle_timer();
     }
 
     /// Suspend to RAM.
@@ -366,6 +410,32 @@ impl Catacomb {
         if let Err(err) = dbus::suspend() {
             eprintln!("Failed suspending to RAM: {err}");
         }
+    }
+
+    /// Reset the idle sleep timer.
+    pub fn reset_idle_timer(&mut self) {
+        // Clear existing timer.
+        if let Some(idle_timer) = self.idle_timer.take() {
+            self.event_loop.remove(idle_timer);
+        }
+
+        // Stage new sleep timer.
+        let timer = Timer::from_duration(IDLE_TIMEOUT);
+        let idle_timer = self
+            .event_loop
+            .insert_source(timer, |_, _, catacomb| {
+                let mut idle_inhibitors = catacomb.idle_inhibitors.iter();
+                if idle_inhibitors.all(|surface| !catacomb.windows.surface_visible(surface)) {
+                    // Sleep if no inhibition surface is visible.
+                    catacomb.sleep();
+                    TimeoutAction::Drop
+                } else {
+                    // Reset timer if a surface is inhibiting sleep.
+                    TimeoutAction::ToDuration(IDLE_TIMEOUT)
+                }
+            })
+            .expect("insert idle timer");
+        self.idle_timer = Some(idle_timer);
     }
 }
 
@@ -549,6 +619,19 @@ impl ScreencopyHandler for Catacomb {
     }
 }
 delegate_screencopy_manager!(Catacomb);
+
+impl IdleInhibitHandler for Catacomb {
+    fn inhibit(&mut self, surface: &WlSurface) {
+        self.idle_inhibitors.push(surface.clone());
+    }
+
+    fn uninhibit(&mut self, surface: &WlSurface) {
+        self.idle_inhibitors.retain(|inhibitor_surface| {
+            inhibitor_surface.is_alive() && inhibitor_surface != surface
+        });
+    }
+}
+delegate_idle_inhibit_manager!(Catacomb);
 
 delegate_presentation!(Catacomb);
 
