@@ -16,7 +16,7 @@ use smithay::reexports::wayland_protocols::xdg::decoration as _decoration;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::DisplayHandle;
-use smithay::utils::{Logical, Point};
+use smithay::utils::{Logical, Point, Rectangle};
 use smithay::wayland::compositor;
 use smithay::wayland::shell::wlr_layer::{Layer, LayerSurface};
 use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface};
@@ -28,6 +28,7 @@ use crate::layer::Layers;
 use crate::orientation::Orientation;
 use crate::output::{Canvas, Output, GESTURE_HANDLE_HEIGHT};
 use crate::overview::{DragAction, DragAndDrop, Overview};
+use crate::protocols::session_lock::surface::LockSurface;
 use crate::windows::layout::{LayoutPosition, Layouts};
 use crate::windows::surface::{
     CatacombLayerSurface, OffsetSurface, OffsetSurfaceToplevel, Surface,
@@ -37,6 +38,9 @@ use crate::windows::window::Window;
 pub mod layout;
 pub mod surface;
 pub mod window;
+
+/// Transaction timeout for locked sessions.
+const MAX_LOCKED_TRANSACTION_MILLIS: u64 = 100;
 
 /// Maximum time before a transaction is cancelled.
 const MAX_TRANSACTION_MILLIS: u64 = 1000;
@@ -152,6 +156,37 @@ impl Windows {
         self.orphan_popups.push(Window::new(popup));
     }
 
+    /// Update the session lock surface.
+    pub fn set_lock_surface(&mut self, surface: LockSurface) {
+        let output_size = self.output.size();
+        let lock_window = match self.pending_view_mut() {
+            View::Lock(lock_window) => lock_window,
+            _ => return,
+        };
+
+        // Set lock surface size.
+        let mut window = Window::new(surface);
+        window.set_dimensions(Rectangle::from_loc_and_size((0, 0), output_size));
+
+        // Update lockscreen.
+        *lock_window = Some(window);
+    }
+
+    /// Lock the session.
+    pub fn lock(&mut self) {
+        self.set_view(View::Lock(None));
+    }
+
+    /// Unlock the session.
+    pub fn unlock(&mut self) {
+        self.set_view(View::Workspace);
+    }
+
+    /// Check if the session lock is active.
+    pub fn locked(&self) -> bool {
+        matches!(self.view, View::Lock(_))
+    }
+
     /// Find the XDG shell window responsible for a specific surface.
     pub fn find_xdg(&mut self, wl_surface: &WlSurface) -> Option<RefMut<Window>> {
         // Get root surface.
@@ -176,6 +211,14 @@ impl Windows {
             ($windows:expr) => {{
                 $windows.find(|window| window.surface().eq(root_surface.as_ref()))
             }};
+        }
+
+        // Handle session lock surface commits.
+        if let View::Lock(Some(window)) = self.pending_view_mut() {
+            if window.surface() == root_surface.as_ref() {
+                window.surface_commit_common(surface);
+                return;
+            }
         }
 
         // Handle XDG surface commits.
@@ -246,7 +289,7 @@ impl Windows {
 
     /// Import pending buffers for all windows.
     pub fn import_buffers(&mut self, renderer: &mut GlesRenderer) {
-        // Skip buffer imports in overview.
+        // Import XDG windows/popups.
         let overview_active = matches!(self.view, View::Overview(_) | View::DragAndDrop(_));
         for mut window in self.layouts.windows_mut() {
             // Ignore overview updates unless buffer size changed because of rotation.
@@ -255,7 +298,13 @@ impl Windows {
             }
         }
 
+        // Import layer shell windows.
         for window in self.layers.iter_mut() {
+            window.import_buffers(renderer);
+        }
+
+        // Import session lock surface.
+        if let View::Lock(Some(window)) = &mut self.view {
             window.import_buffers(renderer);
         }
     }
@@ -272,8 +321,8 @@ impl Windows {
         let scale = self.output.scale();
         self.textures.clear();
 
-        // Draw gesture handle when not in fullscreen view.
-        if !matches!(self.view, View::Fullscreen(_)) {
+        // Draw gesture handle when not in fullscreen/lock view.
+        if !matches!(self.view, View::Fullscreen(_) | View::Lock(_)) {
             // Calculate position for gesture handle.
             let output_height = self.output.physical_size().h;
             let handle_height = (GESTURE_HANDLE_HEIGHT as f64 * scale).round();
@@ -326,6 +375,8 @@ impl Windows {
 
                 window.borrow().textures(&mut self.textures, scale, None, None);
             },
+            View::Lock(Some(window)) => window.textures(&mut self.textures, scale, None, None),
+            View::Lock(None) => (),
         }
 
         self.textures.as_slice()
@@ -351,6 +402,8 @@ impl Windows {
                 self.layers.request_frames(runtime);
                 self.layouts.with_visible(|window| window.request_frame(runtime));
             },
+            View::Lock(Some(window)) => window.request_frame(runtime),
+            View::Lock(None) => (),
         }
     }
 
@@ -457,6 +510,11 @@ impl Windows {
 
     /// Current window focus.
     pub fn focus(&mut self) -> Option<WlSurface> {
+        // Always focus session lock surfaces.
+        if let View::Lock(window) = &self.view {
+            return window.as_ref().map(|window| window.surface().clone());
+        }
+
         let surface = match self.layouts.focus.as_ref().map(Weak::upgrade) {
             // Use focused surface if the window is still alive.
             Some(Some(window)) => Some(window.borrow().surface.clone()),
@@ -519,14 +577,24 @@ impl Windows {
 
         // Check if the transaction requires updating.
         let elapsed = UNIX_EPOCH.elapsed().unwrap().as_millis() as u64 - start;
-        if elapsed <= MAX_TRANSACTION_MILLIS {
+        let timeout = self.transaction_timeout();
+        if elapsed <= timeout {
+            let lock_ready = match self.pending_view() {
+                // Check if lock surface transaction is done.
+                View::Lock(Some(window)) => window.transaction_done(),
+                // Wait for timeout to allow surface creation.
+                View::Lock(None) => false,
+                _ => true,
+            };
+
             // Check if all participants are ready.
-            let finished = self.layouts.windows().all(|window| window.transaction_done())
+            let finished = lock_ready
+                && self.layouts.windows().all(|window| window.transaction_done())
                 && self.layers.iter().all(Window::transaction_done);
 
             // Abort if the transaction is still pending.
             if !finished {
-                let delta = MAX_TRANSACTION_MILLIS - elapsed;
+                let delta = timeout - elapsed;
                 return Some(Duration::from_millis(delta));
             }
         }
@@ -538,16 +606,21 @@ impl Windows {
         let old_layout_count = self.layouts.active().window_count();
         let old_layer_count = self.layers.len();
 
+        // Switch active view.
+        if let Some(view) = self.transaction.take().and_then(|transaction| transaction.view) {
+            self.dirty = true;
+            self.view = view;
+        }
+
         // Apply layout/liveliness changes.
         self.layouts.apply_transaction(&self.output);
 
         // Update layer shell windows.
         self.layers.apply_transaction();
 
-        // Switch active view.
-        if let Some(view) = self.transaction.take().and_then(|transaction| transaction.view) {
-            self.dirty = true;
-            self.view = view;
+        // Update session lock window.
+        if let View::Lock(Some(window)) = &mut self.view {
+            window.apply_transaction();
         }
 
         // Update canvas and force redraw on orientation change.
@@ -556,7 +629,9 @@ impl Windows {
             || old_canvas.scale() != self.canvas.scale();
 
         // Close overview if all layouts died.
-        if self.layouts.is_empty() {
+        if self.layouts.is_empty()
+            && matches!(self.view, View::Overview(_) | View::DragAndDrop(_) | View::Fullscreen(_))
+        {
             self.view = View::Workspace;
         }
 
@@ -567,12 +642,18 @@ impl Windows {
         None
     }
 
+    /// Get timeout before transactions will be forcefully applied.
+    fn transaction_timeout(&self) -> u64 {
+        match self.pending_view() {
+            // Enforce a tighter transaction timing for session locking.
+            View::Lock(_) => MAX_LOCKED_TRANSACTION_MILLIS,
+            _ => MAX_TRANSACTION_MILLIS,
+        }
+    }
+
     /// Resize all windows to their expected size.
     pub fn resize_all(&mut self) {
-        // Check next view after transaction is applied.
-        let view = self.transaction.as_ref().and_then(|t| t.view.as_ref()).unwrap_or(&self.view);
-
-        match view {
+        match self.pending_view() {
             // Resize fullscreen and overlay surfaces in fullscreen view.
             View::Fullscreen(window) => {
                 // Resize fullscreen XDG client.
@@ -650,6 +731,7 @@ impl Windows {
             },
             // Redraw continuously during overview animations.
             View::Overview(overview) if overview.animating(self.layouts.len()) => true,
+            View::Lock(Some(window)) => window.dirty(),
             // Check all windows for damage outside of fullscreen.
             _ => {
                 self.layouts.windows().any(|window| window.dirty())
@@ -686,7 +768,7 @@ impl Windows {
                 }
                 return;
             },
-            View::DragAndDrop(_) | View::Fullscreen(_) => return,
+            View::DragAndDrop(_) | View::Fullscreen(_) | View::Lock(_) => return,
         };
 
         overview.cancel_hold(&self.event_loop);
@@ -728,7 +810,7 @@ impl Windows {
 
                 return;
             },
-            View::Fullscreen(_) | View::Workspace => return,
+            View::Fullscreen(_) | View::Lock(_) | View::Workspace => return,
         };
 
         let delta = point - mem::replace(&mut overview.last_drag_point, point);
@@ -790,7 +872,7 @@ impl Windows {
                     self.set_view(View::Overview(overview));
                 }
             },
-            View::Fullscreen(_) | View::Workspace => (),
+            View::Fullscreen(_) | View::Lock(_) | View::Workspace => (),
         }
     }
 
@@ -858,6 +940,7 @@ impl Windows {
 
                 return Some(surface);
             },
+            View::Lock(Some(window)) => return window.surface_at(position),
             _ => return None,
         };
 
@@ -888,6 +971,16 @@ impl Windows {
     /// Application runtime.
     pub fn runtime(&self) -> u32 {
         self.start_time.elapsed().as_millis() as u32
+    }
+
+    /// Get transaction view, or current view if no transaction is active.
+    fn pending_view(&self) -> &View {
+        self.transaction.as_ref().and_then(|t| t.view.as_ref()).unwrap_or(&self.view)
+    }
+
+    /// Get transaction view, or current view if no transaction is active.
+    fn pending_view_mut(&mut self) -> &mut View {
+        self.transaction.as_mut().and_then(|t| t.view.as_mut()).unwrap_or(&mut self.view)
     }
 
     /// Change the active view.
@@ -935,6 +1028,8 @@ enum View {
     DragAndDrop(DragAndDrop),
     /// Fullscreened XDG-shell window.
     Fullscreen(Rc<RefCell<Window>>),
+    /// Session lock.
+    Lock(Option<Window<LockSurface>>),
     /// Currently active windows.
     #[default]
     Workspace,

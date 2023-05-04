@@ -67,11 +67,13 @@ use crate::output::Output;
 use crate::protocols::idle_inhibit::{IdleInhibitHandler, IdleInhibitManagerState};
 use crate::protocols::screencopy::frame::Screencopy;
 use crate::protocols::screencopy::{ScreencopyHandler, ScreencopyManagerState};
+use crate::protocols::session_lock::surface::LockSurface;
+use crate::protocols::session_lock::{SessionLockHandler, SessionLockManagerState, SessionLocker};
 use crate::udev::Udev;
 use crate::vibrate::Vibrator;
 use crate::windows::surface::Surface;
 use crate::windows::Windows;
-use crate::{dbus, delegate_idle_inhibit_manager, delegate_screencopy_manager, ipc_server};
+use crate::{dbus, delegate_idle_inhibit, delegate_screencopy, delegate_session_lock, ipc_server};
 
 /// Duration until suspend after screen is turned off.
 const SUSPEND_TIMEOUT: Duration = Duration::from_secs(30);
@@ -103,6 +105,7 @@ pub struct Catacomb {
     pub dmabuf_state: DmabufState,
     kde_decoration_state: KdeDecorationState,
     layer_shell_state: WlrLayerShellState,
+    lock_state: SessionLockManagerState,
     data_device_state: DataDeviceState,
     compositor_state: CompositorState,
     xdg_shell_state: XdgShellState,
@@ -112,6 +115,7 @@ pub struct Catacomb {
     accelerometer_token: RegistrationToken,
     idle_inhibitors: Vec<WlSurface>,
     last_focus: Option<WlSurface>,
+    locker: Option<SessionLocker>,
 
     // Indicates if rendering was intentionally stalled.
     //
@@ -200,6 +204,9 @@ impl Catacomb {
         // Initialize idle-inhibit protocol.
         IdleInhibitManagerState::new::<Self>(&display_handle);
 
+        // Initialize session-lock protocol.
+        let lock_state = SessionLockManagerState::new::<Self>(&display_handle);
+
         // Initialize seat.
         let seat_name = backend.seat_name();
         let mut seat_state = SeatState::new();
@@ -252,6 +259,7 @@ impl Catacomb {
             dmabuf_state,
             touch_state,
             event_loop,
+            lock_state,
             seat_state,
             shm_state,
             seat_name,
@@ -270,6 +278,7 @@ impl Catacomb {
             idle_timer: Default::default(),
             sleeping: Default::default(),
             stalled: Default::default(),
+            locker: Default::default(),
         };
 
         // Kick-off idle timer.
@@ -321,6 +330,9 @@ impl Catacomb {
             if !rendered {
                 let frame_interval = self.windows.output().frame_interval();
                 self.backend.schedule_redraw(frame_interval);
+            } else if let Some(locker) = self.locker.take() {
+                // Update session lock after successful draw.
+                locker.lock();
             }
         } else if let Some(deadline) = transaction_deadline {
             // Force a redraw after the transaction has timed out.
@@ -550,6 +562,27 @@ impl WlrLayerShellHandler for Catacomb {
 }
 delegate_layer_shell!(Catacomb);
 
+impl SessionLockHandler for Catacomb {
+    fn lock_state(&mut self) -> &mut SessionLockManagerState {
+        &mut self.lock_state
+    }
+
+    fn lock(&mut self, confirmation: SessionLocker) {
+        self.locker = Some(confirmation);
+        self.windows.lock();
+        self.unstall();
+    }
+
+    fn unlock(&mut self) {
+        self.windows.unlock();
+    }
+
+    fn new_surface(&mut self, surface: LockSurface, _output: WlOutput) {
+        self.windows.set_lock_surface(surface);
+    }
+}
+delegate_session_lock!(Catacomb);
+
 impl SeatHandler for Catacomb {
     type KeyboardFocus = WlSurface;
     type PointerFocus = WlSurface;
@@ -617,7 +650,7 @@ impl ScreencopyHandler for Catacomb {
         self.unstall();
     }
 }
-delegate_screencopy_manager!(Catacomb);
+delegate_screencopy!(Catacomb);
 
 impl IdleInhibitHandler for Catacomb {
     fn inhibit(&mut self, surface: &WlSurface) {
@@ -630,7 +663,7 @@ impl IdleInhibitHandler for Catacomb {
         });
     }
 }
-delegate_idle_inhibit_manager!(Catacomb);
+delegate_idle_inhibit!(Catacomb);
 
 delegate_presentation!(Catacomb);
 

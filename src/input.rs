@@ -588,8 +588,9 @@ impl Catacomb {
                     catacomb
                         .event_loop
                         .insert_source(timer, move |_, _, catacomb| {
-                            // Ignore timer if button was released.
-                            if catacomb.button_state.power != Some(id) {
+                            // Ignore timer if button was released or session lock is active.
+                            if catacomb.button_state.power != Some(id) || catacomb.windows.locked()
+                            {
                                 return TimeoutAction::Drop;
                             }
 

@@ -90,7 +90,7 @@ pub trait IdleInhibitHandler {
 
 #[allow(missing_docs)]
 #[macro_export]
-macro_rules! delegate_idle_inhibit_manager {
+macro_rules! delegate_idle_inhibit {
     ($(@<$( $lt:tt $( : $clt:tt $(+ $dlt:tt )* )? ),+>)? $ty: ty) => {
         smithay::reexports::wayland_server::delegate_global_dispatch!($(@< $( $lt $( : $clt $(+ $dlt )* )? ),+ >)? $ty: [
             smithay::reexports::wayland_protocols::wp::idle_inhibit::zv1::server::zwp_idle_inhibit_manager_v1::ZwpIdleInhibitManagerV1: ()

@@ -16,6 +16,7 @@ use smithay::wayland::shell::xdg::{
     XdgPopupSurfaceData, XdgToplevelSurfaceData, XdgToplevelSurfaceRoleAttributes,
 };
 
+use crate::protocols::session_lock::surface::{LockSurface, LockSurfaceState};
 use crate::windows::Window;
 
 /// Common surface functionality.
@@ -235,6 +236,54 @@ impl Deref for CatacombLayerSurface {
 
     fn deref(&self) -> &Self::Target {
         &self.surface
+    }
+}
+
+impl Surface for LockSurface {
+    type State = LockSurfaceState;
+
+    fn surface(&self) -> &WlSurface {
+        self.wl_surface()
+    }
+
+    fn alive(&self) -> bool {
+        self.alive()
+    }
+
+    fn send_close(&self) {
+        unreachable!("attempted to kill lock surface");
+    }
+
+    fn initial_configure(&self) {
+        // Initial configure is sent immediately after
+        // ext_session_lock_surface_v1 is bound.
+    }
+
+    fn initial_configure_sent(&self) -> bool {
+        // See `initial_configure`.
+        true
+    }
+
+    fn set_state<F: FnMut(&mut Self::State)>(&self, f: F) {
+        self.with_pending_state(f);
+        self.send_configure();
+    }
+
+    fn resize(&self, size: Size<i32, Logical>) {
+        self.set_state(|state| {
+            let size = (size.w as u32, size.h as u32);
+            state.size = Some(size.into());
+        });
+    }
+
+    fn acked_size(&self) -> Size<i32, Logical> {
+        let current_state = self.current_state();
+        let size = current_state.size.unwrap_or_default();
+        (size.w as i32, size.h as i32).into()
+    }
+
+    fn geometry(&self) -> Option<Rectangle<i32, Logical>> {
+        None
     }
 }
 

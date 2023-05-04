@@ -133,7 +133,7 @@ pub trait ScreencopyHandler {
 
 #[allow(missing_docs)]
 #[macro_export]
-macro_rules! delegate_screencopy_manager {
+macro_rules! delegate_screencopy {
     ($(@<$( $lt:tt $( : $clt:tt $(+ $dlt:tt )* )? ),+>)? $ty: ty) => {
         smithay::reexports::wayland_server::delegate_global_dispatch!($(@< $( $lt $( : $clt $(+ $dlt )* )? ),+ >)? $ty: [
             smithay::reexports::wayland_protocols_wlr::screencopy::v1::server::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1: ()
