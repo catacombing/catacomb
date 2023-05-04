@@ -10,7 +10,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use smithay::backend::drm::DrmEventMetadata;
 use smithay::backend::renderer::element::RenderElementStates;
-use smithay::backend::renderer::gles2::Gles2Renderer;
+use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::reexports::calloop::LoopHandle;
 use smithay::reexports::wayland_protocols::xdg::decoration as _decoration;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
@@ -245,7 +245,7 @@ impl Windows {
     }
 
     /// Import pending buffers for all windows.
-    pub fn import_buffers(&mut self, renderer: &mut Gles2Renderer) {
+    pub fn import_buffers(&mut self, renderer: &mut GlesRenderer) {
         // Skip buffer imports in overview.
         let overview_active = matches!(self.view, View::Overview(_) | View::DragAndDrop(_));
         for mut window in self.layouts.windows_mut() {
@@ -263,7 +263,7 @@ impl Windows {
     /// Get all textures for rendering.
     pub fn textures(
         &mut self,
-        renderer: &mut Gles2Renderer,
+        renderer: &mut GlesRenderer,
         graphics: &mut Graphics,
     ) -> &[CatacombElement] {
         // Clear global damage.

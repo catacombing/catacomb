@@ -36,7 +36,7 @@ use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportE
 use smithay::wayland::fractional_scale::{
     self, FractionalScaleHandler, FractionalScaleManagerState,
 };
-use smithay::wayland::input_method::{InputMethodManagerState, InputMethodSeat};
+use smithay::wayland::input_method::InputMethodManagerState;
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::presentation::PresentationState;
 use smithay::wayland::shell::kde::decoration::{KdeDecorationHandler, KdeDecorationState};
@@ -207,7 +207,6 @@ impl Catacomb {
 
         // Initialize IME and virtual keyboard.
         InputMethodManagerState::new::<Self>(&display_handle);
-        seat.add_input_method(XkbConfig::default(), 200, 25);
         TextInputManagerState::new::<Self>(&display_handle);
         VirtualKeyboardManagerState::new::<Self, _>(&display_handle, |_| true);
 

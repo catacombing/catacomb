@@ -7,7 +7,7 @@ use smithay::backend::renderer::element::utils::{
     CropRenderElement, Relocate, RelocateRenderElement, RescaleRenderElement,
 };
 use smithay::backend::renderer::element::{Element, Id, RenderElement, UnderlyingStorage};
-use smithay::backend::renderer::gles2::{ffi, Gles2Frame, Gles2Renderer, Gles2Texture};
+use smithay::backend::renderer::gles::{ffi, GlesFrame, GlesRenderer, GlesTexture};
 use smithay::backend::renderer::utils::{Buffer, CommitCounter, DamageBag, DamageSnapshot};
 use smithay::backend::renderer::{self, Renderer};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -44,7 +44,7 @@ pub struct Texture {
     dst_size: Size<i32, Logical>,
     buffer_size: Size<i32, Logical>,
     buffer: Option<Buffer>,
-    texture: Gles2Texture,
+    texture: GlesTexture,
     transform: Transform,
     scale: f64,
     id: Id,
@@ -53,7 +53,7 @@ pub struct Texture {
 impl Texture {
     /// Create a texture from an OpenGL texture.
     pub fn new(
-        texture: Gles2Texture,
+        texture: GlesTexture,
         buffer_size: impl Into<Size<i32, Logical>>,
         scale: f64,
         opaque: bool,
@@ -81,7 +81,7 @@ impl Texture {
 
     /// Create a texture from a Wayland surface.
     pub fn from_surface(
-        texture: Gles2Texture,
+        texture: GlesTexture,
         location: impl Into<Point<i32, Logical>>,
         buffer: &CatacombSurfaceData,
         surface_data: &SurfaceData,
@@ -132,7 +132,7 @@ impl Texture {
 
     /// Create a texture from an RGBA buffer.
     pub fn from_buffer(
-        renderer: &mut Gles2Renderer,
+        renderer: &mut GlesRenderer,
         scale: f64,
         buffer: &[u8],
         width: i32,
@@ -165,8 +165,9 @@ impl Texture {
             })
             .expect("create texture");
 
-        let texture =
-            unsafe { Gles2Texture::from_raw(renderer, texture_id, (width, height).into()) };
+        let texture = unsafe {
+            GlesTexture::from_raw(renderer, None, opaque, texture_id, (width, height).into())
+        };
 
         Texture::new(texture, (width, height), scale, opaque)
     }
@@ -243,18 +244,18 @@ impl Element for RenderTexture {
     }
 }
 
-impl RenderElement<Gles2Renderer> for RenderTexture {
+impl RenderElement<GlesRenderer> for RenderTexture {
     fn draw<'a>(
         &self,
-        frame: &mut Gles2Frame,
+        frame: &mut GlesFrame,
         src: Rectangle<f64, BufferSpace>,
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
-    ) -> Result<(), <Gles2Renderer as Renderer>::Error> {
+    ) -> Result<(), <GlesRenderer as Renderer>::Error> {
         frame.render_texture_from_to(&self.texture, src, dst, damage, self.transform, 1., None, &[])
     }
 
-    fn underlying_storage(&self, _renderer: &mut Gles2Renderer) -> Option<UnderlyingStorage> {
+    fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage> {
         self.buffer.clone().map(UnderlyingStorage::Wayland)
     }
 }
@@ -323,18 +324,18 @@ impl Element for CatacombElement {
     }
 }
 
-impl RenderElement<Gles2Renderer> for CatacombElement {
+impl RenderElement<GlesRenderer> for CatacombElement {
     fn draw<'a>(
         &self,
-        frame: &mut Gles2Frame,
+        frame: &mut GlesFrame,
         src: Rectangle<f64, BufferSpace>,
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
-    ) -> Result<(), <Gles2Renderer as Renderer>::Error> {
+    ) -> Result<(), <GlesRenderer as Renderer>::Error> {
         self.0.draw(frame, src, dst, damage)
     }
 
-    fn underlying_storage(&self, renderer: &mut Gles2Renderer) -> Option<UnderlyingStorage> {
+    fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage> {
         self.0.underlying_storage(renderer)
     }
 }
@@ -348,7 +349,7 @@ pub struct Graphics {
 }
 
 impl Graphics {
-    pub fn new(renderer: &mut Gles2Renderer) -> Self {
+    pub fn new(renderer: &mut GlesRenderer) -> Self {
         let active_drop_target =
             Texture::from_buffer(renderer, 1., &ACTIVE_DROP_TARGET_RGBA, 1, 1, false);
         let drop_target = Texture::from_buffer(renderer, 1., &DROP_TARGET_RGBA, 1, 1, false);
@@ -362,7 +363,7 @@ impl Graphics {
     /// Get texture for the gesture handle.
     pub fn gesture_handle(
         &mut self,
-        renderer: &mut Gles2Renderer,
+        renderer: &mut GlesRenderer,
         canvas: &Canvas,
     ) -> RenderTexture {
         // Initialize texture or replace it after scale change.

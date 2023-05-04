@@ -9,7 +9,7 @@ use std::{cmp, mem};
 use _presentation_time::wp_presentation_feedback::Kind as FeedbackKind;
 use smithay::backend::drm::{DrmEventMetadata, DrmEventTime};
 use smithay::backend::renderer::element::{RenderElementPresentationState, RenderElementStates};
-use smithay::backend::renderer::gles2::Gles2Renderer;
+use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::{self, BufferType, ImportAll};
 use smithay::reexports::wayland_protocols::wp::presentation_time::server as _presentation_time;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_positioner::{
@@ -201,7 +201,7 @@ impl<S: Surface + 'static> Window<S> {
     }
 
     /// Import the buffers of all surfaces into the renderer.
-    pub fn import_buffers(&mut self, renderer: &mut Gles2Renderer) {
+    pub fn import_buffers(&mut self, renderer: &mut GlesRenderer) {
         // Do not import buffers during a transaction.
         if self.transaction.is_some() {
             return;

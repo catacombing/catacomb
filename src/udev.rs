@@ -12,12 +12,13 @@ use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBuffer, GbmBufferFlags, GbmDevice};
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::drm::compositor::{DrmCompositor as SmithayDrmCompositor, RenderFrameResult};
+use smithay::backend::drm::gbm::GbmFramebuffer;
 use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent};
 use smithay::backend::egl::context::EGLContext;
 use smithay::backend::egl::display::EGLDisplay;
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::element::RenderElementStates;
-use smithay::backend::renderer::gles2::{ffi, Gles2Renderbuffer, Gles2Renderer};
+use smithay::backend::renderer::gles::{ffi, GlesRenderbuffer, GlesRenderer};
 use smithay::backend::renderer::{
     self, utils, Bind, BufferType, Frame, ImportEgl, Offscreen, Renderer,
 };
@@ -239,8 +240,8 @@ impl Udev {
     }
 
     /// Get the current output's renderer.
-    pub fn renderer(&mut self) -> Option<&mut Gles2Renderer> {
-        self.output_device.as_mut().map(|output_device| &mut output_device.gles2)
+    pub fn renderer(&mut self) -> Option<&mut GlesRenderer> {
+        self.output_device.as_mut().map(|output_device| &mut output_device.gles)
     }
 
     /// Request a redraw once `duration` has passed.
@@ -297,16 +298,16 @@ impl Udev {
         let display = EGLDisplay::new(gbm.clone())?;
         let context = EGLContext::new(&display)?;
 
-        let mut gles2 = unsafe { Gles2Renderer::new(context).expect("create renderer") };
+        let mut gles = unsafe { GlesRenderer::new(context).expect("create renderer") };
 
         // Initialize GPU for EGL rendering.
         if Some(path) == self.gpu {
-            let _ = gles2.bind_wl_display(display_handle);
+            let _ = gles.bind_wl_display(display_handle);
         }
 
         // Create the DRM compositor.
         let drm_compositor = self
-            .create_drm_compositor(display_handle, windows, &gles2, &drm, &gbm)
+            .create_drm_compositor(display_handle, windows, &gles, &drm, &gbm)
             .ok_or("drm compositor")?;
 
         // Listen for VBlanks.
@@ -339,7 +340,7 @@ impl Udev {
         let token = self.event_loop.register_dispatcher(dispatcher.clone())?;
 
         // Create OpenGL textures.
-        let graphics = Graphics::new(&mut gles2);
+        let graphics = Graphics::new(&mut gles);
 
         // Initialize last render state as empty.
         let last_render_states = RenderElementStates { states: HashMap::new() };
@@ -348,7 +349,7 @@ impl Udev {
             last_render_states,
             drm_compositor,
             graphics,
-            gles2,
+            gles,
             token,
             gbm,
             drm,
@@ -366,7 +367,7 @@ impl Udev {
 
             // Disable hardware acceleration when the GPU is removed.
             if output_device.gbm.dev_path() == self.gpu {
-                output_device.gles2.unbind_wl_display();
+                output_device.gles.unbind_wl_display();
             }
         }
     }
@@ -392,11 +393,11 @@ impl Udev {
         &mut self,
         display: &DisplayHandle,
         windows: &mut Windows,
-        gles2: &Gles2Renderer,
+        gles: &GlesRenderer,
         drm: &DrmDevice,
         gbm: &GbmDevice<DrmDeviceFd>,
     ) -> Option<DrmCompositor> {
-        let formats = Bind::<Dmabuf>::supported_formats(gles2)?;
+        let formats = Bind::<Dmabuf>::supported_formats(gles)?;
         let resources = drm.resource_handles().ok()?;
 
         // Find the first connected output port.
@@ -471,7 +472,7 @@ pub struct OutputDevice {
     screencopy: Option<Screencopy>,
     drm_compositor: DrmCompositor,
     gbm: GbmDevice<DrmDeviceFd>,
-    gles2: Gles2Renderer,
+    gles: GlesRenderer,
     graphics: Graphics,
     drm: DrmDevice,
     id: DeviceId,
@@ -516,9 +517,9 @@ impl OutputDevice {
     fn render(&mut self, windows: &mut Windows) -> Result<bool, Box<dyn Error>> {
         let scale = windows.output().scale();
 
-        let textures = windows.textures(&mut self.gles2, &mut self.graphics);
-        let mut frame_result = self.drm_compositor.render_frame::<_, _, Gles2Renderbuffer>(
-            &mut self.gles2,
+        let textures = windows.textures(&mut self.gles, &mut self.graphics);
+        let mut frame_result = self.drm_compositor.render_frame::<_, _, GlesRenderbuffer>(
+            &mut self.gles,
             textures,
             CLEAR_COLOR,
         )?;
@@ -536,7 +537,7 @@ impl OutputDevice {
 
             let buffer = screencopy.buffer();
             if let Ok(dmabuf) = dmabuf::get_dmabuf(buffer) {
-                Self::copy_framebuffer_dma(&mut self.gles2, scale, &frame_result, region, dmabuf)?;
+                Self::copy_framebuffer_dma(&mut self.gles, scale, &frame_result, region, dmabuf)?;
             } else {
                 // Ignore unknown buffer types.
                 let buffer_type = renderer::buffer_type(buffer);
@@ -561,18 +562,18 @@ impl OutputDevice {
 
     /// Copy a region of the framebuffer to a DMA buffer.
     fn copy_framebuffer_dma(
-        gles2: &mut Gles2Renderer,
+        gles: &mut GlesRenderer,
         scale: f64,
-        frame_result: &RenderFrameResult<GbmBuffer<()>, CatacombElement>,
+        frame_result: &RenderFrameResult<GbmBuffer<()>, GbmFramebuffer, CatacombElement>,
         region: Rectangle<i32, Physical>,
         buffer: Dmabuf,
     ) -> Result<(), Box<dyn Error>> {
         // Bind the screencopy buffer as render target.
-        gles2.bind(buffer)?;
+        gles.bind(buffer)?;
 
         // Blit the framebuffer into the target buffer.
         let damage = [Rectangle::from_loc_and_size((0, 0), region.size)];
-        frame_result.blit_frame_result(region.size, Transform::Normal, scale, gles2, damage, [])?;
+        frame_result.blit_frame_result(region.size, Transform::Normal, scale, gles, damage, [])?;
 
         Ok(())
     }
@@ -586,8 +587,9 @@ impl OutputDevice {
     ) -> Result<(), Box<dyn Error>> {
         // Create and bind an offscreen render buffer.
         let buffer_dimensions = renderer::buffer_dimensions(buffer).unwrap();
-        let offscreen_buffer: Gles2Renderbuffer = self.gles2.create_buffer(buffer_dimensions)?;
-        self.gles2.bind(offscreen_buffer)?;
+        let offscreen_buffer: GlesRenderbuffer =
+            self.gles.create_buffer(Fourcc::Abgr8888, buffer_dimensions)?;
+        self.gles.bind(offscreen_buffer)?;
 
         let output = windows.output();
         let scale = output.scale();
@@ -598,10 +600,10 @@ impl OutputDevice {
         let damage = transform.transform_rect_in(region, &output_size);
 
         // Collect textures for rendering.
-        let textures = windows.textures(&mut self.gles2, &mut self.graphics);
+        let textures = windows.textures(&mut self.gles, &mut self.graphics);
 
         // Initialize the buffer to our clear color.
-        let mut frame = self.gles2.render(output_size, transform)?;
+        let mut frame = self.gles.render(output_size, transform)?;
         frame.clear(CLEAR_COLOR, &[damage])?;
 
         // Render everything to the offscreen buffer.
@@ -622,7 +624,7 @@ impl OutputDevice {
             }
 
             // Copy framebuffer data to the SHM buffer.
-            self.gles2.with_context(|gl| unsafe {
+            self.gles.with_context(|gl| unsafe {
                 gl.ReadPixels(
                     region.loc.x,
                     region.loc.y,
@@ -661,7 +663,7 @@ impl OutputDevice {
 
         // Setup feedback builder.
         let gbm_id = self.gbm.dev_id()?;
-        let dmabuf_formats = Bind::<Dmabuf>::supported_formats(&self.gles2).unwrap();
+        let dmabuf_formats = Bind::<Dmabuf>::supported_formats(&self.gles).unwrap();
         let feedback_builder = DmabufFeedbackBuilder::new(gbm_id, dmabuf_formats);
 
         // Create default feedback preference.
