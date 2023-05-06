@@ -141,6 +141,7 @@ impl Texture {
     ) -> Self {
         assert!(buffer.len() as i32 >= width * height * 4);
 
+        let format = ffi::RGBA;
         let texture_id = renderer
             .with_context(|gl| unsafe {
                 let mut tex = 0;
@@ -151,11 +152,11 @@ impl Texture {
                 gl.TexImage2D(
                     ffi::TEXTURE_2D,
                     0,
-                    ffi::RGBA as i32,
+                    format as i32,
                     width,
                     height,
                     0,
-                    ffi::RGBA,
+                    format,
                     ffi::UNSIGNED_BYTE,
                     buffer.as_ptr().cast(),
                 );
@@ -165,9 +166,9 @@ impl Texture {
             })
             .expect("create texture");
 
-        let texture = unsafe {
-            GlesTexture::from_raw(renderer, None, opaque, texture_id, (width, height).into())
-        };
+        let size = (width, height).into();
+        let texture =
+            unsafe { GlesTexture::from_raw(renderer, Some(format), opaque, texture_id, size) };
 
         Texture::new(texture, (width, height), scale, opaque)
     }
