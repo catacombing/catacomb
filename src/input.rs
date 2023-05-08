@@ -159,7 +159,7 @@ impl TouchState {
         self.user_gestures.iter().filter(move |gesture| {
             gesture.start == start_sector
                 && end_sector.map_or(true, |sector| gesture.end == sector)
-                && (gesture.app_id == "*" || Some(&gesture.app_id) == app_id)
+                && gesture.app_id.matches(app_id)
         })
     }
 }

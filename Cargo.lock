@@ -201,6 +201,7 @@ dependencies = [
  "image",
  "libc",
  "nix 0.26.2",
+ "regex",
  "serde",
  "serde_json",
  "smithay",
