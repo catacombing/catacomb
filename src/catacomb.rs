@@ -448,6 +448,21 @@ impl Catacomb {
             .expect("insert idle timer");
         self.idle_timer = Some(idle_timer);
     }
+
+    /// Completely redraw the screen, ignoring damage.
+    ///
+    /// The `ignore_unstalled` flag controls whether an immediate redraw should
+    /// be performed even if the rendering hasn't stalled.
+    pub fn force_redraw(&mut self, ignore_unstalled: bool) {
+        self.backend.reset_buffers();
+        self.windows.set_dirty();
+
+        if ignore_unstalled {
+            self.create_frame();
+        } else {
+            self.unstall();
+        }
+    }
 }
 
 impl CompositorHandler for Catacomb {
@@ -646,7 +661,7 @@ impl ScreencopyHandler for Catacomb {
         self.backend.request_screencopy(screencopy);
 
         // Force redraw, to prevent screencopy stalling.
-        self.windows.dirty = true;
+        self.windows.set_dirty();
         self.unstall();
     }
 }

@@ -285,7 +285,7 @@ impl Catacomb {
     /// Process device orientation changes.
     pub fn handle_orientation(&mut self, orientation: Orientation) {
         self.windows.update_orientation(orientation);
-        self.unstall();
+        self.force_redraw(false);
     }
 
     /// Process new input events.

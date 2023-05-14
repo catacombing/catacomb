@@ -146,7 +146,7 @@ fn add_device(catacomb: &mut Catacomb, path: PathBuf) {
 pub struct Udev {
     scheduled_redraws: Vec<RegistrationToken>,
     event_loop: LoopHandle<'static, Catacomb>,
-    output_device: Option<OutputDevice>,
+    pub output_device: Option<OutputDevice>,
     session: LibSeatSession,
     gpu: Option<PathBuf>,
 }
@@ -193,8 +193,6 @@ impl Udev {
 
                     // Reset DRM state.
                     if let Some(output_device) = &mut catacomb.backend.output_device {
-                        output_device.drm_compositor.reset_buffers();
-
                         // NOTE: Ideally we'd just reset the DRM+Compositor here, but this is
                         // currently not possible due to a bug in Smithay or
                         // the driver.
@@ -209,9 +207,7 @@ impl Udev {
                         }
                     }
 
-                    // Force redraw.
-                    catacomb.windows.dirty = true;
-                    catacomb.create_frame();
+                    catacomb.force_redraw(true);
                 },
             })
             .expect("insert notifier source");
@@ -268,6 +264,13 @@ impl Udev {
     /// Get the current output's renderer.
     pub fn renderer(&mut self) -> Option<&mut GlesRenderer> {
         self.output_device.as_mut().map(|output_device| &mut output_device.gles)
+    }
+
+    /// Reset the DRM compostor's buffers.
+    pub fn reset_buffers(&mut self) {
+        if let Some(output_device) = &mut self.output_device {
+            output_device.drm_compositor.reset_buffers();
+        }
     }
 
     /// Request a redraw once `duration` has passed.

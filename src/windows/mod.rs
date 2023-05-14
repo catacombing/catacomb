@@ -68,9 +68,6 @@ pub fn start_transaction() {
 /// Container tracking all known clients.
 #[derive(Debug)]
 pub struct Windows {
-    /// Client-independent damage.
-    pub dirty: bool,
-
     orphan_popups: Vec<Window<PopupSurface>>,
     layouts: Layouts,
     layers: Layers,
@@ -94,6 +91,9 @@ pub struct Windows {
     /// Orientation independent from [`Windows::orientation_locked`] state.
     unlocked_orientation: Orientation,
     orientation_locked: bool,
+
+    /// Client-independent damage.
+    dirty: bool,
 }
 
 impl Windows {
@@ -1004,6 +1004,11 @@ impl Windows {
         self.start_transaction();
         self.output.set_scale(scale);
         self.resize_all();
+    }
+
+    /// Mark the entire screen as dirty.
+    pub fn set_dirty(&mut self) {
+        self.dirty = true;
     }
 }
 
