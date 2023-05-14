@@ -179,14 +179,40 @@ impl Udev {
         // Register notifier for handling session events.
         event_loop
             .insert_source(notifier, move |event, _, catacomb| match event {
+                SessionEvent::PauseSession => {
+                    context.suspend();
+
+                    if let Some(output_device) = &catacomb.backend.output_device {
+                        output_device.drm.pause();
+                    }
+                },
                 SessionEvent::ActivateSession => {
                     if let Err(err) = context.resume() {
                         eprintln!("Failed to resume libinput: {err:?}");
                     }
 
+                    // Reset DRM state.
+                    if let Some(output_device) = &mut catacomb.backend.output_device {
+                        output_device.drm_compositor.reset_buffers();
+
+                        // NOTE: Ideally we'd just reset the DRM+Compositor here, but this is
+                        // currently not possible due to a bug in Smithay or
+                        // the driver.
+                        let device_id = output_device.id;
+                        let result = catacomb.backend.change_device(
+                            &catacomb.display_handle,
+                            &mut catacomb.windows,
+                            device_id,
+                        );
+                        if let Err(err) = result {
+                            eprintln!("Failed reconnecting DRM device: {err:?}");
+                        }
+                    }
+
+                    // Force redraw.
+                    catacomb.windows.dirty = true;
                     catacomb.create_frame();
                 },
-                SessionEvent::PauseSession => (),
             })
             .expect("insert notifier source");
 
