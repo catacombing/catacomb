@@ -1,6 +1,6 @@
 //! Udev backend.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::os::unix::io::FromRawFd;
 use std::path::PathBuf;
@@ -10,7 +10,7 @@ use std::{env, mem, process, ptr};
 use _linux_dmabuf::zv1::server::zwp_linux_dmabuf_feedback_v1::TrancheFlags;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBuffer, GbmBufferFlags, GbmDevice};
-use smithay::backend::allocator::Fourcc;
+use smithay::backend::allocator::{Format, Fourcc};
 use smithay::backend::drm::compositor::{DrmCompositor as SmithayDrmCompositor, RenderFrameResult};
 use smithay::backend::drm::gbm::GbmFramebuffer;
 use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent};
@@ -687,8 +687,10 @@ impl OutputDevice {
         // Get supported plane formats.
         let primary_formats = surface.supported_formats(planes.primary.handle)?;
         let overlay_planes = planes.overlay.iter();
-        let overlay_formats =
-            overlay_planes.flat_map(|plane| surface.supported_formats(plane.handle)).flatten();
+        let overlay_formats = overlay_planes
+            .flat_map(|plane| surface.supported_formats(plane.handle))
+            .collect::<Vec<HashSet<_>>>();
+        let all_overlay_planes = Self::format_intersection(&overlay_formats);
 
         // Setup feedback builder.
         let gbm_id = self.gbm.dev_id()?;
@@ -699,13 +701,36 @@ impl OutputDevice {
         let surface_id = surface.device_fd().dev_id()?;
         let flags = Some(TrancheFlags::Scanout);
         let feedback = feedback_builder
-            // Ideally pick a format which can be scanned out on an overlay plane.
-            .add_preference_tranche(surface_id, flags, overlay_formats)
+            // Ideally pick a format which can be scanned out on ALL overlay planes.
+            .add_preference_tranche(surface_id, flags, all_overlay_planes)
+            // Otherwise try formats which can be scanned out on ANY overlay plane.
+            .add_preference_tranche(surface_id, flags, overlay_formats.into_iter().flatten())
             // Fallback to primary formats, still supporting direct scanout in fullscreen.
             .add_preference_tranche(surface_id, flags, primary_formats)
             .build()?;
 
         Ok(feedback)
+    }
+
+    /// Calculate the intersection of DRM formats between planes.
+    fn format_intersection(formats: &[HashSet<Format>]) -> HashSet<Format> {
+        if formats.is_empty() {
+            return HashSet::new();
+        }
+
+        let mut intersection = formats[0].clone();
+
+        // Filter formats which aren't supported by all other planes.
+        for formats in formats.iter().skip(1) {
+            intersection.retain(|format| formats.contains(format));
+
+            // Abort early if no format intersects.
+            if intersection.is_empty() {
+                break;
+            }
+        }
+
+        intersection
     }
 }
 
