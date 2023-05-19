@@ -37,3 +37,5 @@ dirs = "4.0.0"
 udev = "0.6.2"
 nix = "0.26.2"
 regex = "1.8.1"
+tracing = "0.1.37"
+tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }

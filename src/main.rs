@@ -1,10 +1,13 @@
 use std::ffi::OsStr;
+use std::fmt::Display;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
-use std::{io, ptr};
+use std::{env, io, ptr};
 
 use catacomb_ipc::IpcMessage;
 use clap::{self, Parser, Subcommand};
+use tracing::error;
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 mod catacomb;
 mod config;
@@ -40,6 +43,20 @@ pub enum Subcommands {
 }
 
 pub fn main() {
+    // Set default level to WARN with Catacomb itself at INFO.
+    let mut directives = String::from("warn,catacomb=info");
+
+    // Override with `RUST_LOG` env variable.
+    if let Ok(env_directives) = env::var("RUST_LOG") {
+        directives = env_directives;
+    }
+
+    // Setup tracing.
+    let env_filter = EnvFilter::builder().parse_lossy(directives);
+    let subscriber =
+        FmtSubscriber::builder().with_env_filter(env_filter).with_line_number(true).finish();
+    let _ = tracing::subscriber::set_global_default(subscriber);
+
     match Options::parse().subcommands {
         Some(Subcommands::Msg(msg)) => catacomb_ipc::send_message(&msg).expect("send IPC message"),
         None => udev::run(),
@@ -86,4 +103,11 @@ where
     command.spawn()?.wait()?;
 
     Ok(())
+}
+
+/// Log an error, ignoring success.
+pub fn trace_error<T, E: Display>(result: Result<T, E>) {
+    if let Err(err) = &result {
+        error!("{err}");
+    }
 }

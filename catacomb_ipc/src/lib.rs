@@ -173,7 +173,7 @@ pub fn send_message(message: &IpcMessage) -> Result<(), Box<dyn Error>> {
 
     let message = serde_json::to_string(&message)?;
     socket.write_all(message[..].as_bytes())?;
-    let _ = socket.flush();
+    socket.flush()?;
 
     Ok(())
 }

@@ -73,7 +73,10 @@ use crate::udev::Udev;
 use crate::vibrate::Vibrator;
 use crate::windows::surface::Surface;
 use crate::windows::Windows;
-use crate::{dbus, delegate_idle_inhibit, delegate_screencopy, delegate_session_lock, ipc_server};
+use crate::{
+    dbus, delegate_idle_inhibit, delegate_screencopy, delegate_session_lock, ipc_server,
+    trace_error,
+};
 
 /// Duration until suspend after screen is turned off.
 const SUSPEND_TIMEOUT: Duration = Duration::from_secs(30);
@@ -145,7 +148,7 @@ impl Catacomb {
         let socket_name = socket_source.socket_name().to_string_lossy().into_owned();
         event_loop
             .insert_source(socket_source, move |stream, _, catacomb| {
-                let _ = catacomb.display_handle.insert_client(stream, Arc::new(()));
+                trace_error(catacomb.display_handle.insert_client(stream, Arc::new(())));
             })
             .expect("register Wayland socket source");
 
@@ -297,6 +300,12 @@ impl Catacomb {
 
     /// Handle everything necessary to draw a single frame.
     pub fn create_frame(&mut self) {
+        // Skip rendering while the screen is off.
+        if self.sleeping {
+            self.stalled = true;
+            return;
+        }
+
         // Clear rendering stall status.
         self.stalled = false;
 
@@ -376,7 +385,7 @@ impl Catacomb {
     /// Start active sleep.
     pub fn sleep(&mut self) {
         // Disable accelerometer timer while sleeping.
-        let _ = self.event_loop.disable(&self.accelerometer_token);
+        trace_error(self.event_loop.disable(&self.accelerometer_token));
 
         self.backend.set_sleep(true);
         self.sleeping = true;
@@ -403,7 +412,8 @@ impl Catacomb {
         // Update resume time to ignore buttons pressed during sleep.
         self.last_resume = Instant::now();
 
-        let _ = self.event_loop.enable(&self.accelerometer_token);
+        trace_error(self.event_loop.enable(&self.accelerometer_token));
+
         self.backend.set_sleep(false);
         self.sleeping = false;
 

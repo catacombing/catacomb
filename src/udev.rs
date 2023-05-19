@@ -45,12 +45,14 @@ use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::utils::{DevPath, DeviceFd, Physical, Rectangle, Size, Transform};
 use smithay::wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder};
 use smithay::wayland::{dmabuf, shm};
+use tracing::{debug, error};
 
 use crate::catacomb::Catacomb;
 use crate::dbus::{self, DBusEvent};
 use crate::drawing::{CatacombElement, Graphics};
 use crate::output::Output;
 use crate::protocols::screencopy::frame::Screencopy;
+use crate::trace_error;
 use crate::windows::Windows;
 
 /// Default background color.
@@ -97,11 +99,11 @@ pub fn run() {
         .insert_source(backend, move |event, _, catacomb| match event {
             UdevEvent::Added { path, .. } => add_device(catacomb, path),
             UdevEvent::Changed { device_id } => {
-                let _ = catacomb.backend.change_device(
+                trace_error(catacomb.backend.change_device(
                     &catacomb.display_handle,
                     &mut catacomb.windows,
                     device_id,
-                );
+                ));
             },
             UdevEvent::Removed { device_id } => catacomb.backend.remove_device(device_id),
         })
@@ -137,8 +139,9 @@ fn add_device(catacomb: &mut Catacomb, path: PathBuf) {
     let result = catacomb.backend.add_device(&catacomb.display_handle, &mut catacomb.windows, path);
 
     // Kick-off rendering if the device creation was successful.
-    if result.is_ok() {
-        catacomb.create_frame();
+    match result {
+        Ok(()) => catacomb.create_frame(),
+        Err(err) => debug!("{err}"),
     }
 }
 
@@ -231,7 +234,7 @@ impl Udev {
 
     /// Change Unix TTY.
     pub fn change_vt(&mut self, vt: i32) {
-        let _ = self.session.change_vt(vt);
+        trace_error(self.session.change_vt(vt));
     }
 
     /// Set power saving state.
@@ -258,7 +261,13 @@ impl Udev {
             None => return false,
         };
 
-        output_device.render(windows).unwrap_or(false)
+        match output_device.render(windows) {
+            Ok(rendered) => rendered,
+            Err(err) => {
+                error!("{err}");
+                false
+            },
+        }
     }
 
     /// Get the current output's renderer.
@@ -331,7 +340,7 @@ impl Udev {
 
         // Initialize GPU for EGL rendering.
         if Some(path) == self.gpu {
-            let _ = gles.bind_wl_display(display_handle);
+            trace_error(gles.bind_wl_display(display_handle));
         }
 
         // Create the DRM compositor.
@@ -351,7 +360,7 @@ impl Udev {
                         };
 
                         // Mark the last frame as submitted.
-                        let _ = output_device.drm_compositor.frame_submitted();
+                        trace_error(output_device.drm_compositor.frame_submitted());
 
                         // Send presentation time feedback.
                         catacomb
@@ -537,7 +546,7 @@ impl OutputDevice {
         let crtc = self.drm_compositor.crtc();
 
         let value = PropertyValue::Boolean(enabled);
-        let _ = self.drm.set_property(crtc, property, value.into());
+        trace_error(self.drm.set_property(crtc, property, value.into()));
     }
 
     /// Render a frame.
