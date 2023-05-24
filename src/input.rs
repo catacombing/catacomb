@@ -47,6 +47,7 @@ pub struct TouchState {
     pub user_gestures: Vec<GestureBinding>,
     pub position: Point<f64, Logical>,
 
+    surface_offset: Option<Point<f64, Logical>>,
     event_loop: LoopHandle<'static, Catacomb>,
     velocity_timer: Option<RegistrationToken>,
     active_app_id: Option<String>,
@@ -63,6 +64,7 @@ impl TouchState {
         Self {
             event_loop,
             touch,
+            surface_offset: Default::default(),
             velocity_timer: Default::default(),
             user_gestures: Default::default(),
             active_app_id: Default::default(),
@@ -367,9 +369,10 @@ impl Catacomb {
         let surface = self.windows.surface_at(event.position);
 
         // Notify client.
+        self.touch_state.surface_offset = None;
         self.touch_state.active_app_id = None;
         match surface {
-            Some(OffsetSurface { mut toplevel, surface, offset }) => {
+            Some(OffsetSurface { mut toplevel, surface, surface_offset, position }) => {
                 let app_id = match &mut toplevel {
                     Some(OffsetSurfaceToplevel::Layout((_, app_id))) => app_id.take(),
                     _ => None,
@@ -396,8 +399,11 @@ impl Catacomb {
                         None => (),
                     }
 
+                    // Update offset of surface being interacted with.
+                    self.touch_state.surface_offset = Some(surface_offset);
+
                     let serial = SERIAL_COUNTER.next_serial();
-                    self.touch_state.touch.down(serial, time, &surface, offset, slot, position);
+                    self.touch_state.touch.down(serial, time, &surface, position, slot);
                 }
             },
             // Clear focus if touch wasn't on any surface.
@@ -452,7 +458,10 @@ impl Catacomb {
     /// Handle touch input movement.
     fn on_touch_motion(&mut self, event: TouchEvent) {
         // Notify client.
-        self.touch_state.touch.motion(event.time, event.slot, event.position);
+        if let Some(surface_offset) = self.touch_state.surface_offset {
+            let position = event.position - surface_offset;
+            self.touch_state.touch.motion(event.time, event.slot, position);
+        }
 
         // Ignore anything but the active touch slot.
         if self.touch_state.slot != Some(event.slot) {

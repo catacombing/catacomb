@@ -9,8 +9,11 @@ use std::error::Error;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::{env, process};
 
+#[cfg(feature = "clap")]
+use clap::error::{Error as ClapError, ErrorKind as ClapErrorKind};
 #[cfg(feature = "clap")]
 use clap::{Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
@@ -33,7 +36,17 @@ pub enum IpcMessage {
     /// Update output scale factor.
     Scale {
         /// New scale factor.
-        scale: f64,
+        ///
+        /// For the global scale this can be any float, which will be rounded
+        /// internally.
+        ///
+        /// For window scales this can either be a float, or arithmetic on top
+        /// of the global scale using either `+`, `-`, `*`, or `/` as prefix
+        /// (i.e. `+0.5`).
+        scale: WindowScale,
+        /// App ID regex for per-window scaling.
+        #[cfg_attr(feature = "clap", clap(long))]
+        app_id: Option<String>,
     },
     /// Add a gesture.
     Bind {
@@ -148,6 +161,60 @@ impl GestureSector {
             (2, 2) => Self::BottomRight,
             _ => unreachable!(),
         }
+    }
+}
+
+/// Window-specific scaling options.
+#[derive(Deserialize, Serialize, Copy, Clone, PartialEq, Debug)]
+pub enum WindowScale {
+    Fixed(f64),
+    Additive(f64),
+    Subtractive(f64),
+    Multiplicative(f64),
+    Divisive(f64),
+}
+
+impl WindowScale {
+    /// Calculate the scale relative to the provided output scale.
+    pub fn scale(&self, output_scale: f64) -> f64 {
+        // Get window scale based on current output scale.
+        let mut scale = match self {
+            Self::Fixed(scale) => *scale,
+            Self::Additive(scale) => output_scale + scale,
+            Self::Subtractive(scale) => output_scale - scale,
+            Self::Multiplicative(scale) => output_scale * scale,
+            Self::Divisive(scale) => output_scale / scale,
+        };
+
+        // Ensure scale factor is divisible by 120, to support wp_fractional_scale.
+        scale = (scale * 120.).round() / 120.;
+
+        scale
+    }
+}
+
+impl FromStr for WindowScale {
+    type Err = ClapError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            return Err(ClapError::raw(ClapErrorKind::InvalidValue, "scale cannot be empty"));
+        }
+
+        // Get scale and variant.
+        let (variant, factor): (fn(_) -> _, _) = match &s[..1] {
+            "+" => (Self::Additive, &s[1..]),
+            "-" => (Self::Subtractive, &s[1..]),
+            "*" => (Self::Multiplicative, &s[1..]),
+            "/" => (Self::Divisive, &s[1..]),
+            _ => (Self::Fixed, s),
+        };
+
+        // Try to parse the scale.
+        let num = f64::from_str(factor)
+            .map_err(|err| ClapError::raw(ClapErrorKind::InvalidValue, err))?;
+
+        Ok(variant(num))
     }
 }
 

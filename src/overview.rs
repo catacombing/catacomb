@@ -211,7 +211,7 @@ impl Overview {
 
                 let primary = primary.borrow();
                 let scale = position.scale;
-                let loc = bounds.loc + primary.internal_offset().scale(scale);
+                let loc = bounds.loc + primary.internal_offset(canvas.scale()).scale(scale);
                 primary.textures(textures, canvas.scale(), scale, loc);
             }
 
@@ -223,7 +223,7 @@ impl Overview {
 
                 let secondary = secondary.borrow();
                 let scale = position.scale;
-                let loc = bounds.loc + secondary.internal_offset().scale(scale);
+                let loc = bounds.loc + secondary.internal_offset(canvas.scale()).scale(scale);
                 secondary.textures(textures, canvas.scale(), scale, loc);
             }
 
@@ -316,7 +316,7 @@ impl DragAndDrop {
         } else {
             position.bounds.loc
         };
-        start_location += window.borrow().internal_offset().scale(position.scale);
+        start_location += window.borrow().internal_offset(canvas.scale()).scale(position.scale);
 
         Self {
             start_location,

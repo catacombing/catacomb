@@ -21,14 +21,15 @@ use smithay::reexports::calloop::{
 };
 use smithay::reexports::wayland_protocols::xdg::decoration as _decoration;
 use smithay::reexports::wayland_protocols_misc::server_decoration as _server_decoration;
+use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::reexports::wayland_server::{Display, DisplayHandle, Resource};
+use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, Resource};
 use smithay::utils::{Serial, SERIAL_COUNTER};
 use smithay::wayland::buffer::BufferHandler;
-use smithay::wayland::compositor::{CompositorHandler, CompositorState};
+use smithay::wayland::compositor::{CompositorClientState, CompositorHandler, CompositorState};
 use smithay::wayland::data_device::{
     ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
 };
@@ -148,7 +149,9 @@ impl Catacomb {
         let socket_name = socket_source.socket_name().to_string_lossy().into_owned();
         event_loop
             .insert_source(socket_source, move |stream, _, catacomb| {
-                trace_error(catacomb.display_handle.insert_client(stream, Arc::new(())));
+                trace_error(
+                    catacomb.display_handle.insert_client(stream, Arc::new(ClientState::default())),
+                );
             })
             .expect("register Wayland socket source");
 
@@ -480,6 +483,13 @@ impl CompositorHandler for Catacomb {
         &mut self.compositor_state
     }
 
+    fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
+        match client.get_data::<ClientState>() {
+            Some(state) => &state.compositor_state,
+            None => panic!("unknown client data type"),
+        }
+    }
+
     fn commit(&mut self, surface: &WlSurface) {
         if compositor::is_sync_subsurface(surface) {
             return;
@@ -628,6 +638,8 @@ delegate_input_method_manager!(Catacomb);
 delegate_text_input_manager!(Catacomb);
 
 impl DataDeviceHandler for Catacomb {
+    type SelectionUserData = ();
+
     fn data_device_state(&self) -> &DataDeviceState {
         &self.data_device_state
     }
@@ -694,6 +706,10 @@ delegate_presentation!(Catacomb);
 
 impl FractionalScaleHandler for Catacomb {
     fn new_fractional_scale(&mut self, surface: WlSurface) {
+        // Submit the fractional output scale by default.
+        //
+        // The per-application scale requires the app ID to be set for identification,
+        // which isn't present at this time yet.
         compositor::with_states(&surface, |states| {
             fractional_scale::with_fractional_scale(states, |fractional_scale| {
                 let scale = self.windows.output().scale();
@@ -705,3 +721,15 @@ impl FractionalScaleHandler for Catacomb {
 delegate_fractional_scale!(Catacomb);
 
 delegate_viewporter!(Catacomb);
+
+/// Unused state to make Smithay happy.
+#[derive(Default)]
+struct ClientState {
+    compositor_state: CompositorClientState,
+}
+
+impl ClientData for ClientState {
+    fn initialized(&self, _client_id: ClientId) {}
+
+    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
+}

@@ -28,7 +28,7 @@ features = [
 catacomb_ipc = { version = "0.1.0", path = "./catacomb_ipc", features = ["clap", "smithay"] }
 zbus = { version = "3.11.0", default-features = false, features = ["tokio"] }
 serde = { version = "1.0.144", features = ["derive"] }
-clap = { version = "4.2.3", features = ["derive"] }
+clap = { version = "4.2.3", features = ["derive", "wrap_help"] }
 serde_json = "1.0.85"
 tokio = "1.26.0"
 image = "0.24.5"

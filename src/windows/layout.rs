@@ -62,7 +62,7 @@ impl Layouts {
 
         // Issue resize for the new window.
         let rectangle = output.primary_rectangle(false);
-        primary.borrow_mut().set_dimensions(rectangle);
+        primary.borrow_mut().set_dimensions(output.scale(), rectangle);
 
         // Create layout for the new window.
         self.layouts.push(Layout::new(primary));
@@ -133,7 +133,7 @@ impl Layouts {
         // Resize both windows to fullscreen, since secondary will be split off.
         for window in layout.primary.iter().chain(&layout.secondary) {
             let rectangle = output.primary_rectangle(false);
-            window.borrow_mut().set_dimensions(rectangle);
+            window.borrow_mut().set_dimensions(output.scale(), rectangle);
         }
 
         // Send enter event for new primary.
@@ -158,7 +158,7 @@ impl Layouts {
             // Resize primary if present.
             Some(primary) => {
                 let rectangle = output.primary_rectangle(true);
-                primary.borrow_mut().set_dimensions(rectangle);
+                primary.borrow_mut().set_dimensions(output.scale(), rectangle);
             },
             // Block setting secondary without primary present.
             None => {
@@ -170,20 +170,20 @@ impl Layouts {
         // Resize old secondary since it will get booted.
         if let Some(secondary) = active.secondary.as_ref() {
             let rectangle = output.primary_rectangle(false);
-            secondary.borrow_mut().set_dimensions(rectangle);
+            secondary.borrow_mut().set_dimensions(output.scale(), rectangle);
         }
 
         // Resize new secondary if it was primary before.
         if let Some(primary) = layout.primary.as_ref().filter(|_| !position.secondary) {
             let rectangle = output.secondary_rectangle();
-            primary.borrow_mut().set_dimensions(rectangle);
+            primary.borrow_mut().set_dimensions(output.scale(), rectangle);
         }
 
         // Resize old layout's sibling since we split the layout up.
         let sibling = if position.secondary { &layout.primary } else { &layout.secondary };
         if let Some(sibling) = sibling {
             let rectangle = output.primary_rectangle(false);
-            sibling.borrow_mut().set_dimensions(rectangle);
+            sibling.borrow_mut().set_dimensions(output.scale(), rectangle);
         }
 
         // Send enter event for new secondary.
@@ -205,12 +205,12 @@ impl Layouts {
             if let Some(mut primary) = primary {
                 let secondary_alive = secondary.as_ref().map_or(false, |window| window.alive());
                 let rectangle = output.primary_rectangle(secondary_alive);
-                primary.set_dimensions(rectangle);
+                primary.set_dimensions(output.scale(), rectangle);
             }
 
             if let Some(mut secondary) = secondary {
                 let rectangle = output.secondary_rectangle();
-                secondary.set_dimensions(rectangle);
+                secondary.set_dimensions(output.scale(), rectangle);
             }
         }
     }
@@ -236,7 +236,7 @@ impl Layouts {
             // Resize window to fullscreen if present.
             if let Some(mut window) = growing_window {
                 let rectangle = output.primary_rectangle(false);
-                window.set_dimensions(rectangle);
+                window.set_dimensions(output.scale(), rectangle);
             }
 
             // Quit as soon as any matching surface was found.
@@ -508,13 +508,17 @@ impl Layouts {
     }
 
     /// Touch and return surface at the specified location.
-    pub fn touch_surface_at(&mut self, position: Point<f64, Logical>) -> Option<OffsetSurface> {
+    pub fn touch_surface_at(
+        &mut self,
+        output_scale: f64,
+        position: Point<f64, Logical>,
+    ) -> Option<OffsetSurface> {
         let active_layout = self.active_layout.and_then(|index| self.layouts.get(index))?;
 
         for window in active_layout.primary.iter().chain(&active_layout.secondary) {
             let window_ref = window.borrow();
-            if window_ref.contains(position) {
-                let mut surface = window_ref.surface_at(position)?;
+            if window_ref.contains(output_scale, position) {
+                let mut surface = window_ref.surface_at(output_scale, position)?;
                 let app_id = window_ref.app_id.clone();
                 let window = Rc::downgrade(window);
                 surface.toplevel = Some(OffsetSurfaceToplevel::Layout((window, app_id)));

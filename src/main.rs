@@ -29,7 +29,7 @@ mod windows;
 
 /// Command line arguments.
 #[derive(Parser, Debug)]
-#[clap(author, about, version)]
+#[clap(author, about, version, max_term_width = 80)]
 struct Options {
     #[clap(subcommand)]
     pub subcommands: Option<Subcommands>,

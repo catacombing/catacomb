@@ -6,8 +6,9 @@ use std::io::{BufRead, BufReader};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
-use catacomb_ipc::{self, IpcMessage};
+use catacomb_ipc::{self, IpcMessage, WindowScale};
 use smithay::reexports::calloop::LoopHandle;
+use tracing::warn;
 
 use crate::catacomb::Catacomb;
 use crate::config::{AppIdMatcher, GestureBinding};
@@ -64,7 +65,26 @@ fn handle_message(buffer: &mut String, stream: UnixStream, catacomb: &mut Cataco
             catacomb.windows.lock_orientation(orientation);
             catacomb.unstall();
         },
-        IpcMessage::Scale { scale } => {
+        IpcMessage::Scale { scale, app_id: Some(app_id) } => {
+            let app_id = match AppIdMatcher::try_from(app_id) {
+                Ok(app_id) => app_id,
+                Err(err) => {
+                    warn!("ignoring invalid ipc message: scale has invalid App ID regex: {err}");
+                    return;
+                },
+            };
+
+            catacomb.windows.add_window_scale(app_id, scale);
+        },
+        IpcMessage::Scale { scale, app_id: None } => {
+            let scale = match scale {
+                WindowScale::Fixed(scale) => scale,
+                scale => {
+                    warn!("ignoring invalid ipc message: expected fixed scale, got {scale:?}");
+                    return;
+                },
+            };
+
             catacomb.windows.set_scale(scale);
             catacomb.unstall();
         },
@@ -72,7 +92,7 @@ fn handle_message(buffer: &mut String, stream: UnixStream, catacomb: &mut Cataco
             let app_id = match AppIdMatcher::try_from(app_id) {
                 Ok(app_id) => app_id,
                 Err(err) => {
-                    eprintln!("Binding with invalid App ID regex: {err}");
+                    warn!("ignoring invalid ipc message: binding has invalid App ID regex: {err}");
                     return;
                 },
             };

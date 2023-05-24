@@ -7,6 +7,7 @@ use std::time::Instant;
 use std::{cmp, mem};
 
 use _presentation_time::wp_presentation_feedback::Kind as FeedbackKind;
+use catacomb_ipc::WindowScale;
 use smithay::backend::drm::{DrmEventMetadata, DrmEventTime};
 use smithay::backend::renderer::element::{RenderElementPresentationState, RenderElementStates};
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -20,6 +21,7 @@ use smithay::utils::{Logical, Physical, Point, Rectangle, Size};
 use smithay::wayland::compositor::{
     self, SubsurfaceCachedState, SurfaceAttributes, SurfaceData, TraversalAction,
 };
+use smithay::wayland::fractional_scale;
 use smithay::wayland::presentation::{
     PresentationFeedbackCachedState, PresentationFeedbackCallback,
 };
@@ -31,6 +33,7 @@ use smithay::wayland::shell::xdg::{
     XdgToplevelSurfaceRoleAttributes,
 };
 
+use crate::config::AppIdMatcher;
 use crate::drawing::{CatacombElement, CatacombSurfaceData, RenderTexture, Texture};
 use crate::geometry::Vector;
 use crate::output::{ExclusiveSpace, Output};
@@ -55,8 +58,11 @@ pub struct Window<S = ToplevelSurface> {
     /// Buffers pending to be updated.
     dirty: bool,
 
-    /// Desired window dimensions.
-    rectangle: Rectangle<i32, Logical>,
+    /// Target bounds in the output's logical coordinates.
+    output_rectangle: Rectangle<i32, Logical>,
+
+    /// Size ni the window's logical coordinates.
+    size: Size<i32, Logical>,
 
     /// Texture cache, storing last window state.
     texture_cache: TextureCache,
@@ -73,6 +79,9 @@ pub struct Window<S = ToplevelSurface> {
     /// Pending wp_presentation callbacks.
     presentation_callbacks: Vec<PresentationCallback>,
 
+    /// Window-specific scale override.
+    scale: Option<WindowScale>,
+
     /// Window liveliness override.
     dead: bool,
 }
@@ -83,15 +92,17 @@ impl<S: Surface + 'static> Window<S> {
         Window {
             surface,
             presentation_callbacks: Default::default(),
+            output_rectangle: Default::default(),
             texture_cache: Default::default(),
             transaction: Default::default(),
             deny_focus: Default::default(),
             acked_size: Default::default(),
-            rectangle: Default::default(),
             visible: Default::default(),
             popups: Default::default(),
             app_id: Default::default(),
             dirty: Default::default(),
+            scale: Default::default(),
+            size: Default::default(),
             dead: Default::default(),
         }
     }
@@ -117,8 +128,8 @@ impl<S: Surface + 'static> Window<S> {
     }
 
     /// Check if this window contains a specific point.
-    pub fn contains(&self, point: Point<f64, Logical>) -> bool {
-        self.bounds().to_f64().contains(point)
+    pub fn contains(&self, output_scale: f64, point: Point<f64, Logical>) -> bool {
+        self.bounds(output_scale).to_f64().contains(point)
     }
 
     /// Add this window's textures to the supplied buffer.
@@ -144,12 +155,12 @@ impl<S: Surface + 'static> Window<S> {
         location: impl Into<Option<Point<i32, Logical>>>,
         bounds: impl Into<Option<Rectangle<i32, Physical>>>,
     ) {
-        let location = location.into().unwrap_or_else(|| self.bounds().loc);
+        let location = location.into().unwrap_or_else(|| self.bounds(output_scale).loc);
         let window_scale = window_scale.into().unwrap_or(1.);
 
         // Calculate window bounds only for the toplevel window.
         let bounds = bounds.into().unwrap_or_else(|| {
-            let mut bounds = self.bounds().to_physical_precise_round(output_scale);
+            let mut bounds = self.bounds(output_scale).to_physical_precise_round(output_scale);
             bounds.loc = location.to_physical_precise_round(output_scale);
             bounds
         });
@@ -157,7 +168,8 @@ impl<S: Surface + 'static> Window<S> {
         // Add popup textures.
         let logical_bounds = bounds.to_f64().to_logical(output_scale).to_i32_round();
         for popup in self.popups.iter().rev() {
-            let unconstrained_location = location + popup.bounds().loc.scale(window_scale);
+            let unconstrained_location =
+                location + popup.bounds(output_scale).loc.scale(window_scale);
             let popup_location = popup.constrain_location(unconstrained_location, logical_bounds);
 
             popup.textures_internal(
@@ -183,21 +195,27 @@ impl<S: Surface + 'static> Window<S> {
         }
     }
 
-    /// Default window location and size.
-    fn bounds(&self) -> Rectangle<i32, Logical> {
-        // Center window inside its space.
-        let mut bounds = self.rectangle;
-        bounds.loc += self.internal_offset();
-        bounds
+    /// Target bounds in output's logical coordinates.
+    pub fn bounds(&self, output_scale: f64) -> Rectangle<i32, Logical> {
+        // Return bounds in output coordinates.
+        let mut window_bounds = self.output_rectangle;
+        window_bounds.loc += self.internal_offset(output_scale);
+        window_bounds
     }
 
-    /// Internal window offset for centering the window inside its space.
-    pub fn internal_offset(&self) -> Point<i32, Logical> {
+    /// Target bounds in output's logical coordinates.
+    pub fn internal_offset(&self, output_scale: f64) -> Point<i32, Logical> {
+        // Calculate internal offset in window's logical scale.
+        //
+        // This is used to center the window within its bounds.
         let cache_size = self.texture_cache.size();
-        let bounds = self.rectangle;
-        let x = ((bounds.size.w - cache_size.w) / 2).max(0);
-        let y = ((bounds.size.h - cache_size.h) / 2).max(0);
-        (x, y).into()
+        let offset_x = ((self.size.w - cache_size.w) / 2).max(0);
+        let offset_y = ((self.size.h - cache_size.h) / 2).max(0);
+        let window_offset = Point::from((offset_x, offset_y));
+
+        // Convert internal offset to output logical coordinates.
+        let scale = self.scale.map_or(output_scale, |scale| scale.scale(output_scale));
+        window_offset.scale(scale / output_scale)
     }
 
     /// Import the buffers of all surfaces into the renderer.
@@ -217,10 +235,9 @@ impl<S: Surface + 'static> Window<S> {
             return;
         }
 
-        self.texture_cache.requested_size = self.rectangle.size;
-        self.texture_cache.textures.clear();
-
+        // Clear the texture cache.
         let geometry = self.surface.geometry();
+        self.texture_cache.reset(self.size, geometry.map(|geometry| geometry.size));
 
         compositor::with_surface_tree_upward(
             self.surface.surface(),
@@ -271,7 +288,8 @@ impl<S: Surface + 'static> Window<S> {
                         }
 
                         // Update and cache the texture.
-                        let texture = Texture::from_surface(texture, location, &data, surface);
+                        let texture =
+                            Texture::from_surface(texture, self.scale, location, &data, surface);
                         let render_texture = RenderTexture::new(texture);
                         self.texture_cache.push(render_texture.clone(), location);
                         data.texture = Some(render_texture);
@@ -299,7 +317,7 @@ impl<S: Surface + 'static> Window<S> {
     /// Check whether there is a new buffer pending with an updated geometry
     /// size.
     pub fn pending_buffer_resize(&self) -> bool {
-        self.rectangle.size != self.texture_cache.requested_size
+        self.size != self.texture_cache.requested_size
     }
 
     /// Mark all rendered clients as presented for `wp_presentation`.
@@ -345,18 +363,28 @@ impl<S: Surface + 'static> Window<S> {
     }
 
     /// Change the window dimensions.
-    pub fn set_dimensions(&mut self, rectangle: Rectangle<i32, Logical>) {
+    pub fn set_dimensions(&mut self, output_scale: f64, rectangle: Rectangle<i32, Logical>) {
+        // Scale size from output logical to window logical coordinates.
+        let mut size = rectangle.size;
+        if let Some(window_scale) = &self.scale {
+            let window_scale = window_scale.scale(output_scale);
+            size = size.scale(output_scale / window_scale);
+        }
+
         // Skip if we're already at the correct size.
-        let current = self.transaction.as_ref().map_or(self.rectangle, |t| t.rectangle);
-        if rectangle == current {
+        let current = (self.output_rectangle, self.size);
+        let transaction_current = self.transaction.as_ref().map(|t| (t.output_rectangle, t.size));
+        if (rectangle, size) == transaction_current.unwrap_or(current) {
             return;
         }
 
         // Transactionally update geometry.
-        self.start_transaction().rectangle = rectangle;
+        let transaction = self.start_transaction();
+        transaction.output_rectangle = rectangle;
+        transaction.size = size;
 
         // Apply the dimensional changes.
-        self.surface.resize(rectangle.size);
+        self.surface.resize(size);
     }
 
     /// Send output enter event to this window's surfaces.
@@ -395,17 +423,22 @@ impl<S: Surface + 'static> Window<S> {
             None => return,
         };
 
-        self.rectangle = transaction.rectangle;
+        self.output_rectangle = transaction.output_rectangle;
+        self.size = transaction.size;
     }
 
     /// Check if the transaction is ready for application.
     pub fn transaction_done(&self) -> bool {
-        !self.alive()
-            || self.transaction.as_ref().map_or(true, |t| t.rectangle.size == self.acked_size)
+        !self.alive() || self.transaction.as_ref().map_or(true, |t| t.size == self.acked_size)
     }
 
     /// Handle common surface commit logic for surfaces of any kind.
-    pub fn surface_commit_common(&mut self, surface: &WlSurface) {
+    pub fn surface_commit_common(
+        &mut self,
+        output_scale: f64,
+        window_scales: &[(AppIdMatcher, WindowScale)],
+        surface: &WlSurface,
+    ) {
         // Cancel transactions on the commit after the configure was acked.
         self.acked_size = self.surface.acked_size();
 
@@ -448,38 +481,87 @@ impl<S: Surface + 'static> Window<S> {
         // Send initial configure after the first commit.
         self.surface.initial_configure();
 
-        // Update App ID.
-        compositor::with_states(self.surface.surface(), |states| {
-            let attrs = states
+        // Update the App ID.
+        let app_id_changed = compositor::with_states(surface, |states| {
+            // Get surface attributes.
+            let attributes = states
                 .data_map
                 .get::<Mutex<XdgToplevelSurfaceRoleAttributes>>()
                 .and_then(|attributes| attributes.lock().ok());
 
-            if let Some(attributes) = attrs.filter(|attrs| attrs.app_id != self.app_id) {
-                self.app_id = attributes.app_id.clone();
+            // Check if the App ID has changed.
+            match attributes.filter(|attrs| attrs.app_id != self.app_id) {
+                Some(attributes) => {
+                    self.app_id = attributes.app_id.clone();
+                    true
+                },
+                None => false,
             }
-        })
+        });
+
+        // Try to update window scale when App ID changes.
+        if app_id_changed {
+            self.update_scale(window_scales, output_scale);
+        }
+    }
+
+    /// Update the window's scale override.
+    pub fn update_scale(
+        &mut self,
+        window_scales: &[(AppIdMatcher, WindowScale)],
+        output_scale: f64,
+    ) {
+        // Update the per-window scale override.
+        self.scale = None;
+        for (matcher, window_scale) in window_scales {
+            // Pick the first match and assign it.
+            if matcher.matches(self.app_id.as_ref()) {
+                self.scale = Some(*window_scale);
+                break;
+            }
+        }
+
+        // Update fractional scale protocol.
+        compositor::with_states(self.surface.surface(), |states| {
+            fractional_scale::with_fractional_scale(states, |fractional_scale| {
+                let scale = self.scale.map_or(output_scale, |scale| scale.scale(output_scale));
+                fractional_scale.set_preferred_scale(scale);
+            });
+        });
+
+        // Resubmit dimensions in case per-window scaling changed.
+        let transaction = self.transaction.as_ref();
+        let current_rectangle = transaction.map_or(self.output_rectangle, |t| t.output_rectangle);
+        self.set_dimensions(output_scale, current_rectangle);
     }
 
     /// Find subsurface at the specified location.
-    pub fn surface_at(&self, position: Point<f64, Logical>) -> Option<OffsetSurface> {
+    pub fn surface_at(
+        &self,
+        output_scale: f64,
+        mut position: Point<f64, Logical>,
+    ) -> Option<OffsetSurface> {
+        let bounds = self.bounds(output_scale);
+
         // Check popups top to bottom first.
-        let parent_offset = self.rectangle.loc;
+        let parent_offset = bounds.loc;
         let relative = position - parent_offset.to_f64();
-        let popup = self.popups.iter().find_map(|popup| popup.surface_at(relative));
-        if let Some(mut popup_surface) = popup {
-            // Convert surface offset from parent-relative to global.
-            popup_surface.offset += parent_offset;
-            return Some(popup_surface);
+        let popup = self.popups.iter().find_map(|popup| popup.surface_at(output_scale, relative));
+        if popup.is_some() {
+            return popup;
         }
 
+        // Convert position and bounds to per-window scale.
+        let window_scale = self.scale.map_or(output_scale, |scale| scale.scale(output_scale));
+        position = position.upscale(output_scale / window_scale);
+        let bounds_loc = bounds.loc.scale(output_scale / window_scale);
+
         let geometry = self.surface.geometry().unwrap_or_default();
-        let bounds = self.bounds();
 
         let result = RefCell::new(None);
         compositor::with_surface_tree_upward(
             self.surface.surface(),
-            bounds.loc,
+            bounds_loc,
             |wl_surface, surface_data, location| {
                 let mut location = *location;
                 if surface_data.role == Some("subsurface") {
@@ -495,13 +577,13 @@ impl<S: Surface + 'static> Window<S> {
                     .data_map
                     .get::<RefCell<CatacombSurfaceData>>()
                     .map_or_else(Size::default, |data| data.borrow().dst_size);
-                let surface_loc = location - geometry.loc;
+                let surface_loc = (location - geometry.loc).to_f64();
                 let surface_rect =
                     Rectangle::from_loc_and_size(surface_loc.to_f64(), size.to_f64());
 
                 // Check if the position is within the surface bounds.
                 if surface_rect.contains(position) {
-                    let surface = OffsetSurface::new(wl_surface.clone(), surface_loc);
+                    let surface = OffsetSurface::new(wl_surface.clone(), surface_loc, position);
                     *result.borrow_mut() = Some(surface);
                     TraversalAction::SkipChildren
                 } else {
@@ -539,15 +621,20 @@ impl<S: Surface + 'static> Window<S> {
     }
 
     /// Apply surface commits for popups.
-    pub fn popup_surface_commit(&mut self, root_surface: &WlSurface, surface: &WlSurface) -> bool {
+    pub fn popup_surface_commit(
+        &mut self,
+        output_scale: f64,
+        root_surface: &WlSurface,
+        surface: &WlSurface,
+    ) -> bool {
         self.popups.iter_mut().any(|window| {
             if window.surface.surface() == root_surface {
-                window.surface_commit_common(surface);
-                window.rectangle.loc = window.position();
+                window.surface_commit_common(output_scale, &[], surface);
+                window.output_rectangle.loc = window.position();
                 return true;
             }
 
-            window.popup_surface_commit(root_surface, surface)
+            window.popup_surface_commit(output_scale, root_surface, surface)
         })
     }
 
@@ -617,13 +704,14 @@ impl Window<CatacombLayerSurface> {
     /// Handle a surface commit for layer shell windows.
     pub fn surface_commit(
         &mut self,
-        surface: &WlSurface,
+        window_scales: &[(AppIdMatcher, WindowScale)],
         output: &mut Output,
         fullscreen_active: bool,
+        surface: &WlSurface,
     ) {
         self.update_layer_state(output);
         self.update_dimensions(output, fullscreen_active);
-        self.surface_commit_common(surface);
+        self.surface_commit_common(output.scale(), window_scales, surface);
     }
 
     /// Recompute the window's size and location.
@@ -675,7 +763,7 @@ impl Window<CatacombLayerSurface> {
         };
 
         let dimensions = Rectangle::from_loc_and_size((x, y), size);
-        self.set_dimensions(dimensions);
+        self.set_dimensions(output.scale(), dimensions);
     }
 
     /// Update layer-specific shell properties.
@@ -698,12 +786,13 @@ impl Window<CatacombLayerSurface> {
 /// Atomic changes to [`Window`].
 #[derive(Debug)]
 struct WindowTransaction {
-    rectangle: Rectangle<i32, Logical>,
+    output_rectangle: Rectangle<i32, Logical>,
+    size: Size<i32, Logical>,
 }
 
 impl WindowTransaction {
     fn new<S>(current_state: &Window<S>) -> Self {
-        Self { rectangle: current_state.rectangle }
+        Self { output_rectangle: current_state.output_rectangle, size: current_state.size }
     }
 }
 
@@ -724,6 +813,17 @@ pub struct TextureCache {
 }
 
 impl TextureCache {
+    /// Clear the texture cache.
+    fn reset(
+        &mut self,
+        requested_size: Size<i32, Logical>,
+        geometry_size: Option<Size<i32, Logical>>,
+    ) {
+        self.requested_size = requested_size;
+        self.geometry_size = geometry_size;
+        self.textures.clear();
+    }
+
     /// Add a new texture.
     fn push(&mut self, texture: RenderTexture, location: Point<i32, Logical>) {
         // Update the combined texture size.

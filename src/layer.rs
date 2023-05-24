@@ -79,26 +79,34 @@ impl Layers {
     }
 
     /// Foreground window at the specified position.
-    pub fn foreground_window_at(&self, position: Point<f64, Logical>) -> Option<&LayerWindow> {
-        self.overlay
-            .iter()
-            .rev()
-            .find(|window| window.contains(position))
-            .or_else(|| self.top.iter().rev().find(|window| window.contains(position)))
+    pub fn foreground_window_at(
+        &self,
+        output_scale: f64,
+        position: Point<f64, Logical>,
+    ) -> Option<&LayerWindow> {
+        self.overlay.iter().rev().find(|window| window.contains(output_scale, position)).or_else(
+            || self.top.iter().rev().find(|window| window.contains(output_scale, position)),
+        )
     }
 
     /// Background window at the specified position.
-    pub fn background_window_at(&self, position: Point<f64, Logical>) -> Option<&LayerWindow> {
-        self.bottom
-            .iter()
-            .rev()
-            .find(|window| window.contains(position))
-            .or_else(|| self.background.iter().rev().find(|window| window.contains(position)))
+    pub fn background_window_at(
+        &self,
+        output_scale: f64,
+        position: Point<f64, Logical>,
+    ) -> Option<&LayerWindow> {
+        self.bottom.iter().rev().find(|window| window.contains(output_scale, position)).or_else(
+            || self.background.iter().rev().find(|window| window.contains(output_scale, position)),
+        )
     }
 
     /// Overlay window at the specified position.
-    pub fn overlay_window_at(&self, position: Point<f64, Logical>) -> Option<&LayerWindow> {
-        self.overlay.iter().rev().find(|window| window.contains(position))
+    pub fn overlay_window_at(
+        &self,
+        output_scale: f64,
+        position: Point<f64, Logical>,
+    ) -> Option<&LayerWindow> {
+        self.overlay.iter().rev().find(|window| window.contains(output_scale, position))
     }
 
     /// Apply all pending transactional updates.

@@ -3,13 +3,14 @@
 use std::ops::Deref;
 use std::rc::Rc;
 
+use catacomb_ipc::WindowScale;
 use smithay::backend::renderer::element::utils::{
     CropRenderElement, Relocate, RelocateRenderElement, RescaleRenderElement,
 };
 use smithay::backend::renderer::element::{Element, Id, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{ffi, GlesFrame, GlesRenderer, GlesTexture};
 use smithay::backend::renderer::utils::{Buffer, CommitCounter, DamageBag, DamageSnapshot};
-use smithay::backend::renderer::{self, Renderer};
+use smithay::backend::renderer::{self, Renderer, Texture as _};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{
     Buffer as BufferSpace, Logical, Physical, Point, Rectangle, Scale, Size, Transform,
@@ -46,6 +47,7 @@ pub struct Texture {
     buffer: Option<Buffer>,
     texture: GlesTexture,
     transform: Transform,
+    window_scale: Option<WindowScale>,
     scale: f64,
     id: Id,
 }
@@ -73,6 +75,7 @@ impl Texture {
             src_rect: src_rect.to_f64(),
             dst_size: buffer_size,
             id: Id::new(),
+            window_scale: Default::default(),
             transform: Default::default(),
             location: Default::default(),
             buffer: Default::default(),
@@ -82,6 +85,7 @@ impl Texture {
     /// Create a texture from a Wayland surface.
     pub fn from_surface(
         texture: GlesTexture,
+        window_scale: Option<WindowScale>,
         location: impl Into<Point<i32, Logical>>,
         buffer: &CatacombSurfaceData,
         surface: &WlSurface,
@@ -100,6 +104,7 @@ impl Texture {
 
         Self {
             opaque_regions,
+            window_scale,
             location,
             texture,
             tracker: buffer.damage.tracker.snapshot(),
@@ -153,7 +158,9 @@ impl Texture {
         let texture =
             unsafe { GlesTexture::from_raw(renderer, Some(format), opaque, texture_id, size) };
 
-        Texture::new(texture, (width, height), scale, opaque)
+        let logical_size =
+            Size::<i32, Physical>::from((width, height)).to_f64().to_logical(scale).to_i32_round();
+        Texture::new(texture, logical_size, scale, opaque)
     }
 
     /// Target size after rendering.
@@ -194,6 +201,7 @@ impl Element for RenderTexture {
     }
 
     fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        let scale = self.window_scale.map_or(scale.x, |window_scale| window_scale.scale(scale.x));
         Rectangle::from_loc_and_size(self.location, self.dst_size).to_physical_precise_round(scale)
     }
 
@@ -207,6 +215,9 @@ impl Element for RenderTexture {
             // Fallback to fully damage.
             None => return vec![Rectangle::from_loc_and_size((0, 0), self.geometry(scale).size)],
         };
+
+        // Transform output to window-specific scale.
+        let scale = self.window_scale.map_or(scale.x, |window_scale| window_scale.scale(scale.x));
 
         // Apply viewporter transforms to damage.
         let viewporter_scale = self.dst_size.to_f64() / self.src_rect.size;
@@ -255,13 +266,10 @@ impl CatacombElement {
         textures: &mut Vec<CatacombElement>,
         texture: RenderTexture,
         location: impl Into<Point<i32, Physical>>,
-        bounds: impl Into<Option<Rectangle<i32, Physical>>>,
+        bounds: Rectangle<i32, Physical>,
         window_scale: impl Into<Option<f64>>,
         output_scale: f64,
     ) {
-        let bounds = bounds
-            .into()
-            .unwrap_or_else(|| Rectangle::from_loc_and_size((0, 0), (i32::MAX, i32::MAX)));
         let window_scale = window_scale.into().unwrap_or(1.);
         let location = location.into();
 
@@ -354,11 +362,9 @@ impl Graphics {
         let scale = canvas.scale();
         let width = canvas.physical_size().w;
         let height = (GESTURE_HANDLE_HEIGHT as f64 * scale).round() as i32;
-        if self
-            .gesture_handle
-            .as_ref()
-            .map_or(true, |handle| handle.size().w != width || handle.size().h != height)
-        {
+        if self.gesture_handle.as_ref().map_or(true, |handle| {
+            handle.texture.width() != width as u32 || handle.texture.height() != height as u32
+        }) {
             // Initialize a white buffer with the correct size.
             let mut buffer = vec![255; (height * width * 4) as usize];
 

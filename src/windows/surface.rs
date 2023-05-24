@@ -290,13 +290,19 @@ impl Surface for LockSurface {
 /// Surface with offset from its window origin.
 pub struct OffsetSurface {
     pub toplevel: Option<OffsetSurfaceToplevel>,
-    pub offset: Point<i32, Logical>,
+    pub surface_offset: Point<f64, Logical>,
+    pub position: Point<f64, Logical>,
     pub surface: WlSurface,
 }
 
 impl OffsetSurface {
-    pub fn new(surface: WlSurface, offset: Point<i32, Logical>) -> Self {
-        Self { surface, offset, toplevel: None }
+    pub fn new(
+        surface: WlSurface,
+        surface_offset: Point<f64, Logical>,
+        global_position: Point<f64, Logical>,
+    ) -> Self {
+        let position = global_position - surface_offset;
+        Self { surface, position, surface_offset, toplevel: None }
     }
 }
 

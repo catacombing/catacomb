@@ -81,7 +81,7 @@ where
                 });
 
                 // Add pre-commit hook for updating surface state.
-                compositor::add_pre_commit_hook(&surface, |_dh, surface| {
+                compositor::add_pre_commit_hook(&surface, |_data: &mut (), _dh, surface| {
                     compositor::with_states(surface, |states| {
                         let attributes = states.data_map.get::<Mutex<LockSurfaceAttributes>>();
                         let mut attributes = attributes.unwrap().lock().unwrap();

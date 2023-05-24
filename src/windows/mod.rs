@@ -8,8 +8,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
+use catacomb_ipc::WindowScale;
 use smithay::backend::drm::DrmEventMetadata;
-use smithay::backend::renderer::element::RenderElementStates;
+use smithay::backend::renderer::element::{Element, RenderElementStates};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::reexports::calloop::LoopHandle;
 use smithay::reexports::wayland_protocols::xdg::decoration as _decoration;
@@ -22,6 +23,7 @@ use smithay::wayland::shell::wlr_layer::{Layer, LayerSurface};
 use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface};
 
 use crate::catacomb::Catacomb;
+use crate::config::AppIdMatcher;
 use crate::drawing::{CatacombElement, Graphics};
 use crate::input::{HandleGesture, TouchState};
 use crate::layer::Layers;
@@ -68,6 +70,8 @@ pub fn start_transaction() {
 /// Container tracking all known clients.
 #[derive(Debug)]
 pub struct Windows {
+    pub window_scales: Vec<(AppIdMatcher, WindowScale)>,
+
     orphan_popups: Vec<Window<PopupSurface>>,
     layouts: Layouts,
     layers: Layers,
@@ -110,6 +114,7 @@ impl Windows {
             dirty: true,
             unlocked_orientation: Default::default(),
             orphan_popups: Default::default(),
+            window_scales: Default::default(),
             transaction: Default::default(),
             activated: Default::default(),
             textures: Default::default(),
@@ -158,7 +163,9 @@ impl Windows {
 
     /// Update the session lock surface.
     pub fn set_lock_surface(&mut self, surface: LockSurface) {
+        let output_scale = self.output.scale();
         let output_size = self.output.size();
+
         let lock_window = match self.pending_view_mut() {
             View::Lock(lock_window) => lock_window,
             _ => return,
@@ -166,7 +173,7 @@ impl Windows {
 
         // Set lock surface size.
         let mut window = Window::new(surface);
-        window.set_dimensions(Rectangle::from_loc_and_size((0, 0), output_size));
+        window.set_dimensions(output_scale, Rectangle::from_loc_and_size((0, 0), output_size));
 
         // Update lockscreen.
         *lock_window = Some(window);
@@ -214,16 +221,17 @@ impl Windows {
         }
 
         // Handle session lock surface commits.
+        let scale = self.output.scale();
         if let View::Lock(Some(window)) = self.pending_view_mut() {
             if window.surface() == root_surface.as_ref() {
-                window.surface_commit_common(surface);
+                window.surface_commit_common(scale, &[], surface);
                 return;
             }
         }
 
         // Handle XDG surface commits.
         if let Some(mut window) = find_window!(self.layouts.windows_mut()) {
-            window.surface_commit_common(surface);
+            window.surface_commit_common(scale, &self.window_scales, surface);
             return;
         }
 
@@ -232,7 +240,7 @@ impl Windows {
 
         // Apply popup surface commits.
         for mut window in self.layouts.windows_mut() {
-            if window.popup_surface_commit(&root_surface, surface) {
+            if window.popup_surface_commit(scale, &root_surface, surface) {
                 // Abort as soon as we found the parent.
                 return;
             }
@@ -247,7 +255,7 @@ impl Windows {
         // Handle layer shell surface commits.
         let old_exclusive = *self.output.exclusive();
         let fullscreen_active = matches!(self.view, View::Fullscreen(_));
-        window.surface_commit(surface, &mut self.output, fullscreen_active);
+        window.surface_commit(&self.window_scales, &mut self.output, fullscreen_active, surface);
 
         // Resize windows after exclusive zone changes.
         if self.output.exclusive() != &old_exclusive {
@@ -323,18 +331,22 @@ impl Windows {
 
         // Draw gesture handle when not in fullscreen/lock view.
         if !matches!(self.view, View::Fullscreen(_) | View::Lock(_)) {
+            // Get texture for gesture handle.
+            let gesture_handle = graphics.gesture_handle(renderer, &self.output);
+
+            // Calculate gesture handle bounds.
+            let mut bounds = gesture_handle.geometry(scale.into());
+
             // Calculate position for gesture handle.
             let output_height = self.output.physical_size().h;
-            let handle_height = (GESTURE_HANDLE_HEIGHT as f64 * scale).round();
-            let handle_location = (0, output_height - handle_height as i32);
+            let handle_location = (0, output_height - bounds.size.h);
+            bounds.loc = handle_location.into();
 
-            // Get gesture handle texture and move it to the right location.
-            let gesture_handle = graphics.gesture_handle(renderer, &self.output);
             CatacombElement::add_element(
                 &mut self.textures,
                 gesture_handle,
                 handle_location,
-                None,
+                bounds,
                 None,
                 scale,
             );
@@ -658,7 +670,7 @@ impl Windows {
             View::Fullscreen(window) => {
                 // Resize fullscreen XDG client.
                 let available_fullscreen = self.output.available_fullscreen();
-                window.borrow_mut().set_dimensions(available_fullscreen);
+                window.borrow_mut().set_dimensions(self.output.scale(), available_fullscreen);
 
                 // Resize overlay layer clients.
                 for window in self.layers.overlay_mut() {
@@ -906,10 +918,12 @@ impl Windows {
     ///
     /// This filters out non-interactive surfaces.
     pub fn surface_at(&mut self, position: Point<f64, Logical>) -> Option<OffsetSurface> {
+        let scale = self.output.scale();
+
         /// Focus a layer shell surface and return it.
         macro_rules! focus_layer_surface {
             ($window:expr) => {{
-                let mut surface = $window.surface_at(position)?;
+                let mut surface = $window.surface_at(scale, position)?;
 
                 // Only set new focus target if focus is accepted.
                 if !$window.deny_focus {
@@ -925,13 +939,13 @@ impl Windows {
         match &self.view {
             View::Workspace => (),
             View::Fullscreen(window) => {
-                if let Some(window) = self.layers.overlay_window_at(position) {
+                if let Some(window) = self.layers.overlay_window_at(scale, position) {
                     return focus_layer_surface!(window);
                 }
 
                 // Get surface of the fullscreened window.
                 let window_ref = window.borrow();
-                let mut surface = window_ref.surface_at(position)?;
+                let mut surface = window_ref.surface_at(scale, position)?;
 
                 // Set toplevel to update focus.
                 let app_id = window_ref.app_id.clone();
@@ -940,25 +954,46 @@ impl Windows {
 
                 return Some(surface);
             },
-            View::Lock(Some(window)) => return window.surface_at(position),
+            View::Lock(Some(window)) => return window.surface_at(scale, position),
             _ => return None,
         };
 
         // Search for topmost clicked surface.
 
-        if let Some(window) = self.layers.foreground_window_at(position) {
+        if let Some(window) = self.layers.foreground_window_at(scale, position) {
             return focus_layer_surface!(window);
         }
 
-        if let Some(surface) = self.layouts.touch_surface_at(position) {
+        if let Some(surface) = self.layouts.touch_surface_at(scale, position) {
             return Some(surface);
         }
 
-        if let Some(window) = self.layers.background_window_at(position) {
+        if let Some(window) = self.layers.background_window_at(scale, position) {
             return focus_layer_surface!(window);
         }
 
         None
+    }
+
+    /// Add a per-window scale override.
+    pub fn add_window_scale(&mut self, app_id: AppIdMatcher, scale: WindowScale) {
+        // Remove previous scale assignments for this EXACT regex.
+        self.window_scales.retain(|(matcher, _)| matcher.base() != app_id.base());
+
+        // Add scale if it is transformative to the output scale.
+        match scale {
+            WindowScale::Additive(scale) | WindowScale::Subtractive(scale) if scale == 0. => (),
+            WindowScale::Multiplicative(scale) | WindowScale::Divisive(scale) if scale == 1. => (),
+            _ => self.window_scales.push((app_id, scale)),
+        }
+
+        // Update existing window scales.
+        for mut window in self.layouts.windows_mut() {
+            window.update_scale(&self.window_scales, self.output.scale());
+        }
+        for window in self.layers.iter_mut() {
+            window.update_scale(&self.window_scales, self.output.scale());
+        }
     }
 
     /// Check if a surface is currently visible.
