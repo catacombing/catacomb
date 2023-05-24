@@ -271,8 +271,7 @@ impl<S: Surface + 'static> Window<S> {
                         }
 
                         // Update and cache the texture.
-                        let texture =
-                            Texture::from_surface(texture, location, &data, surface_data, surface);
+                        let texture = Texture::from_surface(texture, location, &data, surface);
                         let render_texture = RenderTexture::new(texture);
                         self.texture_cache.push(render_texture.clone(), location);
                         data.texture = Some(render_texture);
@@ -438,7 +437,7 @@ impl<S: Surface + 'static> Window<S> {
                     .unwrap_or_default();
 
                 // Store pending buffer updates.
-                surface_data.update_buffer(&mut attributes, buffer_assignment);
+                surface_data.update_buffer(data, &mut attributes, buffer_assignment);
 
                 TraversalAction::DoChildren(())
             },
@@ -495,7 +494,7 @@ impl<S: Surface + 'static> Window<S> {
                 let size = surface_data
                     .data_map
                     .get::<RefCell<CatacombSurfaceData>>()
-                    .map_or_else(Size::default, |data| data.borrow().size);
+                    .map_or_else(Size::default, |data| data.borrow().dst_size);
                 let surface_loc = location - geometry.loc;
                 let surface_rect =
                     Rectangle::from_loc_and_size(surface_loc.to_f64(), size.to_f64());

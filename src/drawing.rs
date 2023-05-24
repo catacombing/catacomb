@@ -84,7 +84,6 @@ impl Texture {
         texture: GlesTexture,
         location: impl Into<Point<i32, Logical>>,
         buffer: &CatacombSurfaceData,
-        surface_data: &SurfaceData,
         surface: &WlSurface,
     ) -> Self {
         let location = location.into();
@@ -99,33 +98,17 @@ impl Texture {
             }
         }
 
-        // Calculate surface's src rect and dst size.
-
-        // Check for a viewporter viewport.
-        let viewport_valid = viewporter::ensure_viewport_valid(surface_data, buffer.size);
-        let (viewport_src, viewport_dst) = if viewport_valid {
-            let viewport = surface_data.cached_state.current::<ViewportCachedState>();
-            (viewport.src, viewport.size())
-        } else {
-            (None, None)
-        };
-
-        // Fallback to surface size without viewporter.
-        let src_rect = viewport_src
-            .unwrap_or_else(|| Rectangle::from_loc_and_size((0.0, 0.0), buffer.size.to_f64()));
-        let dst_size = viewport_dst.unwrap_or(buffer.size);
-
         Self {
             opaque_regions,
             location,
-            src_rect,
-            dst_size,
             texture,
             tracker: buffer.damage.tracker.snapshot(),
+            buffer_size: buffer.buffer_size,
             buffer: buffer.buffer.clone(),
             transform: buffer.transform,
             scale: buffer.scale as f64,
-            buffer_size: buffer.size,
+            src_rect: buffer.src_rect,
+            dst_size: buffer.dst_size,
             id: surface.into(),
         }
     }
@@ -410,7 +393,9 @@ impl Graphics {
 pub struct CatacombSurfaceData {
     pub opaque_region: Vec<(RectangleKind, Rectangle<i32, Logical>)>,
     pub texture: Option<RenderTexture>,
-    pub size: Size<i32, Logical>,
+    pub buffer_size: Size<i32, Logical>,
+    pub src_rect: Rectangle<f64, Logical>,
+    pub dst_size: Size<i32, Logical>,
     pub buffer: Option<Buffer>,
     pub transform: Transform,
     pub damage: Damage,
@@ -422,11 +407,13 @@ impl Default for CatacombSurfaceData {
         Self {
             scale: 1,
             opaque_region: Default::default(),
+            buffer_size: Default::default(),
             transform: Default::default(),
+            src_rect: Default::default(),
+            dst_size: Default::default(),
             texture: Default::default(),
             buffer: Default::default(),
             damage: Default::default(),
-            size: Default::default(),
         }
     }
 }
@@ -439,22 +426,39 @@ impl CatacombSurfaceData {
     /// Handle buffer creation/removal.
     pub fn update_buffer(
         &mut self,
+        surface_data: &SurfaceData,
         attributes: &mut SurfaceAttributes,
         assignment: BufferAssignment,
     ) {
         match assignment {
             BufferAssignment::NewBuffer(buffer) => {
-                let old_size = self.size;
+                let old_size = self.buffer_size;
                 self.scale = attributes.buffer_scale;
                 self.transform = attributes.buffer_transform.into();
-                self.size = renderer::buffer_dimensions(&buffer)
+                self.buffer_size = renderer::buffer_dimensions(&buffer)
                     .unwrap_or_default()
                     .to_logical(self.scale, self.transform);
                 self.buffer = Some(Buffer::from(buffer));
                 self.texture = None;
 
+                // Check for viewporter src/dst.
+                let viewport_valid =
+                    viewporter::ensure_viewport_valid(surface_data, self.buffer_size);
+                let (viewport_src, viewport_dst) = if viewport_valid {
+                    let viewport = surface_data.cached_state.current::<ViewportCachedState>();
+                    (viewport.src, viewport.size())
+                } else {
+                    (None, None)
+                };
+
+                // Fallback to buffer size without viewporter.
+                self.src_rect = viewport_src.unwrap_or_else(|| {
+                    Rectangle::from_loc_and_size((0.0, 0.0), self.buffer_size.to_f64())
+                });
+                self.dst_size = viewport_dst.unwrap_or(self.buffer_size);
+
                 // Reset damage on buffer resize.
-                if old_size != self.size {
+                if old_size != self.buffer_size {
                     self.damage.tracker.reset();
                 }
             },
@@ -466,12 +470,12 @@ impl CatacombSurfaceData {
             // Get damage in buffer and logical space.
             let (buffer, logical) = match damage {
                 SurfaceDamage::Buffer(buffer) => {
-                    let buffer_size = self.size.to_buffer(self.scale, self.transform);
+                    let buffer_size = self.buffer_size.to_buffer(self.scale, self.transform);
                     let logical = buffer.to_logical(self.scale, self.transform, &buffer_size);
                     (buffer, logical)
                 },
                 SurfaceDamage::Surface(logical) => {
-                    let buffer = logical.to_buffer(self.scale, self.transform, &self.size);
+                    let buffer = logical.to_buffer(self.scale, self.transform, &self.buffer_size);
                     (buffer, logical)
                 },
             };
