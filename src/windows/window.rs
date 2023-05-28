@@ -7,7 +7,7 @@ use std::time::Instant;
 use std::{cmp, mem};
 
 use _presentation_time::wp_presentation_feedback::Kind as FeedbackKind;
-use catacomb_ipc::WindowScale;
+use catacomb_ipc::{AppIdMatcher, WindowScale};
 use smithay::backend::drm::{DrmEventMetadata, DrmEventTime};
 use smithay::backend::renderer::element::{RenderElementPresentationState, RenderElementStates};
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -34,7 +34,6 @@ use smithay::wayland::shell::xdg::{
 };
 use tracing::error;
 
-use crate::config::AppIdMatcher;
 use crate::drawing::{CatacombElement, CatacombSurfaceData, RenderTexture, Texture};
 use crate::geometry::Vector;
 use crate::output::{ExclusiveSpace, Output};

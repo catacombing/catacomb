@@ -58,7 +58,11 @@ pub fn main() {
     let _ = tracing::subscriber::set_global_default(subscriber);
 
     match Options::parse().subcommands {
-        Some(Subcommands::Msg(msg)) => catacomb_ipc::send_message(&msg).expect("send IPC message"),
+        Some(Subcommands::Msg(msg)) => {
+            if let Err(err) = catacomb_ipc::send_message(&msg) {
+                eprintln!("\x1b[31merror\x1b[0m: {err}");
+            }
+        },
         None => udev::run(),
     }
 }

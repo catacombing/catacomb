@@ -6,6 +6,7 @@
 //! IPC socket communication.
 
 use std::error::Error;
+use std::fmt::{self, Display, Formatter};
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -16,6 +17,7 @@ use std::{env, process};
 use clap::error::{Error as ClapError, ErrorKind as ClapErrorKind};
 #[cfg(feature = "clap")]
 use clap::{Subcommand, ValueEnum};
+use regex::{Error as RegexError, Regex};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "smithay")]
 use smithay::utils::{Logical, Point, Size, Transform};
@@ -218,8 +220,68 @@ impl FromStr for WindowScale {
     }
 }
 
+impl Display for WindowScale {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let (prefix, scale) = match self {
+            Self::Additive(scale) => ("+", scale),
+            Self::Subtractive(scale) => ("-", scale),
+            Self::Multiplicative(scale) => ("*", scale),
+            Self::Divisive(scale) => ("/", scale),
+            Self::Fixed(scale) => ("", scale),
+        };
+        write!(f, "{}{}", prefix, scale)
+    }
+}
+
+/// User-defined App ID comparator.
+#[derive(Debug)]
+pub struct AppIdMatcher {
+    variant: AppIdMatcherVariant,
+    base: String,
+}
+
+impl AppIdMatcher {
+    /// Check if this matcher captures the passed App ID.
+    pub fn matches(&self, app_id: Option<&String>) -> bool {
+        match (&self.variant, app_id) {
+            (AppIdMatcherVariant::Global, _) => true,
+            (AppIdMatcherVariant::Regex(regex), Some(app_id)) => regex.is_match(app_id),
+            (AppIdMatcherVariant::Regex(_), None) => false,
+        }
+    }
+
+    /// Get the raw matcher text.
+    pub fn base(&self) -> &str {
+        &self.base
+    }
+}
+
+impl TryFrom<String> for AppIdMatcher {
+    type Error = RegexError;
+
+    fn try_from(base: String) -> Result<Self, Self::Error> {
+        let variant = if base == "*" {
+            AppIdMatcherVariant::Global
+        } else {
+            AppIdMatcherVariant::Regex(Regex::new(&base)?)
+        };
+
+        Ok(Self { base, variant })
+    }
+}
+
+/// Variants for the App ID matcher.
+#[derive(Debug)]
+pub enum AppIdMatcherVariant {
+    Regex(Regex),
+    Global,
+}
+
 /// Send a message to the Catacomb IPC socket.
 pub fn send_message(message: &IpcMessage) -> Result<(), Box<dyn Error>> {
+    // Ensure IPC message is legal.
+    validate_message(message)?;
+
     let socket_name = match env::var("WAYLAND_DISPLAY") {
         Ok(socket_name) => socket_name,
         Err(_) => {
@@ -248,4 +310,21 @@ pub fn send_message(message: &IpcMessage) -> Result<(), Box<dyn Error>> {
 /// Path for the IPC socket file.
 pub fn socket_path(socket_name: &str) -> PathBuf {
     dirs::runtime_dir().unwrap_or_else(env::temp_dir).join(format!("catacomb-{socket_name}.sock"))
+}
+
+/// Validate a message beyond simple clap parsing.
+fn validate_message(message: &IpcMessage) -> Result<(), Box<dyn Error>> {
+    match message {
+        // Ensure App IDs are valid regexes.
+        IpcMessage::Scale { app_id: Some(app_id), .. } | IpcMessage::Bind { app_id, .. } => {
+            AppIdMatcher::try_from(app_id.clone())?;
+        },
+        // Ensure only fixed scales are used for global scale changes.
+        IpcMessage::Scale { scale, app_id: None } if !matches!(scale, WindowScale::Fixed(_)) => {
+            return Err(format!("global scale must be fixed, got \"{scale}\"").into());
+        },
+        _ => (),
+    }
+
+    Ok(())
 }

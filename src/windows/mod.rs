@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
-use catacomb_ipc::WindowScale;
+use catacomb_ipc::{AppIdMatcher, WindowScale};
 use smithay::backend::drm::DrmEventMetadata;
 use smithay::backend::renderer::element::{Element, RenderElementStates};
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -23,7 +23,6 @@ use smithay::wayland::shell::wlr_layer::{Layer, LayerSurface};
 use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface};
 
 use crate::catacomb::Catacomb;
-use crate::config::AppIdMatcher;
 use crate::drawing::{CatacombElement, Graphics};
 use crate::input::{HandleGesture, TouchState};
 use crate::layer::Layers;

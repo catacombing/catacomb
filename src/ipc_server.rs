@@ -6,12 +6,12 @@ use std::io::{BufRead, BufReader};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
-use catacomb_ipc::{self, IpcMessage, WindowScale};
+use catacomb_ipc::{self, AppIdMatcher, IpcMessage, WindowScale};
 use smithay::reexports::calloop::LoopHandle;
 use tracing::warn;
 
 use crate::catacomb::Catacomb;
-use crate::config::{AppIdMatcher, GestureBinding};
+use crate::config::GestureBinding;
 use crate::socket::SocketSource;
 
 /// Create an IPC socket.
