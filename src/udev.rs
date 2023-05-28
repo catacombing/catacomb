@@ -120,13 +120,13 @@ pub fn run() {
                 })
                 .expect("insert dbus source");
         },
-        Err(err) => eprintln!("DBus signal listener creation failed: {err}"),
+        Err(err) => error!("DBus signal listener creation failed: {err}"),
     }
 
     // Continously dispatch event loop.
     while !catacomb.terminated {
         if let Err(error) = event_loop.dispatch(None, &mut catacomb) {
-            eprintln!("Event loop error: {error}");
+            error!("Event loop error: {error}");
             break;
         }
         catacomb.display.borrow_mut().flush_clients().expect("flushing clients");
@@ -160,7 +160,7 @@ impl Udev {
         let (session, notifier) = match LibSeatSession::new() {
             Ok(session) => session,
             Err(_) => {
-                eprintln!(
+                error!(
                     "[error] Unable to start libseat session: Ensure logind/seatd service is \
                      running with no active session"
                 );
@@ -191,7 +191,7 @@ impl Udev {
                 },
                 SessionEvent::ActivateSession => {
                     if let Err(err) = context.resume() {
-                        eprintln!("Failed to resume libinput: {err:?}");
+                        error!("Failed to resume libinput: {err:?}");
                     }
 
                     // Reset DRM state.
@@ -206,7 +206,7 @@ impl Udev {
                             device_id,
                         );
                         if let Err(err) = result {
-                            eprintln!("Failed reconnecting DRM device: {err:?}");
+                            error!("Failed reconnecting DRM device: {err:?}");
                         }
                     }
 
@@ -372,7 +372,7 @@ impl Udev {
                         let duration = frame_interval - RENDER_TIME_OFFSET;
                         catacomb.backend.schedule_redraw(duration);
                     },
-                    DrmEvent::Error(error) => eprintln!("DRM error: {error}"),
+                    DrmEvent::Error(error) => error!("DRM error: {error}"),
                 };
             });
         let token = self.event_loop.register_dispatcher(dispatcher.clone())?;

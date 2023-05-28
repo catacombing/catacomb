@@ -32,6 +32,7 @@ use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ToplevelSurface, XdgPopupSurfaceRoleAttributes,
     XdgToplevelSurfaceRoleAttributes,
 };
+use tracing::error;
 
 use crate::config::AppIdMatcher;
 use crate::drawing::{CatacombElement, CatacombSurfaceData, RenderTexture, Texture};
@@ -297,7 +298,7 @@ impl<S: Surface + 'static> Window<S> {
                         TraversalAction::DoChildren(location)
                     },
                     _ => {
-                        eprintln!("unable to import buffer");
+                        error!("unable to import buffer");
                         data.buffer = None;
 
                         TraversalAction::SkipChildren

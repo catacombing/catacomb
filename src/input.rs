@@ -12,6 +12,7 @@ use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
 use smithay::wayland::seat::TouchHandle;
+use tracing::error;
 
 use crate::catacomb::Catacomb;
 use crate::config::{GestureBinding, APP_DRAWER};
@@ -507,7 +508,7 @@ impl Catacomb {
     fn on_user_gesture(&mut self, program: String, args: Vec<String>) {
         // Execute subcommand.
         if let Err(err) = daemon::spawn(&program, &args) {
-            eprintln!("Failed gesture command {program} {args:?}: {err}");
+            error!("Failed gesture command {program} {args:?}: {err}");
         }
 
         self.touch_state.cancel_velocity();
@@ -609,7 +610,7 @@ impl Catacomb {
 
                             // Open drawer.
                             if let Err(err) = crate::daemon(APP_DRAWER, []) {
-                                eprintln!("Unable to launch {APP_DRAWER:?}: {err}");
+                                error!("Unable to launch {APP_DRAWER:?}: {err}");
                             }
 
                             TimeoutAction::Drop

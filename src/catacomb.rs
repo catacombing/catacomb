@@ -61,6 +61,7 @@ use smithay::{
     delegate_viewporter, delegate_virtual_keyboard_manager, delegate_xdg_decoration,
     delegate_xdg_shell,
 };
+use tracing::{error, info};
 
 use crate::input::{PhysicalButtonState, TouchState};
 use crate::orientation::{Accelerometer, AccelerometerSource};
@@ -157,7 +158,7 @@ impl Catacomb {
 
         // Log and set `WAYLAND_DISPLAY` for children.
         env::set_var("WAYLAND_DISPLAY", &socket_name);
-        println!("Wayland socket: {socket_name}");
+        info!("Wayland socket: {socket_name}");
 
         // Register display event source.
         event_loop
@@ -248,7 +249,7 @@ impl Catacomb {
             script_path.push(POST_START_SCRIPT);
 
             if let Err(err) = crate::daemon(script_path.as_os_str(), []) {
-                eprintln!("Unable to launch {script_path:?}: {err}");
+                error!("Unable to launch {script_path:?}: {err}");
             }
         }
 
@@ -432,7 +433,7 @@ impl Catacomb {
     /// Suspend to RAM.
     pub fn suspend(&mut self) {
         if let Err(err) = dbus::suspend() {
-            eprintln!("Failed suspending to RAM: {err}");
+            error!("Failed suspending to RAM: {err}");
         }
     }
 

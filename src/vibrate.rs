@@ -9,6 +9,7 @@ use std::{fmt, mem, slice};
 use nix::{ioctl_write_int, ioctl_write_ptr};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::LoopHandle;
+use tracing::error;
 
 use crate::catacomb::Catacomb;
 
@@ -34,7 +35,7 @@ impl Vibrator {
     pub fn vibrate(&mut self, length: u16, interval: u16, count: u16) {
         unsafe {
             if let Err(err) = self.play_rumble(length, interval, count) {
-                eprintln!("{err}");
+                error!("{err}");
             }
         }
     }
@@ -48,7 +49,7 @@ impl Vibrator {
         };
 
         if let Err(err) = unsafe { remove_effect(fd, effect_id) } {
-            eprintln!("Failed to remove rumble effect: {err}");
+            error!("Failed to remove rumble effect: {err}");
         }
     }
 
