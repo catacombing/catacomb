@@ -585,9 +585,9 @@ impl WlrLayerShellHandler for Catacomb {
         surface: LayerSurface,
         _wl_output: Option<WlOutput>,
         layer: Layer,
-        _namespace: String,
+        namespace: String,
     ) {
-        self.windows.add_layer(layer, surface);
+        self.windows.add_layer(layer, surface, namespace);
     }
 
     fn layer_destroyed(&mut self, surface: LayerSurface) {

@@ -725,7 +725,11 @@ impl Window<CatacombLayerSurface> {
             Layer::Overlay if fullscreen_active => output.size(),
             _ => output.wm_size(),
         };
-        let mut size = state.size;
+
+        // Upscale layer shell size to output logical scale.
+        let output_scale = output.scale();
+        let scale = self.scale.map_or(output_scale, |scale| scale.scale(output_scale));
+        let mut size = state.size.scale(scale / output_scale);
 
         let exclusive = match state.exclusive_zone {
             ExclusiveZone::Neutral => *output.exclusive(),
@@ -775,11 +779,21 @@ impl Window<CatacombLayerSurface> {
         // Update keyboard interactivity.
         self.deny_focus = state.keyboard_interactivity == KeyboardInteractivity::None;
 
+        // Convert exclusive coordinates to output scale.
+        let exclusive_zone = match state.exclusive_zone {
+            ExclusiveZone::Exclusive(size) => {
+                let output_scale = output.scale();
+                let scale = self.scale.map_or(output_scale, |scale| scale.scale(output_scale));
+                ExclusiveZone::Exclusive((size as f64 * (scale / output_scale)).round() as u32)
+            },
+            exclusive_zone => exclusive_zone,
+        };
+
         // Update exclusive zones.
-        let old_exclusive = mem::replace(&mut self.surface.exclusive_zone, state.exclusive_zone);
+        let old_exclusive = mem::replace(&mut self.surface.exclusive_zone, exclusive_zone);
         let old_anchor = mem::replace(&mut self.surface.anchor, state.anchor);
         output.exclusive().reset(old_anchor, old_exclusive);
-        output.exclusive().update(state.anchor, state.exclusive_zone, state.layer);
+        output.exclusive().update(state.anchor, exclusive_zone, state.layer);
     }
 }
 

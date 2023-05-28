@@ -150,9 +150,19 @@ impl Windows {
     }
 
     /// Add a new layer shell window.
-    pub fn add_layer(&mut self, layer: Layer, surface: impl Into<CatacombLayerSurface>) {
+    pub fn add_layer(
+        &mut self,
+        layer: Layer,
+        surface: impl Into<CatacombLayerSurface>,
+        namespace: String,
+    ) {
         let mut window = Window::new(surface.into());
         window.enter(&self.output);
+
+        // Set App ID and check for window scale overrides.
+        window.app_id = Some(namespace);
+        window.update_scale(&self.window_scales, self.output.scale());
+
         self.layers.add(layer, window);
     }
 
@@ -928,7 +938,8 @@ impl Windows {
                 // Only set new focus target if focus is accepted.
                 if !$window.deny_focus {
                     let wl_surface = $window.surface().clone();
-                    surface.toplevel = Some(OffsetSurfaceToplevel::Layer(wl_surface));
+                    let app_id = $window.app_id.clone();
+                    surface.toplevel = Some(OffsetSurfaceToplevel::Layer((wl_surface, app_id)));
                 }
 
                 Some(surface)

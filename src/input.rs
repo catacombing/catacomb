@@ -373,10 +373,8 @@ impl Catacomb {
         self.touch_state.active_app_id = None;
         match surface {
             Some(OffsetSurface { mut toplevel, surface, surface_offset, position }) => {
-                let app_id = match &mut toplevel {
-                    Some(OffsetSurfaceToplevel::Layout((_, app_id))) => app_id.take(),
-                    _ => None,
-                };
+                // Get surface's App ID.
+                let app_id = toplevel.as_mut().and_then(OffsetSurfaceToplevel::take_app_id);
 
                 // Check if a user gesture is triggered by this touch event.
                 let gesture_active = self
@@ -392,7 +390,7 @@ impl Catacomb {
                         Some(OffsetSurfaceToplevel::Layout((window, _))) => {
                             self.windows.set_focus(Some(window), None);
                         },
-                        Some(OffsetSurfaceToplevel::Layer(layer)) => {
+                        Some(OffsetSurfaceToplevel::Layer((layer, _))) => {
                             self.windows.set_focus(None, Some(layer));
                         },
                         // For surfaces denying focus, we send events but inhibit focus.

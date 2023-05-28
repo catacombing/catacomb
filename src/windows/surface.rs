@@ -309,5 +309,13 @@ impl OffsetSurface {
 /// Focusable surface toplevel kinds.
 pub enum OffsetSurfaceToplevel {
     Layout((Weak<RefCell<Window>>, Option<String>)),
-    Layer(WlSurface),
+    Layer((WlSurface, Option<String>)),
+}
+
+impl OffsetSurfaceToplevel {
+    /// Extract the App ID from this surface.
+    pub fn take_app_id(&mut self) -> Option<String> {
+        let (Self::Layout((_, app_id)) | Self::Layer((_, app_id))) = self;
+        app_id.take()
+    }
 }
