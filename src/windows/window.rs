@@ -17,6 +17,7 @@ use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_positioner::{
     self, ConstraintAdjustment, Gravity,
 };
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Physical, Point, Rectangle, Size};
 use smithay::wayland::compositor::{
     self, SubsurfaceCachedState, SurfaceAttributes, SurfaceData, TraversalAction,
@@ -88,8 +89,8 @@ pub struct Window<S = ToplevelSurface> {
 
 impl<S: Surface + 'static> Window<S> {
     /// Create a new Toplevel window.
-    pub fn new(surface: S) -> Self {
-        Window {
+    pub fn new(surface: S, output_scale: f64) -> Self {
+        let window = Window {
             surface,
             presentation_callbacks: Default::default(),
             output_rectangle: Default::default(),
@@ -104,7 +105,12 @@ impl<S: Surface + 'static> Window<S> {
             scale: Default::default(),
             size: Default::default(),
             dead: Default::default(),
-        }
+        };
+
+        // Ensure preferred buffer scale is set.
+        window.set_preferred_scale(output_scale);
+
+        window
     }
 
     /// Send a frame request to the window.
@@ -521,18 +527,30 @@ impl<S: Surface + 'static> Window<S> {
             }
         }
 
-        // Update fractional scale protocol.
-        compositor::with_states(self.surface.surface(), |states| {
-            fractional_scale::with_fractional_scale(states, |fractional_scale| {
-                let scale = self.scale.map_or(output_scale, |scale| scale.scale(output_scale));
-                fractional_scale.set_preferred_scale(scale);
-            });
-        });
+        self.set_preferred_scale(output_scale);
 
         // Resubmit dimensions in case per-window scaling changed.
         let transaction = self.transaction.as_ref();
         let current_rectangle = transaction.map_or(self.output_rectangle, |t| t.output_rectangle);
         self.set_dimensions(output_scale, current_rectangle);
+    }
+
+    /// Update the surface's preferred scale.
+    pub fn set_preferred_scale(&self, output_scale: f64) {
+        let scale = self.scale.map_or(output_scale, |scale| scale.scale(output_scale));
+        let surface = self.surface.surface();
+
+        // Update fractional scale protocol.
+        compositor::with_states(surface, |states| {
+            fractional_scale::with_fractional_scale(states, |fractional_scale| {
+                fractional_scale.set_preferred_scale(scale);
+            });
+        });
+
+        // Update integer buffer scale.
+        if surface.version() >= 6 {
+            surface.preferred_buffer_scale(scale.ceil() as i32);
+        }
     }
 
     /// Find subsurface at the specified location.

@@ -144,7 +144,7 @@ impl Windows {
             state.states.set(State::Activated);
         });
 
-        let window = Rc::new(RefCell::new(Window::new(surface)));
+        let window = Rc::new(RefCell::new(Window::new(surface, self.output.scale())));
         self.layouts.create(&self.output, window);
     }
 
@@ -155,7 +155,7 @@ impl Windows {
         surface: impl Into<CatacombLayerSurface>,
         namespace: String,
     ) {
-        let mut window = Window::new(surface.into());
+        let mut window = Window::new(surface.into(), self.output.scale());
         window.enter(&self.output);
 
         // Set App ID and check for window scale overrides.
@@ -167,7 +167,7 @@ impl Windows {
 
     /// Add a new popup window.
     pub fn add_popup(&mut self, popup: PopupSurface) {
-        self.orphan_popups.push(Window::new(popup));
+        self.orphan_popups.push(Window::new(popup, self.output.scale()));
     }
 
     /// Update the session lock surface.
@@ -181,7 +181,7 @@ impl Windows {
         };
 
         // Set lock surface size.
-        let mut window = Window::new(surface);
+        let mut window = Window::new(surface, output_scale);
         window.set_dimensions(output_scale, Rectangle::from_loc_and_size((0, 0), output_size));
 
         // Update lockscreen.
@@ -1048,6 +1048,15 @@ impl Windows {
     pub fn set_scale(&mut self, scale: f64) {
         self.start_transaction();
         self.output.set_scale(scale);
+
+        // Update surface's preferred fractional and buffer scale.
+        for window in self.layouts.windows() {
+            window.set_preferred_scale(scale);
+        }
+        for window in self.layers.iter() {
+            window.set_preferred_scale(scale);
+        }
+
         self.resize_all();
     }
 
