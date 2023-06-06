@@ -38,7 +38,7 @@ const GESTURE_NOTCH_PERCENTAGE: f64 = 0.2;
 /// the surface itself has already died.
 #[derive(Clone, Debug)]
 pub struct Texture {
-    opaque_regions: Vec<Rectangle<i32, Physical>>,
+    opaque_regions: Vec<Rectangle<i32, Logical>>,
     tracker: DamageSnapshot<i32, Logical>,
     location: Point<i32, Logical>,
     src_rect: Rectangle<f64, Logical>,
@@ -64,7 +64,7 @@ impl Texture {
         let src_rect = Rectangle::from_loc_and_size((0, 0), buffer_size);
 
         // Ensure fully opaque textures are treated as such.
-        let opaque_regions = if opaque { vec![src_rect.to_physical(1)] } else { Vec::new() };
+        let opaque_regions = if opaque { vec![src_rect] } else { Vec::new() };
 
         Self {
             opaque_regions,
@@ -95,10 +95,9 @@ impl Texture {
         // Get surface's opaque region.
         let mut opaque_regions = Vec::new();
         for (kind, rect) in &buffer.opaque_region {
-            let rect = rect.to_physical(buffer.scale);
             match kind {
-                RectangleKind::Add => opaque_regions.push(rect),
-                RectangleKind::Subtract => opaque_regions.subtract_rect(rect),
+                RectangleKind::Add => opaque_regions.push(*rect),
+                RectangleKind::Subtract => opaque_regions.subtract_rect(*rect),
             }
         }
 
@@ -234,8 +233,9 @@ impl Element for RenderTexture {
         damage.collect()
     }
 
-    fn opaque_regions(&self, _scale: Scale<f64>) -> Vec<Rectangle<i32, Physical>> {
-        self.opaque_regions.clone()
+    fn opaque_regions(&self, scale: Scale<f64>) -> Vec<Rectangle<i32, Physical>> {
+        let scale = self.window_scale.map_or(scale.x, |window_scale| window_scale.scale(scale.x));
+        self.opaque_regions.iter().map(|rect| rect.to_physical_precise_round(scale)).collect()
     }
 }
 
