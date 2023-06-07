@@ -19,7 +19,7 @@ use crate::config::{GestureBinding, APP_DRAWER};
 use crate::daemon;
 use crate::orientation::Orientation;
 use crate::output::{Output, GESTURE_HANDLE_HEIGHT};
-use crate::windows::surface::{OffsetSurface, OffsetSurfaceToplevel};
+use crate::windows::surface::{InputSurface, InputSurfaceKind};
 
 /// Time before a tap is considered a hold.
 pub const HOLD_DURATION: Duration = Duration::from_secs(1);
@@ -48,9 +48,9 @@ pub struct TouchState {
     pub user_gestures: Vec<GestureBinding>,
     pub position: Point<f64, Logical>,
 
-    surface_offset: Option<Point<f64, Logical>>,
     event_loop: LoopHandle<'static, Catacomb>,
     velocity_timer: Option<RegistrationToken>,
+    input_surface: Option<InputSurface>,
     active_app_id: Option<String>,
     velocity: Point<f64, Logical>,
     events: Vec<TouchEvent>,
@@ -65,8 +65,8 @@ impl TouchState {
         Self {
             event_loop,
             touch,
-            surface_offset: Default::default(),
             velocity_timer: Default::default(),
+            input_surface: Default::default(),
             user_gestures: Default::default(),
             active_app_id: Default::default(),
             position: Default::default(),
@@ -370,12 +370,13 @@ impl Catacomb {
         let surface = self.windows.surface_at(event.position);
 
         // Notify client.
-        self.touch_state.surface_offset = None;
+        self.touch_state.input_surface = None;
         self.touch_state.active_app_id = None;
         match surface {
-            Some(OffsetSurface { mut toplevel, surface, surface_offset, position }) => {
+            Some(mut input_surface) => {
                 // Get surface's App ID.
-                let app_id = toplevel.as_mut().and_then(OffsetSurfaceToplevel::take_app_id);
+                let app_id =
+                    input_surface.toplevel.as_mut().and_then(InputSurfaceKind::take_app_id);
 
                 // Check if a user gesture is triggered by this touch event.
                 let gesture_active = self
@@ -387,22 +388,27 @@ impl Catacomb {
 
                 if !gesture_active {
                     // Update window focus.
-                    match toplevel {
-                        Some(OffsetSurfaceToplevel::Layout((window, _))) => {
+                    match input_surface.toplevel.take() {
+                        Some(InputSurfaceKind::Layout((window, _))) => {
                             self.windows.set_focus(Some(window), None);
                         },
-                        Some(OffsetSurfaceToplevel::Layer((layer, _))) => {
+                        Some(InputSurfaceKind::Layer((layer, _))) => {
                             self.windows.set_focus(None, Some(layer));
                         },
                         // For surfaces denying focus, we send events but inhibit focus.
                         None => (),
                     }
 
-                    // Update offset of surface being interacted with.
-                    self.touch_state.surface_offset = Some(surface_offset);
+                    // Calculate surface-local touch position.
+                    let scale = self.windows.output().scale();
+                    let position = input_surface.local_position(scale, event.position);
 
+                    // Send touch event to the client.
                     let serial = SERIAL_COUNTER.next_serial();
-                    self.touch_state.touch.down(serial, time, &surface, position, slot);
+                    let surface = &input_surface.surface;
+                    self.touch_state.touch.down(serial, time, surface, position, slot);
+
+                    self.touch_state.input_surface = Some(input_surface);
                 }
             },
             // Clear focus if touch wasn't on any surface.
@@ -457,8 +463,9 @@ impl Catacomb {
     /// Handle touch input movement.
     fn on_touch_motion(&mut self, event: TouchEvent) {
         // Notify client.
-        if let Some(surface_offset) = self.touch_state.surface_offset {
-            let position = event.position - surface_offset;
+        if let Some(input_surface) = &self.touch_state.input_surface {
+            let scale = self.windows.output().scale();
+            let position = input_surface.local_position(scale, event.position);
             self.touch_state.touch.motion(event.time, event.slot, position);
         }
 

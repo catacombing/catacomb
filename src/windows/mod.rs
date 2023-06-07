@@ -31,9 +31,7 @@ use crate::output::{Canvas, Output, GESTURE_HANDLE_HEIGHT};
 use crate::overview::{DragAction, DragAndDrop, Overview};
 use crate::protocols::session_lock::surface::LockSurface;
 use crate::windows::layout::{LayoutPosition, Layouts};
-use crate::windows::surface::{
-    CatacombLayerSurface, OffsetSurface, OffsetSurfaceToplevel, Surface,
-};
+use crate::windows::surface::{CatacombLayerSurface, InputSurface, InputSurfaceKind, Surface};
 use crate::windows::window::Window;
 
 pub mod layout;
@@ -926,7 +924,7 @@ impl Windows {
     /// Check which surface is at a specific touch point.
     ///
     /// This filters out non-interactive surfaces.
-    pub fn surface_at(&mut self, position: Point<f64, Logical>) -> Option<OffsetSurface> {
+    pub fn surface_at(&mut self, position: Point<f64, Logical>) -> Option<InputSurface> {
         let scale = self.output.scale();
 
         /// Focus a layer shell surface and return it.
@@ -938,7 +936,7 @@ impl Windows {
                 if !$window.deny_focus {
                     let wl_surface = $window.surface().clone();
                     let app_id = $window.app_id.clone();
-                    surface.toplevel = Some(OffsetSurfaceToplevel::Layer((wl_surface, app_id)));
+                    surface.toplevel = Some(InputSurfaceKind::Layer((wl_surface, app_id)));
                 }
 
                 Some(surface)
@@ -960,7 +958,7 @@ impl Windows {
                 // Set toplevel to update focus.
                 let app_id = window_ref.app_id.clone();
                 let window = Rc::downgrade(window);
-                surface.toplevel = Some(OffsetSurfaceToplevel::Layout((window, app_id)));
+                surface.toplevel = Some(InputSurfaceKind::Layout((window, app_id)));
 
                 return Some(surface);
             },

@@ -39,7 +39,7 @@ use crate::drawing::{CatacombElement, CatacombSurfaceData, RenderTexture, Textur
 use crate::geometry::Vector;
 use crate::output::{ExclusiveSpace, Output};
 use crate::windows;
-use crate::windows::surface::{CatacombLayerSurface, OffsetSurface, Surface};
+use crate::windows::surface::{CatacombLayerSurface, InputSurface, Surface};
 
 /// Wayland client window state.
 #[derive(Debug)]
@@ -558,7 +558,7 @@ impl<S: Surface + 'static> Window<S> {
         &self,
         output_scale: f64,
         mut position: Point<f64, Logical>,
-    ) -> Option<OffsetSurface> {
+    ) -> Option<InputSurface> {
         let bounds = self.bounds(output_scale);
 
         // Check popups top to bottom first.
@@ -601,7 +601,7 @@ impl<S: Surface + 'static> Window<S> {
 
                 // Check if the position is within the surface bounds.
                 if surface_rect.contains(position) {
-                    let surface = OffsetSurface::new(wl_surface.clone(), surface_loc, position);
+                    let surface = InputSurface::new(wl_surface.clone(), surface_loc, window_scale);
                     *result.borrow_mut() = Some(surface);
                     TraversalAction::SkipChildren
                 } else {

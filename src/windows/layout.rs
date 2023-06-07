@@ -10,8 +10,8 @@ use smithay::utils::{Logical, Point};
 use smithay::wayland::shell::xdg::ToplevelSurface;
 
 use crate::drawing::CatacombElement;
-use crate::windows::surface::OffsetSurfaceToplevel;
-use crate::windows::{self, OffsetSurface, Output, Window};
+use crate::windows::surface::InputSurfaceKind;
+use crate::windows::{self, InputSurface, Output, Window};
 
 /// Default layout as const for borrowing purposes.
 const DEFAULT_LAYOUT: Layout = Layout { primary: None, secondary: None, id: LayoutId(0) };
@@ -512,7 +512,7 @@ impl Layouts {
         &mut self,
         output_scale: f64,
         position: Point<f64, Logical>,
-    ) -> Option<OffsetSurface> {
+    ) -> Option<InputSurface> {
         let active_layout = self.active_layout.and_then(|index| self.layouts.get(index))?;
 
         for window in active_layout.primary.iter().chain(&active_layout.secondary) {
@@ -521,7 +521,7 @@ impl Layouts {
                 let mut surface = window_ref.surface_at(output_scale, position)?;
                 let app_id = window_ref.app_id.clone();
                 let window = Rc::downgrade(window);
-                surface.toplevel = Some(OffsetSurfaceToplevel::Layout((window, app_id)));
+                surface.toplevel = Some(InputSurfaceKind::Layout((window, app_id)));
                 return Some(surface);
             }
         }

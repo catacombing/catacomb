@@ -287,32 +287,36 @@ impl Surface for LockSurface {
     }
 }
 
-/// Surface with offset from its window origin.
-pub struct OffsetSurface {
-    pub toplevel: Option<OffsetSurfaceToplevel>,
+/// Surface for touch input handling.
+pub struct InputSurface {
+    pub toplevel: Option<InputSurfaceKind>,
     pub surface_offset: Point<f64, Logical>,
-    pub position: Point<f64, Logical>,
+    pub surface_scale: f64,
     pub surface: WlSurface,
 }
 
-impl OffsetSurface {
+impl InputSurface {
     pub fn new(
         surface: WlSurface,
         surface_offset: Point<f64, Logical>,
-        global_position: Point<f64, Logical>,
+        surface_scale: f64,
     ) -> Self {
-        let position = global_position - surface_offset;
-        Self { surface, position, surface_offset, toplevel: None }
+        Self { surface, surface_scale, surface_offset, toplevel: None }
+    }
+
+    /// Get surface-local position for a touch event.
+    pub fn local_position(&self, output_scale: f64, position: Point<f64, Logical>) -> Point<f64, Logical> {
+        position.upscale(output_scale / self.surface_scale) - self.surface_offset
     }
 }
 
-/// Focusable surface toplevel kinds.
-pub enum OffsetSurfaceToplevel {
+/// Types of input surfaces.
+pub enum InputSurfaceKind {
     Layout((Weak<RefCell<Window>>, Option<String>)),
     Layer((WlSurface, Option<String>)),
 }
 
-impl OffsetSurfaceToplevel {
+impl InputSurfaceKind {
     /// Extract the App ID from this surface.
     pub fn take_app_id(&mut self) -> Option<String> {
         let (Self::Layout((_, app_id)) | Self::Layer((_, app_id))) = self;
