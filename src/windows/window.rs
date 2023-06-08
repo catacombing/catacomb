@@ -504,7 +504,7 @@ impl<S: Surface + 'static> Window<S> {
             // Check if the App ID has changed.
             match attributes.filter(|attrs| attrs.app_id != self.app_id) {
                 Some(attributes) => {
-                    self.app_id = attributes.app_id.clone();
+                    self.set_app_id(attributes.app_id.clone());
                     true
                 },
                 None => false,
@@ -523,6 +523,11 @@ impl<S: Surface + 'static> Window<S> {
         window_scales: &[(AppIdMatcher, WindowScale)],
         output_scale: f64,
     ) {
+        // Update popup scale.
+        for popup in &mut self.popups {
+            popup.update_scale(window_scales, output_scale);
+        }
+
         // Update the per-window scale override.
         self.scale = None;
         for (matcher, window_scale) in window_scales {
@@ -533,7 +538,8 @@ impl<S: Surface + 'static> Window<S> {
             }
         }
 
-        self.set_preferred_scale(output_scale);
+        // Handle preferred buffer scale and fractional scale.
+        self.set_preferred_scale_toplevel(output_scale);
 
         // Resubmit dimensions in case per-window scaling changed.
         let transaction = self.transaction.as_ref();
@@ -543,6 +549,16 @@ impl<S: Surface + 'static> Window<S> {
 
     /// Update the surface's preferred scale.
     pub fn set_preferred_scale(&self, output_scale: f64) {
+        // Update popups' preferred scale.
+        for popup in &self.popups {
+            popup.set_preferred_scale(output_scale);
+        }
+
+        self.set_preferred_scale_toplevel(output_scale);
+    }
+
+    /// Update the surface's preferred scale, without updating its popups.
+    fn set_preferred_scale_toplevel(&self, output_scale: f64) {
         let scale = self.scale.map_or(output_scale, |scale| scale.scale(output_scale));
         let surface = self.surface.surface();
 
@@ -635,6 +651,13 @@ impl<S: Surface + 'static> Window<S> {
         result.into_inner()
     }
 
+    /// Check if window owns a surface.
+    pub fn owns_surface(&self, surface: &WlSurface) -> bool {
+        let mut owns_surface = false;
+        self.with_surfaces(|window_surface, _| owns_surface |= window_surface == surface);
+        owns_surface
+    }
+
     /// Add popup at the correct position in the popup tree.
     ///
     /// This function will return the popup when no matching parent surface
@@ -645,6 +668,11 @@ impl<S: Surface + 'static> Window<S> {
         parent: &WlSurface,
     ) -> Option<Window<PopupSurface>> {
         if self.surface.surface() == parent {
+            // Inherit parent properties.
+            popup.app_id = self.app_id.clone();
+            popup.visible = self.visible;
+            popup.scale = self.scale;
+
             self.popups.push(popup);
             return None;
         }
@@ -677,13 +705,6 @@ impl<S: Surface + 'static> Window<S> {
         })
     }
 
-    /// Check if window owns a surface.
-    pub fn owns_surface(&self, surface: &WlSurface) -> bool {
-        let mut owns_surface = false;
-        self.with_surfaces(|window_surface, _| owns_surface |= window_surface == surface);
-        owns_surface
-    }
-
     /// Refresh popup windows.
     pub fn refresh_popups(&mut self) {
         for i in (0..self.popups.len()).rev() {
@@ -693,6 +714,15 @@ impl<S: Surface + 'static> Window<S> {
                 self.popups.swap_remove(i);
             }
         }
+    }
+
+    /// Update the app_id for all popups owned by this window.
+    pub fn set_app_id(&mut self, app_id: Option<String>) {
+        for popup in &mut self.popups {
+            popup.set_app_id(app_id.clone());
+        }
+
+        self.app_id = app_id;
     }
 
     /// Close the application.
