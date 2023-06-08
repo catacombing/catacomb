@@ -305,7 +305,11 @@ impl InputSurface {
     }
 
     /// Get surface-local position for a touch event.
-    pub fn local_position(&self, output_scale: f64, position: Point<f64, Logical>) -> Point<f64, Logical> {
+    pub fn local_position(
+        &self,
+        output_scale: f64,
+        position: Point<f64, Logical>,
+    ) -> Point<f64, Logical> {
         position.upscale(output_scale / self.surface_scale) - self.surface_offset
     }
 }

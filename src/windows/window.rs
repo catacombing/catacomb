@@ -89,9 +89,15 @@ pub struct Window<S = ToplevelSurface> {
 
 impl<S: Surface + 'static> Window<S> {
     /// Create a new Toplevel window.
-    pub fn new(surface: S, output_scale: f64) -> Self {
-        let window = Window {
+    pub fn new(
+        window_scales: &[(AppIdMatcher, WindowScale)],
+        surface: S,
+        output_scale: f64,
+        app_id: Option<String>,
+    ) -> Self {
+        let mut window = Window {
             surface,
+            app_id,
             presentation_callbacks: Default::default(),
             output_rectangle: Default::default(),
             texture_cache: Default::default(),
@@ -100,15 +106,14 @@ impl<S: Surface + 'static> Window<S> {
             acked_size: Default::default(),
             visible: Default::default(),
             popups: Default::default(),
-            app_id: Default::default(),
             dirty: Default::default(),
             scale: Default::default(),
             size: Default::default(),
             dead: Default::default(),
         };
 
-        // Ensure preferred buffer scale is set.
-        window.set_preferred_scale(output_scale);
+        // Ensure preferred integer scale and per-window layer shell scale are set.
+        window.update_scale(window_scales, output_scale);
 
         window
     }
@@ -457,9 +462,10 @@ impl<S: Surface + 'static> Window<S> {
                 self.dirty = true;
 
                 // Get access to surface data.
-                data.data_map.insert_if_missing(|| RefCell::new(CatacombSurfaceData::new()));
-                let mut surface_data =
-                    data.data_map.get::<RefCell<CatacombSurfaceData>>().unwrap().borrow_mut();
+                let mut surface_data = data
+                    .data_map
+                    .get_or_insert(|| RefCell::new(CatacombSurfaceData::new()))
+                    .borrow_mut();
 
                 // Check if new buffer has been attached.
                 let mut attributes = data.cached_state.current::<SurfaceAttributes>();
@@ -542,6 +548,12 @@ impl<S: Surface + 'static> Window<S> {
 
         // Update fractional scale protocol.
         compositor::with_states(surface, |states| {
+            // Cache scale on surface in case fractional scale isn't initialized yet.
+            let surface_data =
+                states.data_map.get_or_insert(|| RefCell::new(CatacombSurfaceData::new()));
+            surface_data.borrow_mut().preferred_fractional_scale = scale;
+
+            // Submit through fractional scaling protocol if it is initialized.
             fractional_scale::with_fractional_scale(states, |fractional_scale| {
                 fractional_scale.set_preferred_scale(scale);
             });

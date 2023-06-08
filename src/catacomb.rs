@@ -50,7 +50,7 @@ use smithay::wayland::shell::xdg::{
 };
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::wayland::socket::ListeningSocketSource;
-use smithay::wayland::text_input::{TextInputHandle, TextInputManagerState};
+use smithay::wayland::text_input::TextInputManagerState;
 use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 use smithay::wayland::{compositor, data_device};
@@ -63,6 +63,7 @@ use smithay::{
 };
 use tracing::{error, info};
 
+use crate::drawing::CatacombSurfaceData;
 use crate::input::{PhysicalButtonState, TouchState};
 use crate::orientation::{Accelerometer, AccelerometerSource};
 use crate::output::Output;
@@ -362,9 +363,6 @@ impl Catacomb {
 
     /// Focus a new surface.
     pub fn focus(&mut self, surface: Option<WlSurface>) {
-        if let Some(text_input) = self.seat.user_data().get::<TextInputHandle>() {
-            text_input.set_focus(surface.as_ref(), || {});
-        }
         if let Some(keyboard) = self.seat.get_keyboard() {
             keyboard.set_focus(self, surface, SERIAL_COUNTER.next_serial());
         }
@@ -708,12 +706,11 @@ delegate_presentation!(Catacomb);
 impl FractionalScaleHandler for Catacomb {
     fn new_fractional_scale(&mut self, surface: WlSurface) {
         // Submit the fractional output scale by default.
-        //
-        // The per-application scale requires the app ID to be set for identification,
-        // which isn't present at this time yet.
         compositor::with_states(&surface, |states| {
             fractional_scale::with_fractional_scale(states, |fractional_scale| {
-                let scale = self.windows.output().scale();
+                // Submit last cached preferred scale.
+                let surface_data = states.data_map.get::<RefCell<CatacombSurfaceData>>().unwrap();
+                let scale = surface_data.borrow().preferred_fractional_scale;
                 fractional_scale.set_preferred_scale(scale);
             });
         });
