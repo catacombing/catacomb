@@ -569,22 +569,32 @@ impl<S: Surface + 'static> Window<S> {
     pub fn surface_at(
         &self,
         output_scale: f64,
-        mut position: Point<f64, Logical>,
+        position: Point<f64, Logical>,
     ) -> Option<InputSurface> {
+        self.surface_at_internal(output_scale, position, Point::default())
+    }
+
+    fn surface_at_internal(
+        &self,
+        output_scale: f64,
+        mut position: Point<f64, Logical>,
+        popup_offset: Point<f64, Logical>,
+    ) -> Option<InputSurface> {
+        // Convert bounds to per-window scale.
+        let window_scale = self.scale.map_or(output_scale, |scale| scale.scale(output_scale));
         let bounds = self.bounds(output_scale);
+        let bounds_loc = bounds.loc.scale(output_scale / window_scale).to_f64() + popup_offset;
 
         // Check popups top to bottom first.
-        let parent_offset = bounds.loc;
-        let relative = position - parent_offset.to_f64();
-        let popup = self.popups.iter().find_map(|popup| popup.surface_at(output_scale, relative));
+        let popup = self.popups.iter().find_map(|popup| {
+            popup.surface_at_internal(output_scale, position, bounds_loc.to_f64())
+        });
         if popup.is_some() {
             return popup;
         }
 
-        // Convert position and bounds to per-window scale.
-        let window_scale = self.scale.map_or(output_scale, |scale| scale.scale(output_scale));
+        // Convert position to per-window scale.
         position = position.upscale(output_scale / window_scale);
-        let bounds_loc = bounds.loc.scale(output_scale / window_scale);
 
         let geometry = self.surface.geometry().unwrap_or_default();
 
@@ -597,7 +607,7 @@ impl<S: Surface + 'static> Window<S> {
                 if surface_data.role == Some("subsurface") {
                     // NOTE: Use current after smithay/smithay#883 is fixed.
                     let current = surface_data.cached_state.pending::<SubsurfaceCachedState>();
-                    location += current.location;
+                    location += current.location.to_f64();
                 }
 
                 // Calculate surface's bounding box.
@@ -607,9 +617,8 @@ impl<S: Surface + 'static> Window<S> {
                     .data_map
                     .get::<RefCell<CatacombSurfaceData>>()
                     .map_or_else(Size::default, |data| data.borrow().dst_size);
-                let surface_loc = (location - geometry.loc).to_f64();
-                let surface_rect =
-                    Rectangle::from_loc_and_size(surface_loc.to_f64(), size.to_f64());
+                let surface_loc = location - geometry.loc.to_f64();
+                let surface_rect = Rectangle::from_loc_and_size(surface_loc, size.to_f64());
 
                 // Check if the position is within the surface bounds.
                 if surface_rect.contains(position) {
