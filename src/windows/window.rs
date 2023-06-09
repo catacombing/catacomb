@@ -62,7 +62,7 @@ pub struct Window<S = ToplevelSurface> {
     /// Target bounds in the output's logical coordinates.
     output_rectangle: Rectangle<i32, Logical>,
 
-    /// Size ni the window's logical coordinates.
+    /// Size in the window's logical coordinates.
     size: Size<i32, Logical>,
 
     /// Texture cache, storing last window state.
@@ -177,11 +177,8 @@ impl<S: Surface + 'static> Window<S> {
         });
 
         // Add popup textures.
-        let logical_bounds = bounds.to_f64().to_logical(output_scale).to_i32_round();
         for popup in self.popups.iter().rev() {
-            let unconstrained_location =
-                location + popup.bounds(output_scale).loc.scale(window_scale);
-            let popup_location = popup.constrain_location(unconstrained_location, logical_bounds);
+            let popup_location = location + popup.bounds(output_scale).loc.scale(window_scale);
 
             popup.textures_internal(
                 textures,
@@ -225,7 +222,7 @@ impl<S: Surface + 'static> Window<S> {
         let window_offset = Point::from((offset_x, offset_y));
 
         // Convert internal offset to output logical coordinates.
-        let scale = self.scale.map_or(output_scale, |scale| scale.scale(output_scale));
+        let scale = self.window_scale(output_scale);
         window_offset.scale(scale / output_scale)
     }
 
@@ -559,7 +556,7 @@ impl<S: Surface + 'static> Window<S> {
 
     /// Update the surface's preferred scale, without updating its popups.
     fn set_preferred_scale_toplevel(&self, output_scale: f64) {
-        let scale = self.scale.map_or(output_scale, |scale| scale.scale(output_scale));
+        let scale = self.window_scale(output_scale);
         let surface = self.surface.surface();
 
         // Update fractional scale protocol.
@@ -581,6 +578,11 @@ impl<S: Surface + 'static> Window<S> {
         }
     }
 
+    /// Get per-window scale for the specified output scale.
+    fn window_scale(&self, output_scale: f64) -> f64 {
+        self.scale.map_or(output_scale, |scale| scale.scale(output_scale))
+    }
+
     /// Find subsurface at the specified location.
     pub fn surface_at(
         &self,
@@ -597,7 +599,7 @@ impl<S: Surface + 'static> Window<S> {
         popup_offset: Point<f64, Logical>,
     ) -> Option<InputSurface> {
         // Convert bounds to per-window scale.
-        let window_scale = self.scale.map_or(output_scale, |scale| scale.scale(output_scale));
+        let window_scale = self.window_scale(output_scale);
         let bounds = self.bounds(output_scale);
         let bounds_loc = bounds.loc.scale(output_scale / window_scale).to_f64() + popup_offset;
 
@@ -694,14 +696,22 @@ impl<S: Surface + 'static> Window<S> {
         root_surface: &WlSurface,
         surface: &WlSurface,
     ) -> bool {
-        self.popups.iter_mut().any(|window| {
-            if window.surface.surface() == root_surface {
-                window.surface_commit_common(output_scale, &[], surface);
-                window.output_rectangle.loc = window.position();
+        // Convert window bounds to per-window scale.
+        let window_scale = self.window_scale(output_scale);
+        let window_size = self.bounds(output_scale).size.scale(output_scale / window_scale);
+
+        self.popups.iter_mut().any(|popup| {
+            if popup.surface.surface() == root_surface {
+                popup.surface_commit_common(output_scale, &[], surface);
+
+                // Calculate popup position and convert it to output scale.
+                let popup_loc = popup.constrained_location(window_size);
+                popup.output_rectangle.loc = popup_loc.scale(window_scale / output_scale);
+
                 return true;
             }
 
-            window.popup_surface_commit(output_scale, root_surface, surface)
+            popup.popup_surface_commit(output_scale, root_surface, surface)
         })
     }
 
@@ -751,20 +761,13 @@ impl Window<PopupSurface> {
         })
     }
 
-    /// Get popup window offset from parent.
-    fn position(&self) -> Point<i32, Logical> {
-        self.surface.with_pending_state(|state| state.positioner.get_geometry().loc)
-    }
-
-    /// Calculate constrained popup location.
-    fn constrain_location(
-        &self,
-        location: Point<i32, Logical>,
-        bounds: Rectangle<i32, Logical>,
-    ) -> Point<i32, Logical> {
+    /// Get the popup position after constraints were applied.
+    ///
+    /// The `parent_size` is specified in the per-window logical scale.
+    fn constrained_location(&self, parent_size: Size<i32, Logical>) -> Point<i32, Logical> {
         let size = self.texture_cache.size();
         self.surface.with_pending_state(|state| {
-            PopupConstrainer(&mut state.positioner).constrain(bounds, location, size)
+            PopupConstrainer(&mut state.positioner).constrained_location(parent_size, size)
         })
     }
 }
@@ -797,7 +800,7 @@ impl Window<CatacombLayerSurface> {
 
         // Upscale layer shell size to output logical scale.
         let output_scale = output.scale();
-        let scale = self.scale.map_or(output_scale, |scale| scale.scale(output_scale));
+        let scale = self.window_scale(output_scale);
         let mut size = state.size.scale(scale / output_scale);
 
         let exclusive = match state.exclusive_zone {
@@ -852,7 +855,7 @@ impl Window<CatacombLayerSurface> {
         let exclusive_zone = match state.exclusive_zone {
             ExclusiveZone::Exclusive(size) => {
                 let output_scale = output.scale();
-                let scale = self.scale.map_or(output_scale, |scale| scale.scale(output_scale));
+                let scale = self.window_scale(output_scale);
                 ExclusiveZone::Exclusive((size as f64 * (scale / output_scale)).round() as u32)
             },
             exclusive_zone => exclusive_zone,
@@ -939,15 +942,17 @@ impl PresentationCallback {
 struct PopupConstrainer<'a>(&'a mut PositionerState);
 
 impl<'a> PopupConstrainer<'a> {
-    /// Get a popup's constrained location.
-    fn constrain(
+    /// Get the popup's constrained location.
+    fn constrained_location(
         &mut self,
-        bounds: Rectangle<i32, Logical>,
-        mut location: Point<i32, Logical>,
-        size: Size<i32, Logical>,
+        parent_size: Size<i32, Logical>,
+        popup_size: Size<i32, Logical>,
     ) -> Point<i32, Logical> {
+        let bounds = Rectangle::from_loc_and_size((0, 0), parent_size);
+        let mut location = self.0.get_geometry().loc;
+
         // Skip if no constraint is necessary.
-        let rect = Rectangle::from_loc_and_size(location, size);
+        let rect = Rectangle::from_loc_and_size(location, popup_size);
         if bounds.contains_rect(rect) {
             return location;
         }
@@ -984,15 +989,15 @@ impl<'a> PopupConstrainer<'a> {
 
         // Attempt flip constraint resolution.
         if flip_x {
-            flip(bounds.loc.x, bounds.size.w, location.x, size.w, true);
+            flip(bounds.loc.x, bounds.size.w, location.x, popup_size.w, true);
         }
         if flip_y {
-            flip(bounds.loc.y, bounds.size.h, location.y, size.h, false);
+            flip(bounds.loc.y, bounds.size.h, location.y, popup_size.h, false);
         }
 
         // Return new location if flip solved our constraint violations.
         let new_location = self.get_geometry().loc;
-        let new_rect = Rectangle::from_loc_and_size(new_location, size);
+        let new_rect = Rectangle::from_loc_and_size(new_location, popup_size);
         if bounds.contains_rect(new_rect) {
             return new_location;
         }
@@ -1003,10 +1008,10 @@ impl<'a> PopupConstrainer<'a> {
 
         // Attempt slide constraint resolution.
         if self.constraint_adjustment.contains(ConstraintAdjustment::SlideX) {
-            location.x = slide(bounds.loc.x, bounds.size.w, location.x, size.w);
+            location.x = slide(bounds.loc.x, bounds.size.w, location.x, popup_size.w);
         }
         if self.constraint_adjustment.contains(ConstraintAdjustment::SlideY) {
-            location.y = slide(bounds.loc.y, bounds.size.h, location.y, size.h);
+            location.y = slide(bounds.loc.y, bounds.size.h, location.y, popup_size.h);
         }
 
         location
