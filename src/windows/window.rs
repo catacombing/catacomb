@@ -1106,10 +1106,7 @@ mod tests {
     }
 
     fn constrain(positioner: &mut PositionerState) -> Point<i32, Logical> {
-        PopupConstrainer(&mut positioner.clone()).constrain(
-            Rectangle::from_loc_and_size((0, 0), (100, 100)),
-            positioner.offset,
-            positioner.rect_size,
-        )
+        PopupConstrainer(&mut positioner.clone())
+            .constrained_location(Size::from((100, 100)), positioner.rect_size)
     }
 }
