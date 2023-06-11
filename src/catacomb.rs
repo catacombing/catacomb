@@ -469,7 +469,7 @@ impl Catacomb {
     /// The `ignore_unstalled` flag controls whether an immediate redraw should
     /// be performed even if the rendering hasn't stalled.
     pub fn force_redraw(&mut self, ignore_unstalled: bool) {
-        self.backend.reset_buffers();
+        self.backend.reset_buffer_ages();
         self.windows.set_dirty();
 
         if ignore_unstalled {

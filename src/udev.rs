@@ -275,10 +275,10 @@ impl Udev {
         self.output_device.as_mut().map(|output_device| &mut output_device.gles)
     }
 
-    /// Reset the DRM compostor's buffers.
-    pub fn reset_buffers(&mut self) {
+    /// Reset the DRM compostor's buffer ages.
+    pub fn reset_buffer_ages(&mut self) {
         if let Some(output_device) = &mut self.output_device {
-            output_device.drm_compositor.reset_buffers();
+            output_device.drm_compositor.reset_buffer_ages();
         }
     }
 
