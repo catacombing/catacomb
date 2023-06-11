@@ -708,13 +708,13 @@ delegate_presentation!(Catacomb);
 
 impl FractionalScaleHandler for Catacomb {
     fn new_fractional_scale(&mut self, surface: WlSurface) {
-        // Submit the fractional output scale by default.
+        // Submit last cached preferred scale.
         compositor::with_states(&surface, |states| {
             fractional_scale::with_fractional_scale(states, |fractional_scale| {
-                // Submit last cached preferred scale.
-                let surface_data = states.data_map.get::<RefCell<CatacombSurfaceData>>().unwrap();
-                let scale = surface_data.borrow().preferred_fractional_scale;
-                fractional_scale.set_preferred_scale(scale);
+                if let Some(surface_data) = states.data_map.get::<RefCell<CatacombSurfaceData>>() {
+                    let scale = surface_data.borrow().preferred_fractional_scale;
+                    fractional_scale.set_preferred_scale(scale);
+                }
             });
         });
     }
