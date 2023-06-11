@@ -426,6 +426,9 @@ impl Catacomb {
 
         // Restart idle timer.
         self.reset_idle_timer();
+
+        // Ensure content is up to date.
+        self.force_redraw(true);
     }
 
     /// Suspend to RAM.
