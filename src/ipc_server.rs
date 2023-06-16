@@ -11,7 +11,7 @@ use smithay::reexports::calloop::LoopHandle;
 use tracing::warn;
 
 use crate::catacomb::Catacomb;
-use crate::config::GestureBinding;
+use crate::config::{GestureBinding, KeyBinding};
 use crate::socket::SocketSource;
 
 /// Create an IPC socket.
@@ -88,7 +88,7 @@ fn handle_message(buffer: &mut String, stream: UnixStream, catacomb: &mut Cataco
             catacomb.windows.set_scale(scale);
             catacomb.unstall();
         },
-        IpcMessage::Bind { app_id, start, end, program, arguments } => {
+        IpcMessage::BindGesture { app_id, start, end, program, arguments } => {
             let app_id = match AppIdMatcher::try_from(app_id) {
                 Ok(app_id) => app_id,
                 Err(err) => {
@@ -100,9 +100,35 @@ fn handle_message(buffer: &mut String, stream: UnixStream, catacomb: &mut Cataco
             let gesture = GestureBinding { app_id, start, end, program, arguments };
             catacomb.touch_state.user_gestures.push(gesture);
         },
-        IpcMessage::Unbind { app_id, start, end } => {
+        IpcMessage::UnbindGesture { app_id, start, end } => {
             catacomb.touch_state.user_gestures.retain(|gesture| {
                 gesture.app_id.base() != app_id || gesture.start != start || gesture.end != end
+            });
+        },
+        IpcMessage::BindKey { app_id, mods, key, program, arguments } => {
+            let app_id = match AppIdMatcher::try_from(app_id) {
+                Ok(app_id) => app_id,
+                Err(err) => {
+                    warn!("ignoring invalid ipc message: binding has invalid App ID regex: {err}");
+                    return;
+                },
+            };
+
+            let binding = KeyBinding {
+                app_id,
+                program,
+                arguments,
+                mods: mods.unwrap_or_default(),
+                key: key.0,
+            };
+            catacomb.key_bindings.push(binding);
+        },
+        IpcMessage::UnbindKey { app_id, mods, key } => {
+            let mods = mods.unwrap_or_default();
+            let key = key.0;
+
+            catacomb.key_bindings.retain(|binding| {
+                binding.app_id.base() != app_id || binding.key != key || binding.mods != mods
             });
         },
     }

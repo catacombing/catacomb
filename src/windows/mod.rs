@@ -524,28 +524,34 @@ impl Windows {
     }
 
     /// Current window focus.
-    pub fn focus(&mut self) -> Option<WlSurface> {
+    pub fn focus(&mut self) -> Option<(WlSurface, Option<String>)> {
         // Always focus session lock surfaces.
         if let View::Lock(window) = &self.view {
-            return window.as_ref().map(|window| window.surface().clone());
+            return window.as_ref().map(|window| (window.surface().clone(), window.app_id.clone()));
         }
 
-        let surface = match self.layouts.focus.as_ref().map(Weak::upgrade) {
+        let focused = match self.layouts.focus.as_ref().map(Weak::upgrade) {
             // Use focused surface if the window is still alive.
-            Some(Some(window)) => Some(window.borrow().surface.clone()),
+            Some(Some(window)) => {
+                let window = window.borrow();
+                Some((window.surface.clone(), window.app_id.clone()))
+            },
             // Fallback to primary if secondary perished.
             Some(None) => {
                 let primary = self.layouts.active().primary();
-                let surface = primary.map(|window| window.borrow().surface.clone());
+                let focused = primary.map(|window| {
+                    let window = window.borrow();
+                    (window.surface.clone(), window.app_id.clone())
+                });
                 self.layouts.focus = primary.map(Rc::downgrade);
-                surface
+                focused
             },
             // Do not upgrade if toplevel is explicitly unfocused.
             None => None,
         };
 
         // Update window activation state.
-        if self.activated != surface {
+        if self.activated.as_ref() != focused.as_ref().map(|(surface, _)| surface) {
             // Clear old activated flag.
             if let Some(activated) = self.activated.take() {
                 activated.set_state(|state| {
@@ -554,23 +560,28 @@ impl Windows {
             }
 
             // Set new activated flag.
-            if let Some(surface) = &surface {
+            if let Some((surface, _)) = &focused {
                 surface.set_state(|state| {
                     state.states.set(State::Activated);
                 });
             }
-            self.activated = surface.clone();
+            self.activated = focused.as_ref().map(|(surface, _)| surface.clone());
         }
 
-        surface.map(|surface| surface.surface().clone())
+        focused.map(|(surface, app_id)| (surface.surface().clone(), app_id))
             // Check for layer-shell window focus.
             .or_else(|| self.layers.focus.clone())
     }
 
     /// Update the focused window.
-    pub fn set_focus(&mut self, layout: Option<Weak<RefCell<Window>>>, layer: Option<WlSurface>) {
+    pub fn set_focus(
+        &mut self,
+        layout: Option<Weak<RefCell<Window>>>,
+        layer: Option<WlSurface>,
+        app_id: Option<String>,
+    ) {
         self.layouts.focus = layout;
-        self.layers.focus = layer;
+        self.layers.focus = layer.map(|l| (l, app_id));
     }
 
     /// Start a new transaction.
@@ -779,7 +790,7 @@ impl Windows {
             View::Workspace => {
                 // Clear focus on gesture handle tap.
                 if point.y >= (self.output.size().h - GESTURE_HANDLE_HEIGHT) as f64 {
-                    self.set_focus(None, None);
+                    self.set_focus(None, None, None);
                 }
                 return;
             },

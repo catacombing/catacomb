@@ -12,7 +12,7 @@ type LayerWindow = Window<CatacombLayerSurface>;
 /// Layer shell windows.
 #[derive(Debug, Default)]
 pub struct Layers {
-    pub focus: Option<WlSurface>,
+    pub focus: Option<(WlSurface, Option<String>)>,
 
     background: Vec<LayerWindow>,
     bottom: Vec<LayerWindow>,

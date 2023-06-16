@@ -20,7 +20,10 @@ use clap::{Subcommand, ValueEnum};
 use regex::{Error as RegexError, Regex};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "smithay")]
+use smithay::input::keyboard::ModifiersState;
+#[cfg(feature = "smithay")]
 use smithay::utils::{Logical, Point, Size, Transform};
+use xkbcommon::xkb::{self, Keysym};
 
 /// IPC message format.
 #[cfg_attr(feature = "clap", derive(Subcommand))]
@@ -51,7 +54,7 @@ pub enum IpcMessage {
         app_id: Option<String>,
     },
     /// Add a gesture.
-    Bind {
+    BindGesture {
         /// App ID regex for which the gesture.
         app_id: String,
         /// Starting sector of the gesture.
@@ -65,13 +68,38 @@ pub enum IpcMessage {
         arguments: Vec<String>,
     },
     /// Remove a gesture.
-    Unbind {
+    UnbindGesture {
         /// App ID regex of the gesture.
         app_id: String,
         /// Starting sector of the gesture.
         start: GestureSector,
         /// Termination sector of the gesture.
         end: GestureSector,
+    },
+    /// Add a key.
+    BindKey {
+        /// App ID regex for which the gesture.
+        app_id: String,
+        /// Required modifiers.
+        #[cfg_attr(feature = "clap", clap(long, short))]
+        mods: Option<Modifiers>,
+        /// Base key for this binding.
+        key: ClapKeysym,
+        /// Programm this gesture should spawn.
+        program: String,
+        /// Arguments for this gesture's program.
+        #[cfg_attr(feature = "clap", clap(allow_hyphen_values = true, trailing_var_arg = true))]
+        arguments: Vec<String>,
+    },
+    /// Remove a gesture.
+    UnbindKey {
+        /// App ID regex of the gesture.
+        app_id: String,
+        /// Required modifiers.
+        #[cfg_attr(feature = "clap", clap(long, short))]
+        mods: Option<Modifiers>,
+        /// Base key for this binding.
+        key: ClapKeysym,
     },
 }
 
@@ -277,6 +305,68 @@ pub enum AppIdMatcherVariant {
     Global,
 }
 
+/// Modifier state for a key press.
+#[derive(Deserialize, Serialize, PartialEq, Eq, Default, Copy, Clone, Debug)]
+pub struct Modifiers {
+    control: bool,
+    shift: bool,
+    logo: bool,
+    alt: bool,
+}
+
+#[cfg(feature = "smithay")]
+impl From<&ModifiersState> for Modifiers {
+    fn from(mods: &ModifiersState) -> Self {
+        Self { control: mods.ctrl, shift: mods.shift, logo: mods.logo, alt: mods.alt }
+    }
+}
+
+impl FromStr for Modifiers {
+    type Err = ClapError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut modifiers = Self::default();
+
+        let mods = s.split(',');
+        for modifier in mods {
+            match modifier.trim().to_lowercase().as_str() {
+                "control" | "ctrl" => modifiers.control = true,
+                "super" | "logo" => modifiers.logo = true,
+                "shift" => modifiers.shift = true,
+                "alt" => modifiers.alt = true,
+                invalid => {
+                    return Err(ClapError::raw(
+                        ClapErrorKind::InvalidValue,
+                        format!(
+                            "invalid modifier {invalid:?}, expected one of \"shift\", \
+                             \"control\", \"alt\", or \"super\""
+                        ),
+                    ))
+                },
+            }
+        }
+
+        Ok(modifiers)
+    }
+}
+
+/// Clap wrapper for XKB keysym.
+#[derive(Deserialize, Serialize, Copy, Clone, Debug)]
+pub struct ClapKeysym(pub Keysym);
+
+impl FromStr for ClapKeysym {
+    type Err = ClapError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match xkb::keysym_from_name(s, xkb::KEYSYM_NO_FLAGS) {
+            xkb::KEY_NoSymbol => {
+                Err(ClapError::raw(ClapErrorKind::InvalidValue, format!("invalid keysym {s:?}")))
+            },
+            keysym => Ok(Self(keysym)),
+        }
+    }
+}
+
 /// Send a message to the Catacomb IPC socket.
 pub fn send_message(message: &IpcMessage) -> Result<(), Box<dyn Error>> {
     // Ensure IPC message is legal.
@@ -316,7 +406,9 @@ pub fn socket_path(socket_name: &str) -> PathBuf {
 fn validate_message(message: &IpcMessage) -> Result<(), Box<dyn Error>> {
     match message {
         // Ensure App IDs are valid regexes.
-        IpcMessage::Scale { app_id: Some(app_id), .. } | IpcMessage::Bind { app_id, .. } => {
+        IpcMessage::Scale { app_id: Some(app_id), .. }
+        | IpcMessage::BindGesture { app_id, .. }
+        | IpcMessage::BindKey { app_id, .. } => {
             AppIdMatcher::try_from(app_id.clone())?;
         },
         // Ensure only fixed scales are used for global scale changes.

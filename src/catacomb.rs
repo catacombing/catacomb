@@ -63,6 +63,7 @@ use smithay::{
 };
 use tracing::{error, info};
 
+use crate::config::KeyBinding;
 use crate::drawing::CatacombSurfaceData;
 use crate::input::{PhysicalButtonState, TouchState};
 use crate::orientation::{Accelerometer, AccelerometerSource};
@@ -97,6 +98,7 @@ pub struct Catacomb {
     pub event_loop: LoopHandle<'static, Self>,
     pub button_state: PhysicalButtonState,
     pub display_handle: DisplayHandle,
+    pub key_bindings: Vec<KeyBinding>,
     pub touch_state: TouchState,
     pub last_resume: Instant,
     pub vibrator: Vibrator,
@@ -281,6 +283,7 @@ impl Catacomb {
             idle_inhibitors: Default::default(),
             suspend_timer: Default::default(),
             button_state: Default::default(),
+            key_bindings: Default::default(),
             last_focus: Default::default(),
             terminated: Default::default(),
             idle_timer: Default::default(),
@@ -321,7 +324,7 @@ impl Catacomb {
         let transaction_deadline = self.windows.update_transaction();
 
         // Update surface focus.
-        let focus = self.windows.focus();
+        let focus = self.windows.focus().map(|(surface, _)| surface);
         if focus != self.last_focus {
             self.last_focus = focus.clone();
             self.focus(focus);

@@ -2,12 +2,12 @@
 
 use std::time::{Duration, Instant};
 
-use catacomb_ipc::GestureSector;
+use catacomb_ipc::{GestureSector, Modifiers};
 use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Event, InputBackend, InputEvent, KeyState,
     KeyboardKeyEvent, MouseButton, PointerButtonEvent, TouchEvent as _, TouchSlot,
 };
-use smithay::input::keyboard::{keysyms, FilterResult};
+use smithay::input::keyboard::{keysyms, FilterResult, KeysymHandle, ModifiersState};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
@@ -390,10 +390,10 @@ impl Catacomb {
                     // Update window focus.
                     match input_surface.toplevel.take() {
                         Some(InputSurfaceKind::Layout((window, _))) => {
-                            self.windows.set_focus(Some(window), None);
+                            self.windows.set_focus(Some(window), None, None);
                         },
-                        Some(InputSurfaceKind::Layer((layer, _))) => {
-                            self.windows.set_focus(None, Some(layer));
+                        Some(InputSurfaceKind::Layer((layer, app_id))) => {
+                            self.windows.set_focus(None, Some(layer), app_id);
                         },
                         // For surfaces denying focus, we send events but inhibit focus.
                         None => (),
@@ -416,7 +416,7 @@ impl Catacomb {
             // NOTE: We can't just always clear focus since a layer shell surface that
             // denies focus should still return the touched surface but not clear
             // the focus.
-            None => self.windows.set_focus(None, None),
+            None => self.windows.set_focus(None, None, None),
         }
 
         // Allow only a single touch at a time.
@@ -585,7 +585,7 @@ impl Catacomb {
         let keycode = event.key_code();
         let state = event.state();
 
-        keyboard.input(self, keycode, state, serial, time, |catacomb, _mods, keysym| {
+        keyboard.input(self, keycode, state, serial, time, |catacomb, mods, keysym| {
             match (keysym.modified_sym(), state) {
                 (keysym @ keysyms::KEY_XF86Switch_VT_1..=keysyms::KEY_XF86Switch_VT_12, _) => {
                     let vt = (keysym - keysyms::KEY_XF86Switch_VT_1 + 1) as i32;
@@ -630,11 +630,53 @@ impl Catacomb {
                         catacomb.toggle_sleep();
                     }
                 },
+                (_, KeyState::Released) => {
+                    return Self::handle_user_bindings(catacomb, mods, keysym)
+                },
                 _ => return FilterResult::Forward,
             }
 
             FilterResult::Intercept(())
         });
+    }
+
+    fn handle_user_bindings(
+        catacomb: &mut Catacomb,
+        mods: &ModifiersState,
+        keysym: KeysymHandle,
+    ) -> FilterResult<()> {
+        // Get raw keysym.
+        let raw_sym = keysym.raw_syms();
+        if raw_sym.len() > 1 {
+            return FilterResult::Forward;
+        }
+
+        // Convert Smithay mods to our struct.
+        let mods = Modifiers::from(mods);
+
+        // Get currently focused app.
+        let active_app = catacomb.windows.focus().and_then(|(_, app_id)| app_id);
+
+        // Execute all matching keybindings.
+        let mut filter_result = FilterResult::Forward;
+        for key_binding in &catacomb.key_bindings {
+            if key_binding.key == raw_sym[0]
+                && key_binding.mods == mods
+                && key_binding.app_id.matches(active_app.as_ref())
+            {
+                // Execute subcommand.
+                let program = &key_binding.program;
+                let arguments = &key_binding.arguments;
+                if let Err(err) = daemon::spawn(program, arguments) {
+                    error!("Failed keybinding command {program} {arguments:?}: {err}");
+                }
+
+                // Prevent key propagation.
+                filter_result = FilterResult::Intercept(());
+            }
+        }
+
+        filter_result
     }
 
     /// Apply an output transform to a point.
