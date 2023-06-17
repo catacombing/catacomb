@@ -7,7 +7,7 @@ use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Event, InputBackend, InputEvent, KeyState,
     KeyboardKeyEvent, MouseButton, PointerButtonEvent, TouchEvent as _, TouchSlot,
 };
-use smithay::input::keyboard::{keysyms, FilterResult, KeysymHandle, ModifiersState};
+use smithay::input::keyboard::{keysyms, FilterResult, Keysym};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
@@ -15,7 +15,7 @@ use smithay::wayland::seat::TouchHandle;
 use tracing::error;
 
 use crate::catacomb::Catacomb;
-use crate::config::{GestureBinding, APP_DRAWER};
+use crate::config::GestureBinding;
 use crate::daemon;
 use crate::orientation::Orientation;
 use crate::output::{Output, GESTURE_HANDLE_HEIGHT};
@@ -612,13 +612,12 @@ impl Catacomb {
                             // Reset button state.
                             catacomb.button_state.power = None;
 
-                            // Play rumble to indicate success.
+                            // Always press rumble, to prevent accidental shutdown.
                             catacomb.vibrator.vibrate(100, 0, 1);
 
-                            // Open drawer.
-                            if let Err(err) = crate::daemon(APP_DRAWER, []) {
-                                error!("Unable to launch {APP_DRAWER:?}: {err}");
-                            }
+                            // Execute user bindings for `XF86PowerOff`.
+                            let mods = Modifiers::default();
+                            Self::handle_user_binding(catacomb, mods, keysyms::KEY_XF86PowerOff);
 
                             TimeoutAction::Drop
                         })
@@ -631,7 +630,13 @@ impl Catacomb {
                     }
                 },
                 (_, KeyState::Released) => {
-                    return Self::handle_user_bindings(catacomb, mods, keysym)
+                    // Get raw keysym.
+                    let raw_keysym = keysym.raw_syms();
+                    if raw_keysym.len() != 1 {
+                        return FilterResult::Forward;
+                    }
+
+                    return Self::handle_user_binding(catacomb, mods, raw_keysym[0]);
                 },
                 _ => return FilterResult::Forward,
             }
@@ -640,19 +645,13 @@ impl Catacomb {
         });
     }
 
-    fn handle_user_bindings(
+    /// Handle user-defined key bindings.
+    fn handle_user_binding(
         catacomb: &mut Catacomb,
-        mods: &ModifiersState,
-        keysym: KeysymHandle,
+        mods: impl Into<Modifiers>,
+        raw_keysym: Keysym,
     ) -> FilterResult<()> {
-        // Get raw keysym.
-        let raw_sym = keysym.raw_syms();
-        if raw_sym.len() > 1 {
-            return FilterResult::Forward;
-        }
-
-        // Convert Smithay mods to our struct.
-        let mods = Modifiers::from(mods);
+        let mods = mods.into();
 
         // Get currently focused app.
         let active_app = catacomb.windows.focus().and_then(|(_, app_id)| app_id);
@@ -660,7 +659,7 @@ impl Catacomb {
         // Execute all matching keybindings.
         let mut filter_result = FilterResult::Forward;
         for key_binding in &catacomb.key_bindings {
-            if key_binding.key == raw_sym[0]
+            if key_binding.key == raw_keysym
                 && key_binding.mods == mods
                 && key_binding.app_id.matches(active_app.as_ref())
             {

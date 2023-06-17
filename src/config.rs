@@ -3,9 +3,6 @@
 use catacomb_ipc::{AppIdMatcher, GestureSector, Modifiers};
 use smithay::input::keyboard::Keysym;
 
-/// Application used as application drawer.
-pub const APP_DRAWER: &str = "tzompantli";
-
 /// User-defined gesture action.
 #[derive(Debug)]
 pub struct GestureBinding {
