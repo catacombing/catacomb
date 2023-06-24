@@ -30,8 +30,8 @@ const RESUME_INHIBIT_DURATION: Duration = Duration::from_millis(500);
 /// Time before button press is considered a hold.
 const BUTTON_HOLD_DURATION: Duration = Duration::from_millis(500);
 
-/// Maximum distance before touch input is considered a drag.
-const MAX_TAP_DISTANCE: f64 = 20.;
+/// Square of the maximum distance before touch input is considered a drag.
+const MAX_TAP_DISTANCE: f64 = 400.;
 
 /// Friction for velocity computation.
 const FRICTION: f64 = 0.1;
@@ -102,42 +102,55 @@ impl TouchState {
 
     /// Check if there's currently any touch interaction active.
     #[inline]
-    fn touching(&self) -> bool {
+    pub fn touching(&self) -> bool {
         self.slot.is_some()
     }
 
     /// Get the updated active touch action.
     fn action(&mut self, output: &Output) -> Option<TouchAction> {
-        // Check if a gesture was completed.
+        // Process handle gestures even before completion.
+        if self.start.is_handle_gesture {
+            // Continue gesture if direction is locked in already.
+            match self.start.handle_direction {
+                Some(HandleDirection::Horizontal) => {
+                    let delta = self.position.x - self.start.position.x;
+                    return Some(HandleGesture::Horizontal(delta).into());
+                },
+                Some(HandleDirection::Vertical) => {
+                    return Some(HandleGesture::Vertical(self.position.y).into());
+                },
+                None => (),
+            }
+
+            // Lock in direction once threshold was passed.
+            let gesture = HandleGesture::from_points(output, self.start.position, self.position);
+            if let Some(gesture) = gesture {
+                self.start.handle_direction = Some(HandleDirection::from(&gesture));
+                return Some(gesture.into());
+            }
+        }
+
+        // Check if a user gesture was completed.
         let touching = self.touching();
         if !touching {
-            if self.start.is_handle_gesture {
-                // Check if a handle gesture was completed.
-                let gesture =
-                    HandleGesture::from_points(output, self.start.position, self.position);
-                if let Some(gesture) = gesture {
-                    return Some(TouchAction::HandleGesture(gesture));
-                }
-            } else {
-                // Find matching user gestures.
-                let app_id = self.active_app_id.as_ref();
-                let start = self.start.position;
-                let end = Some(self.position);
-                let mut gestures = self.matching_gestures(output, app_id, start, end);
+            // Find matching user gestures.
+            let app_id = self.active_app_id.as_ref();
+            let start = self.start.position;
+            let end = Some(self.position);
+            let mut gestures = self.matching_gestures(output, app_id, start, end);
 
-                if let Some(gesture) = gestures.next() {
-                    return Some(TouchAction::UserGesture((
-                        gesture.program.clone(),
-                        gesture.arguments.clone(),
-                    )));
-                }
+            if let Some(gesture) = gestures.next() {
+                return Some(TouchAction::UserGesture((
+                    gesture.program.clone(),
+                    gesture.arguments.clone(),
+                )));
             }
         }
 
         // Convert to drag as soon as distance/time was exceeded once.
         let delta = self.start.position - self.position;
         if self.is_drag
-            || f64::sqrt(delta.x.powi(2) + delta.y.powi(2)) > MAX_TAP_DISTANCE
+            || delta.x.powi(2) + delta.y.powi(2) > MAX_TAP_DISTANCE
             || self.start.time.elapsed() >= HOLD_DURATION
         {
             self.is_drag = true;
@@ -169,6 +182,7 @@ impl TouchState {
 
 /// Start of a touch interaction.
 struct TouchStart {
+    handle_direction: Option<HandleDirection>,
     position: Point<f64, Logical>,
     is_handle_gesture: bool,
     time: Instant,
@@ -178,8 +192,9 @@ impl Default for TouchStart {
     fn default() -> Self {
         Self {
             time: Instant::now(),
-            position: Default::default(),
             is_handle_gesture: Default::default(),
+            handle_direction: Default::default(),
+            position: Default::default(),
         }
     }
 }
@@ -187,9 +202,10 @@ impl Default for TouchStart {
 impl TouchStart {
     fn new(output: &Output, position: Point<f64, Logical>) -> Self {
         Self {
+            position,
             is_handle_gesture: HandleGesture::is_start(output, position),
             time: Instant::now(),
-            position,
+            handle_direction: Default::default(),
         }
     }
 }
@@ -203,40 +219,44 @@ enum TouchAction {
     Tap,
 }
 
+impl From<HandleGesture> for TouchAction {
+    fn from(gesture: HandleGesture) -> Self {
+        Self::HandleGesture(gesture)
+    }
+}
+
 /// Gesture handle touch gestures.
 #[derive(Debug, Copy, Clone)]
 pub enum HandleGesture {
-    Up,
-    Left,
-    Right,
+    /// Vertical position of the current touch point.
+    Vertical(f64),
+    /// Horizontal distance traveled as delta.
+    Horizontal(f64),
 }
 
 impl HandleGesture {
-    /// Get a gesture from its start/end.
+    /// Get a handle gesture from its start/end.
+    ///
+    /// This function assumes that the start is within the gesture handle.
     fn from_points(
         output: &Output,
         start: Point<f64, Logical>,
         end: Point<f64, Logical>,
     ) -> Option<Self> {
-        // Handle left/right drag on gesture handle.
-        if Self::is_start(output, end) {
-            let delta = end.x - start.x;
-            if delta < -MAX_TAP_DISTANCE {
-                return Some(HandleGesture::Left);
-            } else if delta > MAX_TAP_DISTANCE {
-                return Some(HandleGesture::Right);
-            }
+        // Ignore handle gestures until minimum length is exceeded.
+        let delta = end - start;
+        let squared_length = delta.x.powi(2) + delta.y.powi(2);
+        if squared_length < MAX_TAP_DISTANCE {
+            return None;
         }
 
-        // Handle drag up.
-        let output_size = output.size().to_f64();
-        let drag_up_rect =
-            Rectangle::from_loc_and_size((0., 0.), (output_size.w, output_size.h * 0.75));
-        if drag_up_rect.contains(end) {
-            return Some(HandleGesture::Up);
+        if delta.y.abs() >= delta.x.abs() {
+            Some(HandleGesture::Vertical(end.y))
+        } else if Self::is_start(output, end) {
+            Some(HandleGesture::Horizontal(delta.x))
+        } else {
+            None
         }
-
-        None
     }
 
     /// Check if a touch should start a new gesture.
@@ -244,6 +264,22 @@ impl HandleGesture {
         let output_size = output.size().to_f64();
         let loc = (0., output_size.h - GESTURE_HANDLE_HEIGHT as f64);
         Rectangle::from_loc_and_size(loc, output_size).contains(position)
+    }
+}
+
+/// Direction for a handle gesture.
+#[derive(Debug)]
+enum HandleDirection {
+    Horizontal,
+    Vertical,
+}
+
+impl From<&HandleGesture> for HandleDirection {
+    fn from(gesture: &HandleGesture) -> Self {
+        match gesture {
+            HandleGesture::Horizontal(_) => Self::Horizontal,
+            HandleGesture::Vertical(_) => Self::Vertical,
+        }
     }
 }
 
@@ -503,9 +539,13 @@ impl Catacomb {
 
     /// Dispatch handle gestures.
     fn on_handle_gesture(&mut self, gesture: HandleGesture) {
-        self.windows.on_gesture(gesture);
-
-        self.touch_state.cancel_velocity();
+        // Process gesture updates.
+        if self.touch_state.touching() || self.touch_state.has_velocity() {
+            self.windows.on_gesture(&mut self.touch_state, gesture);
+        } else {
+            self.windows.on_gesture_done(gesture);
+            self.touch_state.cancel_velocity();
+        }
 
         // Notify client.
         self.touch_state.touch.cancel();

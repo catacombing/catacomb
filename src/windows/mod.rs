@@ -47,6 +47,9 @@ const MAX_TRANSACTION_MILLIS: u64 = 1000;
 /// Horizontal sensitivity of the application overview.
 const OVERVIEW_HORIZONTAL_SENSITIVITY: f64 = 250.;
 
+/// Horizantal screen percentage required to cycle through windows.
+const CYCLE_PERCENTAGE: f64 = 0.3;
+
 /// Global transaction timer in milliseconds.
 static TRANSACTION_START: AtomicU64 = AtomicU64::new(0);
 
@@ -755,8 +758,8 @@ impl Windows {
             View::Fullscreen(window) => {
                 window.borrow().dirty() || self.layers.overlay().any(Window::dirty)
             },
-            // Redraw continuously during overview animations.
-            View::Overview(overview) if overview.animating(self.layouts.len()) => true,
+            // Redraw when overview is dirty.
+            View::Overview(overview) if overview.dirty(self.layouts.len()) => true,
             View::Lock(Some(window)) => window.dirty(),
             // Check all windows for damage outside of fullscreen.
             _ => {
@@ -894,7 +897,7 @@ impl Windows {
                         self.set_view(View::Workspace);
                     }
                 } else {
-                    let overview = Overview::new(dnd.overview_x_offset);
+                    let overview = Overview::new(dnd.overview_x_offset, None);
                     self.set_view(View::Overview(overview));
                 }
             },
@@ -902,14 +905,25 @@ impl Windows {
         }
     }
 
-    /// Handle touch gestures.
-    pub fn on_gesture(&mut self, gesture: HandleGesture) {
-        match (gesture, &self.view) {
-            (HandleGesture::Up, View::Overview(_)) => {
-                self.layouts.set_active(&self.output, None, true);
-                self.set_view(View::Workspace);
+    /// Process in-progress handle gestures.
+    pub fn on_gesture(&mut self, touch_state: &mut TouchState, gesture: HandleGesture) {
+        match (gesture, &mut self.view) {
+            (HandleGesture::Vertical(position), View::Overview(overview)) => {
+                overview.set_open_percentage(&self.output, position);
+
+                // Ensure we don't keep processing velocity after completion.
+                if overview.gesture_threshold_passed() && !touch_state.touching() {
+                    touch_state.cancel_velocity();
+                    self.on_gesture_done(gesture);
+                }
             },
-            (HandleGesture::Up, _) if !self.layouts.is_empty() => {
+            (HandleGesture::Vertical(position), _) if !self.layouts.is_empty() => {
+                // Ignore overview gesture until changes are required.
+                let available = self.output.available_overview().to_f64();
+                if position < available.loc.y || position >= available.loc.y + available.size.h {
+                    return;
+                }
+
                 // Unset fullscreen XDG state if it's currently active.
                 if let View::Fullscreen(window) = &self.view {
                     window.borrow().surface.set_state(|state| {
@@ -918,13 +932,50 @@ impl Windows {
                 }
 
                 // Change view and resize windows.
-                let overview = Overview::new(self.layouts.active_offset());
+                let active_empty = self.layouts.active().is_empty();
+                let primary_percentage = Some(if active_empty { 0. } else { 1. });
+                let overview = Overview::new(self.layouts.active_offset(), primary_percentage);
                 self.set_view(View::Overview(overview));
                 self.resize_all();
             },
-            (HandleGesture::Left, View::Workspace) => self.layouts.cycle_active(&self.output, 1),
-            (HandleGesture::Right, View::Workspace) => self.layouts.cycle_active(&self.output, -1),
-            (HandleGesture::Up | HandleGesture::Left | HandleGesture::Right, _) => (),
+            (HandleGesture::Vertical(_) | HandleGesture::Horizontal(_), _) => (),
+        }
+    }
+
+    /// Process completion of handle gestures.
+    pub fn on_gesture_done(&mut self, gesture: HandleGesture) {
+        match (gesture, &mut self.view) {
+            (HandleGesture::Vertical(position), View::Overview(overview)) if overview.opened => {
+                overview.set_open_percentage(&self.output, position);
+
+                if overview.gesture_threshold_passed() {
+                    // Switch back to workspace view.
+                    self.layouts.set_active(&self.output, None, true);
+                    self.set_view(View::Workspace);
+                } else {
+                    // Stay in overview.
+                    let overview = Overview::new(overview.x_offset, None);
+                    self.set_view(View::Overview(overview));
+                }
+            },
+            (HandleGesture::Vertical(position), View::Overview(overview)) if !overview.opened => {
+                overview.set_open_percentage(&self.output, position);
+
+                if overview.gesture_threshold_passed() {
+                    overview.opened = true;
+                } else {
+                    self.set_view(View::Workspace);
+                }
+            },
+            (HandleGesture::Horizontal(delta), View::Workspace) => {
+                let delta_percentage = delta / self.output.size().w as f64;
+                if delta_percentage <= -CYCLE_PERCENTAGE {
+                    self.layouts.cycle_active(&self.output, 1);
+                } else if delta >= CYCLE_PERCENTAGE {
+                    self.layouts.cycle_active(&self.output, -1);
+                }
+            },
+            (HandleGesture::Vertical(_) | HandleGesture::Horizontal(_), _) => (),
         }
     }
 

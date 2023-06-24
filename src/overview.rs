@@ -17,12 +17,12 @@ use crate::windows::layout::{LayoutPosition, Layouts};
 use crate::windows::window::Window;
 
 /// Percentage of output width reserved for the main window in the application
-/// overview.
-const FG_OVERVIEW_PERCENTAGE: f64 = 0.75;
+/// overview at rest.
+const PRIMARY_PERCENTAGE: f64 = 0.75;
 
-/// Percentage of output width reserved for the secondary windows in the
-/// application overview.
-const BG_OVERVIEW_PERCENTAGE: f64 = 0.7;
+/// Size percentage the background windows will have in the overview compared to
+/// the primary.
+const SECONDARY_PERCENTAGE: f64 = 0.95;
 
 /// Percentage of the screen for the drop highlight areas.
 const DRAG_AND_DROP_PERCENTAGE: f64 = 0.3;
@@ -38,11 +38,12 @@ const VERTICAL_DRAG_ANIMATION_SPEED: f64 = 0.3;
 /// faster.
 const HORIZONTAL_DRAG_ANIMATION_SPEED: f64 = 75.;
 
-/// Spacing between windows in the overview, as percentage from overview width.
-const OVERVIEW_SPACING_PERCENTAGE: f64 = 0.75;
-
 /// Maximum amount of overdrag before inputs are ignored.
 const OVERDRAG_LIMIT: f64 = 0.25;
+
+/// Primary percentage below which a minimize action will be considered
+/// successful.
+const MINIMIZE_PERCENTAGE: f64 = 0.1;
 
 /// Overview view state.
 #[derive(Debug)]
@@ -51,20 +52,68 @@ pub struct Overview {
     pub last_drag_point: Point<f64, Logical>,
     pub last_animation_step: Option<Instant>,
     pub drag_action: DragAction,
+    pub primary_percentage: f64,
     pub x_offset: f64,
     pub y_offset: f64,
+    pub opened: bool,
+    pub dirty: bool,
 }
 
 impl Overview {
-    pub fn new(active_offset: f64) -> Self {
+    pub fn new(active_offset: f64, primary_percentage: Option<f64>) -> Self {
+        // Check if opening needs to be animated.
+        let (primary_percentage, opened) = match primary_percentage {
+            Some(primary_percentage) => (primary_percentage, false),
+            None => (PRIMARY_PERCENTAGE, true),
+        };
+
         Self {
+            primary_percentage,
+            opened,
             x_offset: active_offset,
             last_animation_step: Default::default(),
             last_drag_point: Default::default(),
             drag_action: Default::default(),
             hold_timer: Default::default(),
             y_offset: Default::default(),
+            dirty: Default::default(),
         }
+    }
+
+    /// Update interactive opening animation.
+    pub fn set_open_percentage(&mut self, output: &Output, mut position: f64) {
+        // Clamp position to overview bounds.
+        let available = output.available_overview().to_f64();
+        position = position.clamp(available.loc.y, available.loc.y + available.size.h);
+
+        // Calculate percentage of position from the bottom of the overview.
+        let mut delta = 1. - (position - available.loc.y) / available.size.h;
+
+        // Adjust for shrinking both bottom and top.
+        delta *= 2.;
+
+        // Calculate desired primary window percentage.
+        if self.opened {
+            self.primary_percentage = PRIMARY_PERCENTAGE - delta;
+        } else if self.primary_percentage < PRIMARY_PERCENTAGE {
+            let primary_percentage = delta * PRIMARY_PERCENTAGE / (1. - PRIMARY_PERCENTAGE);
+            self.primary_percentage = primary_percentage.min(PRIMARY_PERCENTAGE);
+        } else if self.primary_percentage > PRIMARY_PERCENTAGE {
+            self.primary_percentage = (1. - delta).max(PRIMARY_PERCENTAGE);
+        }
+
+        // Trigger redraw.
+        self.dirty = true;
+    }
+
+    /// Check if gesture was successful.
+    ///
+    /// A return value of `false` indicates that the gesture failed and any
+    /// state changes should be rolled back.
+    pub fn gesture_threshold_passed(&mut self) -> bool {
+        let open_done = !self.opened && self.primary_percentage == PRIMARY_PERCENTAGE;
+        let minimize_done = self.opened && self.primary_percentage <= MINIMIZE_PERCENTAGE;
+        open_done || minimize_done
     }
 
     /// Start timer for D&D touch hold.
@@ -106,7 +155,8 @@ impl Overview {
 
         let mut offset = self.x_offset - 1.;
         while offset < self.x_offset + 2. {
-            let position = OverviewPosition::new(available, self.x_offset, offset);
+            let position =
+                OverviewPosition::new(available, self.primary_percentage, self.x_offset, offset);
             if position.bounds.to_f64().contains(point) {
                 let layout_index = usize::try_from(-offset.round() as isize).ok()?;
                 let layout = layouts.get(layout_index)?;
@@ -201,7 +251,8 @@ impl Overview {
                 },
             };
 
-            let position = OverviewPosition::new(available, self.x_offset, offset);
+            let position =
+                OverviewPosition::new(available, self.primary_percentage, self.x_offset, offset);
 
             // Draw the primary window.
             if let Some(primary) = layout.primary() {
@@ -274,10 +325,11 @@ impl Overview {
         self.x_offset <= min_offset - OVERDRAG_LIMIT || self.x_offset >= OVERDRAG_LIMIT
     }
 
-    /// Check if overview animations are active.
-    pub fn animating(&self, window_count: usize) -> bool {
+    /// Check if overview requires a redraw.
+    pub fn dirty(&self, window_count: usize) -> bool {
         let min_offset = -(window_count as f64) + 1.;
-        self.x_offset > 0.
+        self.dirty
+            || self.x_offset > 0.
             || self.x_offset < min_offset
             || self.y_offset != 0.
             || self.x_offset.fract().abs() > f64::EPSILON
@@ -308,7 +360,12 @@ impl DragAndDrop {
 
         // Calculate layout position in overview.
         let available = canvas.available_overview();
-        let position = OverviewPosition::new(available, overview.x_offset, window_x_offset);
+        let position = OverviewPosition::new(
+            available,
+            PRIMARY_PERCENTAGE,
+            overview.x_offset,
+            window_x_offset,
+        );
 
         // Calculate original position of dragged window.
         let mut start_location = if layout_position.secondary {
@@ -424,6 +481,7 @@ impl OverviewPosition {
     /// Calculate the rectangle for a window in the application overview.
     fn new(
         available_rect: Rectangle<i32, Logical>,
+        primary_percentage: f64,
         center_offset_x: f64,
         window_offset: f64,
     ) -> Self {
@@ -431,14 +489,15 @@ impl OverviewPosition {
         let delta = center_offset_x - window_offset.round();
 
         // Calculate the window's scale.
-        let scale = BG_OVERVIEW_PERCENTAGE
-            + (FG_OVERVIEW_PERCENTAGE - BG_OVERVIEW_PERCENTAGE) * (1. - delta.abs());
+        let secondary_percentage = primary_percentage * SECONDARY_PERCENTAGE;
+        let scale =
+            secondary_percentage + (primary_percentage - secondary_percentage) * (1. - delta.abs());
 
         // Calculate the window's size and position.
         let bounds_size = available_rect.size.scale(scale);
         let bounds_loc = available_rect.loc + available_rect.size.sub(bounds_size).scale(0.5);
         let mut bounds = Rectangle::from_loc_and_size(bounds_loc, bounds_size);
-        bounds.loc.x += (delta * available_rect.size.w as f64 * OVERVIEW_SPACING_PERCENTAGE) as i32;
+        bounds.loc.x += (delta * available_rect.size.w as f64 * primary_percentage) as i32;
 
         Self { bounds, scale }
     }

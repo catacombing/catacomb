@@ -570,6 +570,11 @@ impl Layout {
         let secondary_count = if self.secondary.is_some() { 1 } else { 0 };
         primary_count + secondary_count
     }
+
+    /// Check if the layout contains any windows.
+    pub fn is_empty(&self) -> bool {
+        self.primary.is_none() && self.secondary.is_none()
+    }
 }
 
 /// Unique layout ID.
