@@ -18,7 +18,7 @@ use smithay::backend::egl::context::EGLContext;
 use smithay::backend::egl::display::EGLDisplay;
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::element::RenderElementStates;
-use smithay::backend::renderer::gles::{ffi, GlesRenderbuffer, GlesRenderer};
+use smithay::backend::renderer::gles::{ffi, Capability, GlesRenderbuffer, GlesRenderer};
 use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::{
     self, utils, Bind, BufferType, Frame, ImportEgl, Offscreen, Renderer,
@@ -340,7 +340,14 @@ impl Udev {
         let display = EGLDisplay::new(gbm.clone())?;
         let context = EGLContext::new(&display)?;
 
-        let mut gles = unsafe { GlesRenderer::new(context).expect("create renderer") };
+        let mut gles = unsafe {
+            // Filter driver capabilities that reduce performance.
+            let mut capabilities =
+                GlesRenderer::supported_capabilities(&context).expect("gl capabilities");
+            capabilities.retain(|capability| capability != &Capability::ColorTransformations);
+
+            GlesRenderer::with_capabilities(context, capabilities).expect("create renderer")
+        };
 
         // Initialize GPU for EGL rendering.
         if Some(path) == self.gpu {
