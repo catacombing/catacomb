@@ -19,6 +19,7 @@ use smithay::backend::egl::display::EGLDisplay;
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::element::RenderElementStates;
 use smithay::backend::renderer::gles::{ffi, GlesRenderbuffer, GlesRenderer};
+use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::{
     self, utils, Bind, BufferType, Frame, ImportEgl, Offscreen, Renderer,
 };
@@ -28,8 +29,11 @@ use smithay::backend::udev;
 use smithay::backend::udev::{UdevBackend, UdevEvent};
 use smithay::output::{Mode, PhysicalProperties, Subpixel};
 use smithay::reexports::calloop::channel::Event as ChannelEvent;
+use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
-use smithay::reexports::calloop::{Dispatcher, EventLoop, LoopHandle, RegistrationToken};
+use smithay::reexports::calloop::{
+    Dispatcher, EventLoop, Interest, LoopHandle, Mode as TriggerMode, PostAction, RegistrationToken,
+};
 use smithay::reexports::drm::control::connector::State as ConnectorState;
 use smithay::reexports::drm::control::property::{
     Handle as PropertyHandle, Value as PropertyValue,
@@ -261,7 +265,7 @@ impl Udev {
             None => return false,
         };
 
-        match output_device.render(windows) {
+        match output_device.render(&self.event_loop, windows) {
             Ok(rendered) => rendered,
             Err(err) => {
                 error!("{err}");
@@ -552,7 +556,11 @@ impl OutputDevice {
     /// Render a frame.
     ///
     /// Will return `true` if something was rendered.
-    fn render(&mut self, windows: &mut Windows) -> Result<bool, Box<dyn Error>> {
+    fn render(
+        &mut self,
+        event_loop: &LoopHandle<'static, Catacomb>,
+        windows: &mut Windows,
+    ) -> Result<bool, Box<dyn Error>> {
         let scale = windows.output().scale();
 
         let textures = windows.textures(&mut self.gles, &mut self.graphics);
@@ -574,8 +582,8 @@ impl OutputDevice {
             screencopy.damage(&damage);
 
             let buffer = screencopy.buffer();
-            if let Ok(dmabuf) = dmabuf::get_dmabuf(buffer) {
-                Self::copy_framebuffer_dma(&mut self.gles, scale, &frame_result, region, dmabuf)?;
+            let sync_point = if let Ok(dmabuf) = dmabuf::get_dmabuf(buffer) {
+                Self::copy_framebuffer_dma(&mut self.gles, scale, &frame_result, region, dmabuf)?
             } else {
                 // Ignore unknown buffer types.
                 let buffer_type = renderer::buffer_type(buffer);
@@ -583,11 +591,22 @@ impl OutputDevice {
                     return Err(format!("unsupported buffer format: {buffer_type:?}").into());
                 }
 
-                self.copy_framebuffer_shm(windows, region, buffer)?;
-            }
+                self.copy_framebuffer_shm(windows, region, buffer)?
+            };
 
-            // Mark screencopy frame as successful.
-            screencopy.submit();
+            // Wait for OpenGL sync to submit screencopy, frame.
+            match sync_point.export() {
+                Some(sync_fd) => {
+                    // Wait for fence to be done.
+                    let mut screencopy = Some(screencopy);
+                    let source = Generic::new(sync_fd, Interest::READ, TriggerMode::OneShot);
+                    let _ = event_loop.insert_source(source, move |_, _, _| {
+                        screencopy.take().unwrap().submit();
+                        Ok(PostAction::Remove)
+                    });
+                },
+                None => screencopy.submit(),
+            }
         }
 
         // Skip frame submission if everything used direct scanout.
@@ -605,15 +624,22 @@ impl OutputDevice {
         frame_result: &RenderFrameResult<GbmBuffer<()>, GbmFramebuffer, CatacombElement>,
         region: Rectangle<i32, Physical>,
         buffer: Dmabuf,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<SyncPoint, Box<dyn Error>> {
         // Bind the screencopy buffer as render target.
         gles.bind(buffer)?;
 
         // Blit the framebuffer into the target buffer.
         let damage = [Rectangle::from_loc_and_size((0, 0), region.size)];
-        frame_result.blit_frame_result(region.size, Transform::Normal, scale, gles, damage, [])?;
+        let sync_point = frame_result.blit_frame_result(
+            region.size,
+            Transform::Normal,
+            scale,
+            gles,
+            damage,
+            [],
+        )?;
 
-        Ok(())
+        Ok(sync_point)
     }
 
     /// Copy a region of the framebuffer to an SHM buffer.
@@ -622,7 +648,7 @@ impl OutputDevice {
         windows: &mut Windows,
         region: Rectangle<i32, Physical>,
         buffer: &WlBuffer,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<SyncPoint, Box<dyn Error>> {
         // Create and bind an offscreen render buffer.
         let buffer_dimensions = renderer::buffer_dimensions(buffer).unwrap();
         let offscreen_buffer: GlesRenderbuffer =
@@ -648,7 +674,7 @@ impl OutputDevice {
         utils::draw_render_elements(&mut frame, scale, textures, &[damage])?;
 
         // Ensure rendering was fully completed.
-        frame.finish()?;
+        let sync_point = frame.finish()?;
 
         // Copy offscreen buffer's content to the SHM buffer.
         shm::with_buffer_contents_mut(buffer, |shm_buffer, shm_len, buffer_data| {
@@ -658,7 +684,7 @@ impl OutputDevice {
                 || buffer_data.height != region.size.h
                 || shm_len as i32 != buffer_data.stride * buffer_data.height
             {
-                return Err::<(), Box<dyn Error>>("Invalid buffer format".into());
+                return Err::<_, Box<dyn Error>>("Invalid buffer format".into());
             }
 
             // Copy framebuffer data to the SHM buffer.
@@ -683,7 +709,7 @@ impl OutputDevice {
                 }
             }
 
-            Ok(())
+            Ok(sync_point)
         })?
     }
 
