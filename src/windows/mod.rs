@@ -754,18 +754,16 @@ impl Windows {
         }
 
         match &self.view {
-            // Check only fullscreened and overlay shell windows in fullscreen view.
-            View::Fullscreen(window) => {
-                window.borrow().dirty() || self.layers.overlay().any(Window::dirty)
-            },
-            // Redraw when overview is dirty.
-            View::Overview(overview) if overview.dirty(self.layouts.len()) => true,
-            View::Lock(Some(window)) => window.dirty(),
-            // Check all windows for damage outside of fullscreen.
-            _ => {
+            View::Workspace => {
                 self.layouts.windows().any(|window| window.dirty())
                     || self.layers.iter().any(Window::dirty)
             },
+            View::Fullscreen(window) => {
+                window.borrow().dirty() || self.layers.overlay().any(Window::dirty)
+            },
+            View::Lock(window) => window.as_ref().map_or(false, |window| window.dirty()),
+            View::Overview(overview) => overview.dirty(self.layouts.len()),
+            View::DragAndDrop(_) => false,
         }
     }
 

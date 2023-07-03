@@ -232,6 +232,9 @@ impl Overview {
         canvas: &Canvas,
         layouts: &Layouts,
     ) {
+        // Reset redraw flag.
+        self.dirty = false;
+
         let layout_count = layouts.len() as i32;
         self.clamp_offset(canvas, layout_count);
 
@@ -331,8 +334,8 @@ impl Overview {
         self.dirty
             || self.x_offset > 0.
             || self.x_offset < min_offset
-            || self.y_offset != 0.
             || self.x_offset.fract().abs() > f64::EPSILON
+            || self.y_offset != 0.
     }
 }
 
