@@ -322,12 +322,6 @@ impl<S: Surface + 'static> Window<S> {
         );
     }
 
-    /// Check whether there is a new buffer pending with an updated geometry
-    /// size.
-    pub fn pending_buffer_resize(&self) -> bool {
-        self.size != self.texture_cache.requested_size
-    }
-
     /// Mark all rendered clients as presented for `wp_presentation`.
     pub fn mark_presented(
         &mut self,

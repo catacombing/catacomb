@@ -304,12 +304,8 @@ impl Windows {
     /// Import pending buffers for all windows.
     pub fn import_buffers(&mut self, renderer: &mut GlesRenderer) {
         // Import XDG windows/popups.
-        let overview_active = matches!(self.view, View::Overview(_) | View::DragAndDrop(_));
         for mut window in self.layouts.windows_mut() {
-            // Ignore overview updates unless buffer size changed because of rotation.
-            if !overview_active || window.pending_buffer_resize() {
-                window.import_buffers(renderer);
-            }
+            window.import_buffers(renderer);
         }
 
         // Import layer shell windows.
@@ -754,7 +750,8 @@ impl Windows {
         }
 
         match &self.view {
-            View::Workspace => {
+            View::Overview(overview) if overview.dirty(self.layouts.len()) => true,
+            View::Workspace | View::Overview(_) => {
                 self.layouts.windows().any(|window| window.dirty())
                     || self.layers.iter().any(Window::dirty)
             },
@@ -762,7 +759,6 @@ impl Windows {
                 window.borrow().dirty() || self.layers.overlay().any(Window::dirty)
             },
             View::Lock(window) => window.as_ref().map_or(false, |window| window.dirty()),
-            View::Overview(overview) => overview.dirty(self.layouts.len()),
             View::DragAndDrop(_) => false,
         }
     }
