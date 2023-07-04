@@ -10,6 +10,7 @@ use std::fmt::{self, Display, Formatter};
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+#[cfg(feature = "clap")]
 use std::str::FromStr;
 use std::{env, process};
 
@@ -23,7 +24,9 @@ use serde::{Deserialize, Serialize};
 use smithay::input::keyboard::ModifiersState;
 #[cfg(feature = "smithay")]
 use smithay::utils::{Logical, Point, Size, Transform};
-use xkbcommon::xkb::{self, Keysym};
+#[cfg(feature = "clap")]
+use xkbcommon::xkb;
+use xkbcommon::xkb::Keysym;
 
 /// IPC message format.
 #[cfg_attr(feature = "clap", derive(Subcommand))]
@@ -223,6 +226,7 @@ impl WindowScale {
     }
 }
 
+#[cfg(feature = "clap")]
 impl FromStr for WindowScale {
     type Err = ClapError;
 
@@ -321,6 +325,7 @@ impl From<&ModifiersState> for Modifiers {
     }
 }
 
+#[cfg(feature = "clap")]
 impl FromStr for Modifiers {
     type Err = ClapError;
 
@@ -354,6 +359,7 @@ impl FromStr for Modifiers {
 #[derive(Deserialize, Serialize, Copy, Clone, Debug)]
 pub struct ClapKeysym(pub Keysym);
 
+#[cfg(feature = "clap")]
 impl FromStr for ClapKeysym {
     type Err = ClapError;
 
