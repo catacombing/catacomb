@@ -263,10 +263,20 @@ impl Overview {
                 let mut bounds = position.bounds;
                 self.handle_closing(output, canvas, layouts, primary, &mut bounds, true);
 
+                // Add internal offset to window bounds.
                 let primary = primary.borrow();
                 let scale = position.scale;
-                let loc = bounds.loc + primary.internal_offset(canvas.scale()).scale(scale);
-                primary.textures(textures, canvas.scale(), scale, loc);
+                bounds.loc += primary.internal_offset(canvas.scale()).scale(scale);
+
+                // Get window textures within its overview bounds.
+                let physical_bounds = bounds.to_physical_precise_round(canvas.scale());
+                primary.textures_with_bounds(
+                    textures,
+                    canvas.scale(),
+                    scale,
+                    bounds.loc,
+                    physical_bounds,
+                );
             }
 
             // Draw the secondary window.
@@ -275,10 +285,20 @@ impl Overview {
                 let mut bounds = position.secondary_bounds();
                 self.handle_closing(output, canvas, layouts, secondary, &mut bounds, false);
 
+                // Add internal offset to window bounds.
                 let secondary = secondary.borrow();
                 let scale = position.scale;
-                let loc = bounds.loc + secondary.internal_offset(canvas.scale()).scale(scale);
-                secondary.textures(textures, canvas.scale(), scale, loc);
+                bounds.loc += secondary.internal_offset(canvas.scale()).scale(scale);
+
+                // Get window textures within its overview bounds.
+                let physical_bounds = bounds.to_physical_precise_round(canvas.scale());
+                secondary.textures_with_bounds(
+                    textures,
+                    canvas.scale(),
+                    scale,
+                    bounds.loc,
+                    physical_bounds,
+                );
             }
 
             offset += 1.;

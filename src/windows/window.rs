@@ -151,14 +151,14 @@ impl<S: Surface + 'static> Window<S> {
         window_scale: impl Into<Option<f64>>,
         location: impl Into<Option<Point<i32, Logical>>>,
     ) {
-        self.textures_internal(textures, output_scale, window_scale, location, None);
+        self.textures_with_bounds(textures, output_scale, window_scale, location, None);
     }
 
     /// Internal method for getting render textures.
     ///
     /// This ensures both toplevels and their popup children are clamped to the
     /// toplevel's target geometry.
-    fn textures_internal(
+    pub fn textures_with_bounds(
         &self,
         textures: &mut Vec<CatacombElement>,
         output_scale: f64,
@@ -180,7 +180,7 @@ impl<S: Surface + 'static> Window<S> {
         for popup in self.popups.iter().rev() {
             let popup_location = location + popup.bounds(output_scale).loc.scale(window_scale);
 
-            popup.textures_internal(
+            popup.textures_with_bounds(
                 textures,
                 output_scale,
                 window_scale,
