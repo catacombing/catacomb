@@ -13,6 +13,7 @@ use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::ImportDma;
 use smithay::input::keyboard::XkbConfig;
 use smithay::input::{Seat, SeatHandler, SeatState};
+use smithay::reexports::calloop::channel::Event as ChannelEvent;
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::signals::{Signal, Signals};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
@@ -62,8 +63,10 @@ use smithay::{
     delegate_xdg_shell,
 };
 use tracing::{error, info};
+use zbus::zvariant::OwnedFd;
 
 use crate::config::KeyBinding;
+use crate::dbus::{self, DBusEvent};
 use crate::drawing::CatacombSurfaceData;
 use crate::input::{PhysicalButtonState, TouchState};
 use crate::orientation::{Accelerometer, AccelerometerSource};
@@ -78,8 +81,7 @@ use crate::vibrate::Vibrator;
 use crate::windows::surface::Surface;
 use crate::windows::Windows;
 use crate::{
-    dbus, delegate_idle_inhibit, delegate_screencopy, delegate_session_lock, ipc_server,
-    trace_error,
+    delegate_idle_inhibit, delegate_screencopy, delegate_session_lock, ipc_server, trace_error,
 };
 
 /// Duration until suspend after screen is turned off.
@@ -124,6 +126,7 @@ pub struct Catacomb {
     idle_inhibitors: Vec<WlSurface>,
     last_focus: Option<WlSurface>,
     locker: Option<SessionLocker>,
+    _power_inhibitor: Option<OwnedFd>,
 
     // Indicates if rendering was intentionally stalled.
     //
@@ -246,6 +249,9 @@ impl Catacomb {
         // Start IPC socket listener.
         ipc_server::spawn_ipc_socket(&event_loop, &socket_name).expect("spawn IPC socket");
 
+        // Create window manager.
+        let windows = Windows::new(&display_handle, event_loop.clone());
+
         // Run user startup script.
         if let Some(mut script_path) = dirs::config_dir() {
             script_path.push("catacomb");
@@ -256,8 +262,28 @@ impl Catacomb {
             }
         }
 
-        // Create window manager.
-        let windows = Windows::new(&display_handle, event_loop.clone());
+        // Handle DBus events.
+        match dbus::dbus_listen() {
+            Ok(dbus_rx) => {
+                event_loop
+                    .insert_source(dbus_rx, |event, _, catacomb| match event {
+                        ChannelEvent::Msg(DBusEvent::Unsuspend) => catacomb.resume(),
+                        ChannelEvent::Closed => (),
+                    })
+                    .expect("insert dbus source");
+            },
+            Err(err) => error!("DBus signal listener creation failed: {err}"),
+        }
+
+        // Prevent shutdown on power button press.
+        let power_inhibitor =
+            match dbus::inhibit("handle-power-key", "Catacomb", "Managed by Catacomb", "block") {
+                Ok(power_inhibitor) => Some(power_inhibitor),
+                Err(err) => {
+                    error!("Could not block power button: {err}");
+                    None
+                },
+            };
 
         let mut catacomb = Self {
             kde_decoration_state,
@@ -278,6 +304,7 @@ impl Catacomb {
             backend,
             seat,
             display: Rc::new(RefCell::new(display)),
+            _power_inhibitor: power_inhibitor,
             accelerometer_token: accel_token,
             last_resume: Instant::now(),
             idle_inhibitors: Default::default(),

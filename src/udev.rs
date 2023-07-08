@@ -28,7 +28,6 @@ use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev;
 use smithay::backend::udev::{UdevBackend, UdevEvent};
 use smithay::output::{Mode, PhysicalProperties, Subpixel};
-use smithay::reexports::calloop::channel::Event as ChannelEvent;
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{
@@ -52,7 +51,6 @@ use smithay::wayland::{dmabuf, shm};
 use tracing::{debug, error};
 
 use crate::catacomb::Catacomb;
-use crate::dbus::{self, DBusEvent};
 use crate::drawing::{CatacombElement, Graphics};
 use crate::output::Output;
 use crate::protocols::screencopy::frame::Screencopy;
@@ -112,20 +110,6 @@ pub fn run() {
             UdevEvent::Removed { device_id } => catacomb.backend.remove_device(device_id),
         })
         .expect("insert udev source");
-
-    // Handle DBus events.
-    match dbus::dbus_listen() {
-        Ok(dbus_rx) => {
-            event_loop
-                .handle()
-                .insert_source(dbus_rx, |event, _, catacomb| match event {
-                    ChannelEvent::Msg(DBusEvent::Unsuspend) => catacomb.resume(),
-                    ChannelEvent::Closed => (),
-                })
-                .expect("insert dbus source");
-        },
-        Err(err) => error!("DBus signal listener creation failed: {err}"),
-    }
 
     // Continously dispatch event loop.
     while !catacomb.terminated {

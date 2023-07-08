@@ -22,9 +22,14 @@ system, the following polkit rule can be added:
 > /etc/polkit-1/rules.d/20-logind.rules
 
 ```
-// Allow wheel users to suspend.
 polkit.addRule(function(action, subject) {
+    // Allow wheel users to suspend.
     if (action.id == "org.freedesktop.login1.suspend" && subject.isInGroup("wheel")) {
+        return "yes";
+    }
+
+    // Allow wheel users to block power button handling.
+    if (action.id == "org.freedesktop.login1.inhibit-handle-power-key" && subject.isInGroup("wheel")) {
         return "yes";
     }
 });
