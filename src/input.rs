@@ -7,7 +7,7 @@ use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Event, InputBackend, InputEvent, KeyState,
     KeyboardKeyEvent, MouseButton, PointerButtonEvent, TouchEvent as _, TouchSlot,
 };
-use smithay::input::keyboard::{keysyms, FilterResult, Keysym};
+use smithay::input::keyboard::{keysyms, FilterResult, Keysym, KeysymHandle, ModifiersState};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
@@ -622,67 +622,79 @@ impl Catacomb {
         };
         let serial = SERIAL_COUNTER.next_serial();
         let time = Event::time(event) as u32;
-        let keycode = event.key_code();
+        let code = event.key_code();
         let state = event.state();
 
-        keyboard.input(self, keycode, state, serial, time, |catacomb, mods, keysym| {
-            match (keysym.modified_sym(), state) {
-                (keysym @ keysyms::KEY_XF86Switch_VT_1..=keysyms::KEY_XF86Switch_VT_12, _) => {
-                    let vt = (keysym - keysyms::KEY_XF86Switch_VT_1 + 1) as i32;
-                    catacomb.backend.change_vt(vt);
-                },
-                // Filter power buttons pressed during suspend.
-                (keysyms::KEY_XF86PowerOff, _)
-                    if catacomb.last_resume.elapsed() <= RESUME_INHIBIT_DURATION => {},
-                (keysyms::KEY_XF86PowerOff, KeyState::Pressed) => {
-                    let id = catacomb.button_state.next_id();
-                    catacomb.button_state.power = Some(id);
+        // Get desired action for this key.
+        let action = keyboard.input(self, code, state, serial, time, |catacomb, mods, keysym| {
+            Self::keyboard_action(catacomb, mods, keysym, state)
+        });
 
-                    // Open drawer if button is still held after timeout.
+        // Dispatch input action.
+        //
+        // This needs to be handled separately since a lock is held across the
+        // `keyboard.input` closure blocking `KeyboardHandle::set_focus`.
+        match action {
+            Some(InputAction::ChangeVt(vt)) => self.backend.change_vt(vt),
+            Some(InputAction::ToggleSleep) => self.toggle_sleep(),
+            Some(InputAction::PowerDown(id)) => {
+                self.button_state.power = Some(id);
+
+                // Open drawer if button is held after timeout while the screen is on.
+                if !self.sleeping {
                     let timer = Timer::from_duration(BUTTON_HOLD_DURATION);
-                    catacomb
-                        .event_loop
+                    self.event_loop
                         .insert_source(timer, move |_, _, catacomb| {
-                            // Ignore timer if button was released or session lock is active.
-                            if catacomb.button_state.power != Some(id) || catacomb.windows.locked()
-                            {
-                                return TimeoutAction::Drop;
-                            }
-
-                            // Reset button state.
-                            catacomb.button_state.power = None;
-
-                            // Always press rumble, to prevent accidental shutdown.
-                            catacomb.vibrator.vibrate(100, 0, 1);
-
-                            // Execute user bindings for `XF86PowerOff`.
-                            let mods = Modifiers::default();
-                            Self::handle_user_binding(catacomb, mods, keysyms::KEY_XF86PowerOff);
-
-                            TimeoutAction::Drop
+                            Self::handle_power_hold(catacomb, id)
                         })
                         .expect("insert power button timer");
-                },
-                (keysyms::KEY_XF86PowerOff, KeyState::Released) => {
-                    // Toggle screen DPMS status on short press.
-                    if catacomb.button_state.power.take().is_some() {
-                        catacomb.toggle_sleep();
-                    }
-                },
-                (_, KeyState::Released) => {
-                    // Get raw keysym.
-                    let raw_keysym = keysym.raw_syms();
-                    if raw_keysym.len() != 1 {
-                        return FilterResult::Forward;
-                    }
+                }
+            },
+            _ => (),
+        }
+    }
 
-                    return Self::handle_user_binding(catacomb, mods, raw_keysym[0]);
-                },
-                _ => return FilterResult::Forward,
-            }
-
-            FilterResult::Intercept(())
-        });
+    /// Get keyboard action for a keysym.
+    fn keyboard_action(
+        catacomb: &mut Catacomb,
+        mods: &ModifiersState,
+        keysym: KeysymHandle,
+        state: KeyState,
+    ) -> FilterResult<InputAction> {
+        match (keysym.modified_sym(), state) {
+            (keysym @ keysyms::KEY_XF86Switch_VT_1..=keysyms::KEY_XF86Switch_VT_12, _) => {
+                let vt = (keysym - keysyms::KEY_XF86Switch_VT_1 + 1) as i32;
+                InputAction::ChangeVt(vt).into()
+            },
+            // Filter power buttons pressed during suspend.
+            (keysyms::KEY_XF86PowerOff, _)
+                if catacomb.last_resume.elapsed() <= RESUME_INHIBIT_DURATION =>
+            {
+                InputAction::None.into()
+            },
+            (keysyms::KEY_XF86PowerOff, KeyState::Pressed) => {
+                let id = catacomb.button_state.next_id();
+                InputAction::PowerDown(id).into()
+            },
+            (keysyms::KEY_XF86PowerOff, KeyState::Released) => {
+                // Toggle screen DPMS status on short press.
+                if catacomb.button_state.power.take().is_some() {
+                    InputAction::ToggleSleep.into()
+                } else {
+                    InputAction::None.into()
+                }
+            },
+            (_, KeyState::Released) => {
+                // Get raw keysym.
+                let raw_keysym = keysym.raw_syms();
+                if raw_keysym.len() != 1 {
+                    FilterResult::Forward
+                } else {
+                    Self::handle_user_binding(catacomb, mods, raw_keysym[0])
+                }
+            },
+            _ => FilterResult::Forward,
+        }
     }
 
     /// Handle user-defined key bindings.
@@ -690,7 +702,7 @@ impl Catacomb {
         catacomb: &mut Catacomb,
         mods: impl Into<Modifiers>,
         raw_keysym: Keysym,
-    ) -> FilterResult<()> {
+    ) -> FilterResult<InputAction> {
         let mods = mods.into();
 
         // Get currently focused app.
@@ -711,7 +723,7 @@ impl Catacomb {
                 }
 
                 // Prevent key propagation.
-                filter_result = FilterResult::Intercept(());
+                filter_result = InputAction::None.into();
             }
         }
 
@@ -737,5 +749,39 @@ impl Catacomb {
         };
 
         (x, y).into()
+    }
+
+    /// Handle long-press of power button.
+    fn handle_power_hold(catacomb: &mut Catacomb, button_id: usize) -> TimeoutAction {
+        // Ignore timer if button was released or session lock is active.
+        if catacomb.button_state.power != Some(button_id) || catacomb.windows.locked() {
+            return TimeoutAction::Drop;
+        }
+
+        // Reset button state.
+        catacomb.button_state.power = None;
+
+        // Always press rumble, to prevent accidental shutdown.
+        catacomb.vibrator.vibrate(100, 0, 1);
+
+        // Execute user bindings for `XF86PowerOff`.
+        let mods = Modifiers::default();
+        Self::handle_user_binding(catacomb, mods, keysyms::KEY_XF86PowerOff);
+
+        TimeoutAction::Drop
+    }
+}
+
+/// Actions to be taken on keyboard input.
+enum InputAction {
+    PowerDown(usize),
+    ChangeVt(i32),
+    ToggleSleep,
+    None,
+}
+
+impl From<InputAction> for FilterResult<InputAction> {
+    fn from(action: InputAction) -> Self {
+        FilterResult::Intercept(action)
     }
 }
