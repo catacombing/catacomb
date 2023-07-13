@@ -498,11 +498,12 @@ impl Catacomb {
 
     /// Handle touch input movement.
     fn on_touch_motion(&mut self, event: TouchEvent) {
-        // Notify client.
+        // Handle client input.
         if let Some(input_surface) = &self.touch_state.input_surface {
             let scale = self.windows.output().scale();
             let position = input_surface.local_position(scale, event.position);
             self.touch_state.touch.motion(event.time, event.slot, position);
+            return;
         }
 
         // Ignore anything but the active touch slot.
