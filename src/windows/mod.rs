@@ -334,13 +334,13 @@ impl Windows {
         // Draw gesture handle when not in fullscreen/lock view.
         if !matches!(self.view, View::Fullscreen(_) | View::Lock(_)) {
             // Get texture for gesture handle.
-            let gesture_handle = graphics.gesture_handle(renderer, &self.output);
+            let gesture_handle = graphics.gesture_handle(renderer, &self.canvas);
 
             // Calculate gesture handle bounds.
             let mut bounds = gesture_handle.geometry(scale.into());
 
             // Calculate position for gesture handle.
-            let output_height = self.output.physical_size().h;
+            let output_height = self.canvas.physical_size().h;
             let handle_location = (0, output_height - bounds.size.h);
             bounds.loc = handle_location.into();
 
@@ -1092,6 +1092,14 @@ impl Windows {
     pub fn set_output(&mut self, output: Output) {
         self.canvas = *output.canvas();
         self.output = output;
+    }
+
+    /// Get access to the current canvas.
+    ///
+    /// This is different from [`Self::output`] by returning a cached output
+    /// while transactions are processed.
+    pub fn canvas(&self) -> &Canvas {
+        &self.canvas
     }
 
     /// Update the output's scale.

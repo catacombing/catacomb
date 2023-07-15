@@ -27,7 +27,7 @@ use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev;
 use smithay::backend::udev::{UdevBackend, UdevEvent};
-use smithay::output::{Mode, PhysicalProperties, Subpixel};
+use smithay::output::{Mode, OutputModeSource, PhysicalProperties, Subpixel};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{
@@ -484,8 +484,9 @@ impl Udev {
         }));
 
         // Create the compositor.
+        let output_mode_source: OutputModeSource = windows.canvas().into();
         DrmCompositor::new(
-            windows.output().smithay_output(),
+            output_mode_source,
             surface,
             None,
             allocator,
@@ -553,6 +554,9 @@ impl OutputDevice {
         windows: &mut Windows,
     ) -> Result<bool, Box<dyn Error>> {
         let scale = windows.output().scale();
+
+        // Update output mode since we're using static for transforms.
+        self.drm_compositor.set_output_mode_source(windows.canvas().into());
 
         let textures = windows.textures(&mut self.gles, &mut self.graphics);
         let mut frame_result = self.drm_compositor.render_frame::<_, _, GlesRenderbuffer>(

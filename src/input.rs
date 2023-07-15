@@ -18,7 +18,7 @@ use crate::catacomb::Catacomb;
 use crate::config::GestureBinding;
 use crate::daemon;
 use crate::orientation::Orientation;
-use crate::output::{Output, GESTURE_HANDLE_HEIGHT};
+use crate::output::{Canvas, GESTURE_HANDLE_HEIGHT};
 use crate::windows::surface::{InputSurface, InputSurfaceKind};
 
 /// Time before a tap is considered a hold.
@@ -87,10 +87,10 @@ impl TouchState {
     }
 
     /// Start a new touch session.
-    fn start(&mut self, output: &Output, position: Point<f64, Logical>) {
+    fn start(&mut self, canvas: &Canvas, position: Point<f64, Logical>) {
         self.cancel_velocity();
 
-        self.start = TouchStart::new(output, position);
+        self.start = TouchStart::new(canvas, position);
         self.position = position;
         self.is_drag = false;
     }
@@ -107,7 +107,7 @@ impl TouchState {
     }
 
     /// Get the updated active touch action.
-    fn action(&mut self, output: &Output) -> Option<TouchAction> {
+    fn action(&mut self, canvas: &Canvas) -> Option<TouchAction> {
         // Process handle gestures even before completion.
         if self.start.is_handle_gesture {
             // Continue gesture if direction is locked in already.
@@ -123,7 +123,7 @@ impl TouchState {
             }
 
             // Lock in direction once threshold was passed.
-            let gesture = HandleGesture::from_points(output, self.start.position, self.position);
+            let gesture = HandleGesture::from_points(canvas, self.start.position, self.position);
             if let Some(gesture) = gesture {
                 self.start.handle_direction = Some(HandleDirection::from(&gesture));
                 return Some(gesture.into());
@@ -137,7 +137,7 @@ impl TouchState {
             let app_id = self.active_app_id.as_ref();
             let start = self.start.position;
             let end = Some(self.position);
-            let mut gestures = self.matching_gestures(output, app_id, start, end);
+            let mut gestures = self.matching_gestures(canvas, app_id, start, end);
 
             if let Some(gesture) = gestures.next() {
                 return Some(TouchAction::UserGesture((
@@ -163,14 +163,14 @@ impl TouchState {
     /// Find gestures matching an origin point.
     fn matching_gestures<'a>(
         &'a self,
-        output: &'a Output,
+        canvas: &'a Canvas,
         app_id: Option<&'a String>,
         start: Point<f64, Logical>,
         end: Option<Point<f64, Logical>>,
     ) -> impl Iterator<Item = &'a GestureBinding> {
-        let output_size = output.size().to_f64();
-        let start_sector = GestureSector::from_point(output_size, start);
-        let end_sector = end.map(|end| GestureSector::from_point(output_size, end));
+        let canvas_size = canvas.size().to_f64();
+        let start_sector = GestureSector::from_point(canvas_size, start);
+        let end_sector = end.map(|end| GestureSector::from_point(canvas_size, end));
 
         self.user_gestures.iter().filter(move |gesture| {
             gesture.start == start_sector
@@ -200,10 +200,10 @@ impl Default for TouchStart {
 }
 
 impl TouchStart {
-    fn new(output: &Output, position: Point<f64, Logical>) -> Self {
+    fn new(canvas: &Canvas, position: Point<f64, Logical>) -> Self {
         Self {
             position,
-            is_handle_gesture: HandleGesture::is_start(output, position),
+            is_handle_gesture: HandleGesture::is_start(canvas, position),
             time: Instant::now(),
             handle_direction: Default::default(),
         }
@@ -239,7 +239,7 @@ impl HandleGesture {
     ///
     /// This function assumes that the start is within the gesture handle.
     fn from_points(
-        output: &Output,
+        canvas: &Canvas,
         start: Point<f64, Logical>,
         end: Point<f64, Logical>,
     ) -> Option<Self> {
@@ -252,7 +252,7 @@ impl HandleGesture {
 
         if delta.y.abs() >= delta.x.abs() {
             Some(HandleGesture::Vertical(end.y))
-        } else if Self::is_start(output, end) {
+        } else if Self::is_start(canvas, end) {
             Some(HandleGesture::Horizontal(delta.x))
         } else {
             None
@@ -260,10 +260,10 @@ impl HandleGesture {
     }
 
     /// Check if a touch should start a new gesture.
-    fn is_start(output: &Output, position: Point<f64, Logical>) -> bool {
-        let output_size = output.size().to_f64();
-        let loc = (0., output_size.h - GESTURE_HANDLE_HEIGHT as f64);
-        Rectangle::from_loc_and_size(loc, output_size).contains(position)
+    fn is_start(canvas: &Canvas, position: Point<f64, Logical>) -> bool {
+        let canvas_size = canvas.size().to_f64();
+        let loc = (0., canvas_size.h - GESTURE_HANDLE_HEIGHT as f64);
+        Rectangle::from_loc_and_size(loc, canvas_size).contains(position)
     }
 }
 
@@ -417,7 +417,7 @@ impl Catacomb {
                 // Check if a user gesture is triggered by this touch event.
                 let gesture_active = self
                     .touch_state
-                    .matching_gestures(self.windows.output(), app_id.as_ref(), event.position, None)
+                    .matching_gestures(self.windows.canvas(), app_id.as_ref(), event.position, None)
                     .next()
                     .is_some();
                 self.touch_state.active_app_id = app_id;
@@ -436,7 +436,7 @@ impl Catacomb {
                     }
 
                     // Calculate surface-local touch position.
-                    let scale = self.windows.output().scale();
+                    let scale = self.windows.canvas().scale();
                     let position = input_surface.local_position(scale, event.position);
 
                     // Send touch event to the client.
@@ -462,7 +462,7 @@ impl Catacomb {
         self.touch_state.slot = Some(slot);
 
         // Initialize the touch state.
-        self.touch_state.start(self.windows.output(), position);
+        self.touch_state.start(self.windows.canvas(), position);
 
         // Only send touch start if there's no handle gesture in progress.
         if !self.touch_state.start.is_handle_gesture {
@@ -482,7 +482,7 @@ impl Catacomb {
         }
         self.touch_state.slot = None;
 
-        match self.touch_state.action(self.windows.output()) {
+        match self.touch_state.action(self.windows.canvas()) {
             Some(TouchAction::Tap) => {
                 self.windows.on_tap(self.touch_state.position);
             },
@@ -500,7 +500,7 @@ impl Catacomb {
     fn on_touch_motion(&mut self, event: TouchEvent) {
         // Handle client input.
         if let Some(input_surface) = &self.touch_state.input_surface {
-            let scale = self.windows.output().scale();
+            let scale = self.windows.canvas().scale();
             let position = input_surface.local_position(scale, event.position);
             self.touch_state.touch.motion(event.time, event.slot, position);
             return;
@@ -521,7 +521,7 @@ impl Catacomb {
     /// them instead of creating a loop which continuously triggers these
     /// actions.
     fn update_position(&mut self, position: Point<f64, Logical>) {
-        match self.touch_state.action(self.windows.output()) {
+        match self.touch_state.action(self.windows.canvas()) {
             Some(TouchAction::Drag) => {
                 self.windows.on_drag(&mut self.touch_state, position);
 
@@ -571,9 +571,10 @@ impl Catacomb {
         //
         // The animations are designed for 60FPS, but should still behave properly for
         // other refresh rates.
+        let frame_interval = self.windows.output().frame_interval();
         let velocity = &mut self.touch_state.velocity;
         let position = &mut self.touch_state.position;
-        let animation_speed = self.windows.output().frame_interval().as_millis() as f64 / 16.;
+        let animation_speed = frame_interval.as_millis() as f64 / 16.;
         velocity.x -= velocity.x.signum()
             * (velocity.x.abs() * FRICTION * animation_speed + 1.).min(velocity.x.abs());
         velocity.y -= velocity.y.signum()
@@ -589,7 +590,7 @@ impl Catacomb {
 
         // Schedule another velocity tick.
         if self.touch_state.has_velocity() {
-            TimeoutAction::ToDuration(self.windows.output().frame_interval())
+            TimeoutAction::ToDuration(frame_interval)
         } else {
             TimeoutAction::Drop
         }
@@ -737,12 +738,13 @@ impl Catacomb {
         E: AbsolutePositionEvent<I>,
         I: InputBackend,
     {
-        let screen_size = self.windows.output().resolution();
+        let canvas = self.windows.canvas();
+        let screen_size = canvas.resolution();
         let (mut x, mut y) = event.position_transformed(screen_size).into();
         let (width, height) = screen_size.to_f64().into();
 
         // Transform X/Y according to output rotation.
-        (x, y) = match self.windows.output().orientation() {
+        (x, y) = match canvas.orientation() {
             Orientation::Portrait => (x, y),
             Orientation::Landscape => (y, width - x),
             Orientation::InversePortrait => (width - x, height - y),

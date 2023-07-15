@@ -1081,6 +1081,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "profiling"
+version = "1.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "332cd62e95873ea4f41f3dfd6bbbfc5b52aec892d7e8d534197c4720a0bbbab2"
+dependencies = [
+ "profiling-procmacros",
+]
+
+[[package]]
+name = "profiling-procmacros"
+version = "1.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a10adb8d151bb1280afb8bed41ae5db26be1b056964947133c7525b0bf39c0b0"
+dependencies = [
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "quick-xml"
 version = "0.28.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1341,7 +1360,7 @@ checksum = "a507befe795404456341dfab10cef66ead4c041f62b8b11bbb92bffe5d0953e0"
 [[package]]
 name = "smithay"
 version = "0.3.0"
-source = "git+https://github.com/smithay/smithay#cdb935e14231c63a1db0cf7f1f5c41edf53c20a6"
+source = "git+https://github.com/chrisduerr/smithay?rev=02ebbad2ff4a010f1c5df64e2ab8f4af54c1cb0d#02ebbad2ff4a010f1c5df64e2ab8f4af54c1cb0d"
 dependencies = [
  "appendlist",
  "bitflags 2.3.3",
@@ -1363,6 +1382,7 @@ dependencies = [
  "nix 0.26.2",
  "once_cell",
  "pkg-config",
+ "profiling",
  "rand",
  "scan_fmt",
  "tempfile",

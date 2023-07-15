@@ -3,7 +3,9 @@
 use std::ops::{Add, Deref, Sub};
 use std::time::Duration;
 
-use smithay::output::{Mode, Output as SmithayOutput, PhysicalProperties, Scale, Subpixel};
+use smithay::output::{
+    Mode, Output as SmithayOutput, OutputModeSource, PhysicalProperties, Scale, Subpixel,
+};
 use smithay::reexports::wayland_server::backend::GlobalId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::DisplayHandle;
@@ -284,6 +286,16 @@ impl Canvas {
     /// Output fractional scale.
     pub fn scale(&self) -> f64 {
         self.scale
+    }
+}
+
+impl From<&Canvas> for OutputModeSource {
+    fn from(canvas: &Canvas) -> Self {
+        Self::Static {
+            size: canvas.physical_resolution(),
+            scale: canvas.scale().into(),
+            transform: canvas.orientation().surface_transform(),
+        }
     }
 }
 
