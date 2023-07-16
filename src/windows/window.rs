@@ -729,12 +729,6 @@ impl<S: Surface + 'static> Window<S> {
         self.app_id = app_id;
     }
 
-    /// Close the application.
-    pub fn kill(&mut self) {
-        self.surface.send_close();
-        self.dead = true;
-    }
-
     /// Check if this window requires a redraw.
     pub fn dirty(&self) -> bool {
         self.dirty && self.transaction.is_none()
@@ -743,6 +737,14 @@ impl<S: Surface + 'static> Window<S> {
     /// Get primary window surface.
     pub fn surface(&self) -> &WlSurface {
         self.surface.surface()
+    }
+}
+
+impl Window {
+    /// Close the application.
+    pub fn kill(&mut self) {
+        self.surface.send_close();
+        self.dead = true;
     }
 }
 
