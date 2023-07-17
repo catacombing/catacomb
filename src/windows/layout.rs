@@ -131,7 +131,7 @@ impl Layouts {
         }
 
         // Resize both windows to fullscreen, since secondary will be split off.
-        for window in layout.primary.iter().chain(&layout.secondary) {
+        for window in layout.windows() {
             let rectangle = output.primary_rectangle(false);
             window.borrow_mut().set_dimensions(output.scale(), rectangle);
         }
@@ -194,25 +194,6 @@ impl Layouts {
         }
 
         self.add_transaction(Transaction::Secondary(position));
-    }
-
-    /// Resize all windows.
-    pub fn resize_all(&self, output: &Output) {
-        for layout in &self.layouts {
-            let primary = layout.primary.as_deref().map(RefCell::borrow_mut);
-            let secondary = layout.secondary.as_deref().map(RefCell::borrow_mut);
-
-            if let Some(mut primary) = primary {
-                let secondary_alive = secondary.as_ref().map_or(false, |window| window.alive());
-                let rectangle = output.primary_rectangle(secondary_alive);
-                primary.set_dimensions(output.scale(), rectangle);
-            }
-
-            if let Some(mut secondary) = secondary {
-                let rectangle = output.secondary_rectangle();
-                secondary.set_dimensions(output.scale(), rectangle);
-            }
-        }
     }
 
     /// Stage a dead window for reaping.
@@ -430,7 +411,7 @@ impl Layouts {
     /// Execute a function for all visible windows.
     pub fn with_visible<F: FnMut(&Window)>(&self, mut fun: F) {
         let layout = self.active();
-        for window in layout.primary.iter().chain(&layout.secondary) {
+        for window in layout.windows() {
             fun(&window.borrow());
         }
     }
@@ -438,7 +419,7 @@ impl Layouts {
     /// Execute a function for all visible windows mutably.
     pub fn with_visible_mut<F: FnMut(&mut Window)>(&mut self, mut fun: F) {
         let layout = self.active();
-        for window in layout.primary.iter().chain(&layout.secondary) {
+        for window in layout.windows() {
             fun(&mut window.borrow_mut());
         }
     }
@@ -458,18 +439,12 @@ impl Layouts {
 
     /// Get an iterator over all windows.
     pub fn windows(&self) -> impl Iterator<Item = Ref<Window>> {
-        self.layouts
-            .iter()
-            .flat_map(|layout| layout.primary.iter().chain(&layout.secondary))
-            .map(|window| window.borrow())
+        self.layouts.iter().flat_map(|layout| layout.windows()).map(|window| window.borrow())
     }
 
     /// Get an iterator over all windows.
     pub fn windows_mut(&mut self) -> impl Iterator<Item = RefMut<Window>> {
-        self.layouts
-            .iter()
-            .flat_map(|layout| layout.primary.iter().chain(&layout.secondary))
-            .map(|window| window.borrow_mut())
+        self.layouts.iter().flat_map(|layout| layout.windows()).map(|window| window.borrow_mut())
     }
 
     /// Get overview layout position of a window.
@@ -503,7 +478,7 @@ impl Layouts {
     pub fn find_window(&self, surface: &ToplevelSurface) -> Option<&Rc<RefCell<Window>>> {
         self.layouts
             .iter()
-            .flat_map(|layout| layout.primary.iter().chain(&layout.secondary))
+            .flat_map(|layout| layout.windows())
             .find(|window| &window.borrow().surface == surface)
     }
 
@@ -515,7 +490,7 @@ impl Layouts {
     ) -> Option<InputSurface> {
         let active_layout = self.active_layout.and_then(|index| self.layouts.get(index))?;
 
-        for window in active_layout.primary.iter().chain(&active_layout.secondary) {
+        for window in active_layout.windows() {
             let window_ref = window.borrow();
             if window_ref.contains(output_scale, position) {
                 let mut surface = window_ref.surface_at(output_scale, position)?;
@@ -527,6 +502,11 @@ impl Layouts {
         }
 
         None
+    }
+
+    /// Get all known layouts.
+    pub fn layouts(&self) -> &[Layout] {
+        &self.layouts
     }
 
     /// Check if there are any layouts.
@@ -564,6 +544,11 @@ impl Layout {
         self.secondary.as_ref()
     }
 
+    /// Get an iterator over all windows in this layout.
+    pub fn windows(&self) -> impl Iterator<Item = &Rc<RefCell<Window>>> {
+        self.primary.iter().chain(&self.secondary)
+    }
+
     /// Get number of visible windows.
     pub fn window_count(&self) -> usize {
         let primary_count = if self.primary.is_some() { 1 } else { 0 };
@@ -574,6 +559,23 @@ impl Layout {
     /// Check if the layout contains any windows.
     pub fn is_empty(&self) -> bool {
         self.primary.is_none() && self.secondary.is_none()
+    }
+
+    /// Resize all windows in this layout to their expected size.
+    pub fn resize(&self, output: &Output) {
+        let primary = self.primary.as_deref().map(RefCell::borrow_mut);
+        let secondary = self.secondary.as_deref().map(RefCell::borrow_mut);
+
+        if let Some(mut primary) = primary {
+            let secondary_alive = secondary.as_ref().map_or(false, |window| window.alive());
+            let rectangle = output.primary_rectangle(secondary_alive);
+            primary.set_dimensions(output.scale(), rectangle);
+        }
+
+        if let Some(mut secondary) = secondary {
+            let rectangle = output.secondary_rectangle();
+            secondary.set_dimensions(output.scale(), rectangle);
+        }
     }
 }
 

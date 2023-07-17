@@ -408,51 +408,42 @@ impl Catacomb {
         // Notify client.
         self.touch_state.input_surface = None;
         self.touch_state.active_app_id = None;
-        match surface {
-            Some(mut input_surface) => {
-                // Get surface's App ID.
-                let app_id =
-                    input_surface.toplevel.as_mut().and_then(InputSurfaceKind::take_app_id);
+        if let Some(mut input_surface) = surface {
+            // Get surface's App ID.
+            let app_id = input_surface.toplevel.as_mut().and_then(InputSurfaceKind::take_app_id);
 
-                // Check if a user gesture is triggered by this touch event.
-                let gesture_active = self
-                    .touch_state
-                    .matching_gestures(self.windows.canvas(), app_id.as_ref(), event.position, None)
-                    .next()
-                    .is_some();
-                self.touch_state.active_app_id = app_id;
+            // Check if a user gesture is triggered by this touch event.
+            let gesture_active = self
+                .touch_state
+                .matching_gestures(self.windows.canvas(), app_id.as_ref(), event.position, None)
+                .next()
+                .is_some();
+            self.touch_state.active_app_id = app_id;
 
-                if !gesture_active {
-                    // Update window focus.
-                    match input_surface.toplevel.take() {
-                        Some(InputSurfaceKind::Layout((window, _))) => {
-                            self.windows.set_focus(Some(window), None, None);
-                        },
-                        Some(InputSurfaceKind::Layer((layer, app_id))) => {
-                            self.windows.set_focus(None, Some(layer), app_id);
-                        },
-                        // For surfaces denying focus, we send events but inhibit focus.
-                        None => (),
-                    }
-
-                    // Calculate surface-local touch position.
-                    let scale = self.windows.canvas().scale();
-                    let position = input_surface.local_position(scale, event.position);
-
-                    // Send touch event to the client.
-                    let serial = SERIAL_COUNTER.next_serial();
-                    let surface = &input_surface.surface;
-                    self.touch_state.touch.down(serial, time, surface, position, slot);
-
-                    self.touch_state.input_surface = Some(input_surface);
+            if !gesture_active {
+                // Update window focus.
+                match input_surface.toplevel.take() {
+                    Some(InputSurfaceKind::Layout((window, _))) => {
+                        self.windows.set_focus(Some(window), None, None);
+                    },
+                    Some(InputSurfaceKind::Layer((layer, app_id))) => {
+                        self.windows.set_focus(None, Some(layer), app_id);
+                    },
+                    // For surfaces denying focus, we send events but inhibit focus.
+                    None => (),
                 }
-            },
-            // Clear focus if touch wasn't on any surface.
-            //
-            // NOTE: We can't just always clear focus since a layer shell surface that
-            // denies focus should still return the touched surface but not clear
-            // the focus.
-            None => self.windows.set_focus(None, None, None),
+
+                // Calculate surface-local touch position.
+                let scale = self.windows.canvas().scale();
+                let position = input_surface.local_position(scale, event.position);
+
+                // Send touch event to the client.
+                let serial = SERIAL_COUNTER.next_serial();
+                let surface = &input_surface.surface;
+                self.touch_state.touch.down(serial, time, surface, position, slot);
+
+                self.touch_state.input_surface = Some(input_surface);
+            }
         }
 
         // Allow only a single touch at a time.
@@ -484,6 +475,11 @@ impl Catacomb {
 
         match self.touch_state.action(self.windows.canvas()) {
             Some(TouchAction::Tap) => {
+                // Clear focus when tapping outside of any window.
+                if self.touch_state.input_surface.is_none() {
+                    self.windows.set_focus(None, None, None);
+                }
+
                 self.windows.on_tap(self.touch_state.position);
             },
             Some(

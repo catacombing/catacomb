@@ -22,8 +22,8 @@ pub struct Layers {
 
 impl Layers {
     /// Add a new layer shell window.
-    pub fn add(&mut self, layer: Layer, window: LayerWindow) {
-        match layer {
+    pub fn add(&mut self, window: LayerWindow) {
+        match window.surface.layer() {
             Layer::Background => self.background.push(window),
             Layer::Bottom => self.bottom.push(window),
             Layer::Top => self.top.push(window),

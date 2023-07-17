@@ -9,7 +9,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::compositor;
 use smithay::wayland::shell::wlr_layer::{
-    Anchor, ExclusiveZone, LayerSurface, LayerSurfaceAttributes, LayerSurfaceState,
+    Anchor, ExclusiveZone, Layer, LayerSurface, LayerSurfaceAttributes, LayerSurfaceState,
 };
 use smithay::wayland::shell::xdg::{
     PopupState, PopupSurface, SurfaceCachedState, ToplevelState, ToplevelSurface,
@@ -161,11 +161,16 @@ pub struct CatacombLayerSurface {
     pub exclusive_zone: ExclusiveZone,
     pub anchor: Anchor,
     surface: LayerSurface,
+    layer: Layer,
 }
 
-impl From<LayerSurface> for CatacombLayerSurface {
-    fn from(surface: LayerSurface) -> Self {
-        Self { surface, exclusive_zone: Default::default(), anchor: Default::default() }
+impl CatacombLayerSurface {
+    pub fn new(layer: Layer, surface: LayerSurface) -> Self {
+        Self { surface, layer, exclusive_zone: Default::default(), anchor: Default::default() }
+    }
+
+    pub fn layer(&self) -> Layer {
+        self.layer
     }
 }
 

@@ -150,16 +150,12 @@ impl Windows {
     }
 
     /// Add a new layer shell window.
-    pub fn add_layer(
-        &mut self,
-        layer: Layer,
-        surface: impl Into<CatacombLayerSurface>,
-        namespace: String,
-    ) {
+    pub fn add_layer(&mut self, layer: Layer, surface: LayerSurface, namespace: String) {
+        let surface = CatacombLayerSurface::new(layer, surface);
         let mut window =
-            Window::new(&self.window_scales, surface.into(), self.output.scale(), Some(namespace));
+            Window::new(&self.window_scales, surface, self.output.scale(), Some(namespace));
         window.enter(&self.output);
-        self.layers.add(layer, window);
+        self.layers.add(window);
     }
 
     /// Add a new popup window.
@@ -265,7 +261,7 @@ impl Windows {
 
         // Resize windows after exclusive zone changes.
         if self.output.exclusive() != &old_exclusive {
-            self.resize_all();
+            self.resize_visible();
         }
     }
 
@@ -460,7 +456,7 @@ impl Windows {
 
         // Resize windows if reserved layer space changed.
         if self.output.exclusive() != &old_exclusive {
-            self.resize_all();
+            self.resize_visible();
         }
     }
 
@@ -498,7 +494,7 @@ impl Windows {
 
             // Resize windows and change view.
             self.set_view(View::Fullscreen(window.clone()));
-            self.resize_all();
+            self.resize_visible();
         }
     }
 
@@ -518,7 +514,7 @@ impl Windows {
 
             // Resize windows and change view.
             self.set_view(View::Workspace);
-            self.resize_all();
+            self.resize_visible();
         }
     }
 
@@ -678,6 +674,39 @@ impl Windows {
 
     /// Resize all windows to their expected size.
     pub fn resize_all(&mut self) {
+        // Resize fullscreen XDG client.
+        let fullscreen_window = match self.pending_view() {
+            View::Fullscreen(window) => {
+                let mut window = window.borrow_mut();
+                let available_fullscreen = self.output.available_fullscreen();
+                window.set_dimensions(self.output.scale(), available_fullscreen);
+
+                Some(window.surface().clone())
+            },
+            _ => None,
+        };
+        let fullscreen_window = fullscreen_window.as_ref();
+
+        // Resize XDG clients.
+        for layout in self.layouts.layouts() {
+            // Skip resizing fullscreened layout.
+            if layout.windows().any(|window| Some(window.borrow().surface()) == fullscreen_window) {
+                continue;
+            }
+
+            layout.resize(&self.output);
+        }
+
+        // Resize layer shell clients.
+        for window in self.layers.iter_mut() {
+            let fullscreened =
+                window.surface.layer() == Layer::Overlay && fullscreen_window.is_some();
+            window.update_dimensions(&mut self.output, fullscreened);
+        }
+    }
+
+    /// Resize visible windows to their expected size.
+    pub fn resize_visible(&mut self) {
         match self.pending_view() {
             // Resize fullscreen and overlay surfaces in fullscreen view.
             View::Fullscreen(window) => {
@@ -690,10 +719,10 @@ impl Windows {
                     window.update_dimensions(&mut self.output, true);
                 }
             },
-            // Resize all surfaces.
+            // Resize active XDG layout and layer shell in any other view.
             _ => {
                 // Resize XDG windows.
-                self.layouts.resize_all(&self.output);
+                self.layouts.active().resize(&self.output);
 
                 // Resize layer shell windows.
                 for window in self.layers.iter_mut() {
@@ -930,7 +959,6 @@ impl Windows {
                 let primary_percentage = Some(if active_empty { 0. } else { 1. });
                 let overview = Overview::new(self.layouts.active_offset(), primary_percentage);
                 self.set_view(View::Overview(overview));
-                self.resize_all();
             },
             (HandleGesture::Vertical(_) | HandleGesture::Horizontal(_), _) => (),
         }
@@ -1080,7 +1108,21 @@ impl Windows {
 
     /// Change the active view.
     fn set_view(&mut self, view: View) {
-        self.start_transaction().view = Some(view);
+        match view {
+            // Skip transaction when switching to overview.
+            View::Overview(_) => match &mut self.transaction {
+                // Skip overview transitions when lockscreen is staged.
+                Some(transaction) if matches!(transaction.view, Some(View::Lock(_))) => (),
+                // Clear pending view to go to overview.
+                Some(transaction) => {
+                    transaction.view = None;
+                    self.view = view;
+                },
+                // Directly apply overview without pending transaction.
+                None => self.view = view,
+            },
+            _ => self.start_transaction().view = Some(view),
+        }
     }
 
     /// Get immutable reference to the current output.
