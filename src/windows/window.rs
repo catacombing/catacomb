@@ -611,7 +611,7 @@ impl<S: Surface + 'static> Window<S> {
         let geometry = self.surface.geometry().unwrap_or_default();
 
         let result = RefCell::new(None);
-        compositor::with_surface_tree_upward(
+        compositor::with_surface_tree_downward(
             self.surface.surface(),
             bounds_loc,
             |wl_surface, surface_data, location| {
@@ -632,14 +632,20 @@ impl<S: Surface + 'static> Window<S> {
                 let surface_loc = location - geometry.loc.to_f64();
                 let surface_rect = Rectangle::from_loc_and_size(surface_loc, size.to_f64());
 
+                // Get input region and its relative touch position.
+                let attributes = surface_data.cached_state.current::<SurfaceAttributes>();
+                let input_region = attributes.input_region.as_ref();
+                let input_position = (position - surface_rect.loc).to_i32_round();
+
                 // Check if the position is within the surface bounds.
-                if surface_rect.contains(position) {
+                if surface_rect.contains(position)
+                    && input_region.map_or(true, |region| region.contains(input_position))
+                {
                     let surface = InputSurface::new(wl_surface.clone(), surface_loc, window_scale);
                     *result.borrow_mut() = Some(surface);
-                    TraversalAction::SkipChildren
-                } else {
-                    TraversalAction::DoChildren(location)
                 }
+
+                TraversalAction::DoChildren(location)
             },
             |_, _, _| {},
             |_, _, _| result.borrow().is_none(),
