@@ -533,7 +533,8 @@ impl Windows {
             },
             // Fallback to primary if secondary perished.
             Some(None) => {
-                let primary = self.layouts.active().primary();
+                let active_layout = self.layouts.pending_active();
+                let primary = active_layout.primary();
                 let focused = primary.map(|window| {
                     let window = window.borrow();
                     (window.surface.clone(), window.app_id.clone())
@@ -722,7 +723,7 @@ impl Windows {
             // Resize active XDG layout and layer shell in any other view.
             _ => {
                 // Resize XDG windows.
-                self.layouts.active().resize(&self.output);
+                self.layouts.pending_active().resize(&self.output);
 
                 // Resize layer shell windows.
                 for window in self.layers.iter_mut() {

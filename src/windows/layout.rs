@@ -47,6 +47,45 @@ impl Layouts {
         self.active_layout.and_then(|i| self.layouts.get(i)).unwrap_or(&DEFAULT_LAYOUT)
     }
 
+    /// Get pending visible layout.
+    ///
+    /// This will report the transaction's layout and fall back to
+    /// `Self::active` if no transaction is active.
+    pub fn pending_active(&self) -> Layout {
+        let mut layout = self.active().clone();
+
+        for transaction in &self.transactions {
+            match transaction {
+                Transaction::Active(Some(index)) => {
+                    if let Some(new_layout) = self.layouts.get(*index) {
+                        layout = new_layout.clone();
+                    }
+                },
+                Transaction::Active(None) => layout = DEFAULT_LAYOUT,
+                Transaction::Primary(position) => {
+                    if let Some(new_layout) = self.layouts.get(position.index) {
+                        if position.secondary {
+                            layout.primary = new_layout.secondary.clone();
+                        } else {
+                            layout.primary = new_layout.primary.clone();
+                        }
+                    }
+                },
+                Transaction::Secondary(position) => {
+                    if let Some(new_layout) = self.layouts.get(position.index) {
+                        if position.secondary {
+                            layout.secondary = new_layout.secondary.clone();
+                        } else {
+                            layout.secondary = new_layout.primary.clone();
+                        }
+                    }
+                },
+            }
+        }
+
+        layout
+    }
+
     /// Overview offset of the active layout.
     pub fn active_offset(&self) -> f64 {
         -(self.active_layout.unwrap_or(0) as f64)
@@ -85,6 +124,9 @@ impl Layouts {
             self.focus = Some(Rc::downgrade(window));
             window.borrow_mut().enter(output);
         }
+
+        // Ensure layout's windows have the correct size.
+        layout.resize(output);
 
         // Clear layout history.
         if clear_parents {
@@ -521,7 +563,7 @@ impl Layouts {
 }
 
 /// Workspace window layout.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Layout {
     primary: Option<Rc<RefCell<Window>>>,
     secondary: Option<Rc<RefCell<Window>>>,
