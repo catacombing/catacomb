@@ -44,9 +44,6 @@ const MAX_LOCKED_TRANSACTION_MILLIS: u64 = 100;
 /// Maximum time before a transaction is cancelled.
 const MAX_TRANSACTION_MILLIS: u64 = 1000;
 
-/// Horizontal sensitivity of the application overview.
-const OVERVIEW_HORIZONTAL_SENSITIVITY: f64 = 250.;
-
 /// Horizantal screen percentage required to cycle through windows.
 const CYCLE_PERCENTAGE: f64 = 0.3;
 
@@ -883,7 +880,10 @@ impl Windows {
 
         // Update drag action.
         match overview.drag_action {
-            DragAction::Cycle => overview.x_offset += delta.x / OVERVIEW_HORIZONTAL_SENSITIVITY,
+            DragAction::Cycle => {
+                let sensitivity = self.output.physical_size().w as f64 * 0.4;
+                overview.x_offset += delta.x / sensitivity;
+            },
             DragAction::Close(_) => overview.y_offset += delta.y,
             DragAction::None => (),
         }
