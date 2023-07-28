@@ -152,24 +152,29 @@ impl Overview {
         point: Point<f64, Logical>,
     ) -> Option<LayoutPosition> {
         let available = canvas.available_overview();
+        let scale = canvas.scale();
 
         let mut offset = self.x_offset - 1.;
         while offset < self.x_offset + 2. {
             let position =
                 OverviewPosition::new(available, self.primary_percentage, self.x_offset, offset);
-            if position.bounds.to_f64().contains(point) {
+            if position.layout_bounds().to_f64().contains(point) {
                 let layout_index = usize::try_from(-offset.round() as isize).ok()?;
                 let layout = layouts.get(layout_index)?;
 
+                // Check if window contains the point.
+                let contains_point = |window: &Rc<RefCell<Window>>| {
+                    let bounds = window.borrow().bounds(scale);
+                    position.window_bounds(bounds).to_f64().contains(point)
+                };
+
                 // Check if click was within secondary window.
-                if layout.secondary().is_some()
-                    && position.secondary_bounds().to_f64().contains(point)
-                {
+                if layout.secondary().map_or(false, contains_point) {
                     return Some(LayoutPosition::new(layout_index, true));
                 }
 
                 // Check if click was within primary window.
-                if layout.primary().is_some() && position.bounds.to_f64().contains(point) {
+                if layout.primary().map_or(false, contains_point) {
                     return Some(LayoutPosition::new(layout_index, false));
                 }
             }
@@ -238,7 +243,8 @@ impl Overview {
         let layout_count = layouts.len() as i32;
         self.clamp_offset(canvas, layout_count);
 
-        let available = canvas.available_overview();
+        let available_overview = canvas.available_overview();
+        let scale = canvas.scale();
 
         // Draw up to three visible windows (center and one to each side).
         let mut offset = self.x_offset - 1.;
@@ -254,48 +260,58 @@ impl Overview {
                 },
             };
 
-            let position =
-                OverviewPosition::new(available, self.primary_percentage, self.x_offset, offset);
+            let position = OverviewPosition::new(
+                available_overview,
+                self.primary_percentage,
+                self.x_offset,
+                offset,
+            );
 
-            // Draw the primary window.
-            if let Some(primary) = layout.primary() {
+            // Add secondary window textures.
+            if let Some(secondary) = layout.secondary() {
+                // Scale window bounds to overview scale.
+                let mut bounds = position.window_bounds(secondary.borrow().bounds(scale));
+
                 // Offset bounds for closing windows.
-                let mut bounds = position.bounds;
-                self.handle_closing(output, canvas, layouts, primary, &mut bounds, true);
+                let closing_offset =
+                    self.handle_closing(output, canvas, layouts, secondary, bounds, false);
+                bounds.loc.y += closing_offset;
 
-                // Add internal offset to window bounds.
-                let primary = primary.borrow();
-                let scale = position.scale;
-                bounds.loc += primary.internal_offset(canvas.scale()).scale(scale);
+                // Get physical bounds for clamping.
+                let mut layout_bounds = position.layout_bounds();
+                layout_bounds.loc.y += closing_offset;
+                let physical_bounds = layout_bounds.to_physical_precise_round(scale);
 
                 // Get window textures within its overview bounds.
-                let physical_bounds = bounds.to_physical_precise_round(canvas.scale());
-                primary.textures_with_bounds(
+                secondary.borrow().textures_with_bounds(
                     textures,
-                    canvas.scale(),
                     scale,
+                    position.scale,
                     bounds.loc,
                     physical_bounds,
                 );
             }
 
-            // Draw the secondary window.
-            if let Some(secondary) = layout.secondary() {
-                // Offset bounds for closing windows.
-                let mut bounds = position.secondary_bounds();
-                self.handle_closing(output, canvas, layouts, secondary, &mut bounds, false);
+            // Add primary window textures.
+            if let Some(primary) = layout.primary() {
+                // Scale window bounds to overview scale.
+                let mut bounds = position.window_bounds(primary.borrow().bounds(scale));
 
-                // Add internal offset to window bounds.
-                let secondary = secondary.borrow();
-                let scale = position.scale;
-                bounds.loc += secondary.internal_offset(canvas.scale()).scale(scale);
+                // Offset bounds for closing windows.
+                let closing_offset =
+                    self.handle_closing(output, canvas, layouts, primary, bounds, true);
+                bounds.loc.y += closing_offset;
+
+                // Get physical bounds for clamping.
+                let mut layout_bounds = position.layout_bounds();
+                layout_bounds.loc.y += closing_offset;
+                let physical_bounds = layout_bounds.to_physical_precise_round(scale);
 
                 // Get window textures within its overview bounds.
-                let physical_bounds = bounds.to_physical_precise_round(canvas.scale());
-                secondary.textures_with_bounds(
+                primary.borrow().textures_with_bounds(
                     textures,
-                    canvas.scale(),
                     scale,
+                    position.scale,
                     bounds.loc,
                     physical_bounds,
                 );
@@ -312,27 +328,28 @@ impl Overview {
         canvas: &Canvas,
         layouts: &Layouts,
         window: &Rc<RefCell<Window>>,
-        bounds: &mut Rectangle<i32, Logical>,
+        mut bounds: Rectangle<i32, Logical>,
         is_primary: bool,
-    ) {
+    ) -> i32 {
         // Check if this window is being closed.
         let closing_window = self.drag_action.closing_window();
         if !Weak::ptr_eq(&closing_window, &Rc::downgrade(window)) {
-            return;
+            return 0;
         }
 
-        // Prevent dragging primary/secondary across from each other.
+        // Prevent dragging primary/secondary across each other.
         if is_primary {
             self.y_offset = self.y_offset.min(0.);
         } else {
             self.y_offset = self.y_offset.max(0.);
         }
 
-        // Offset window position vertically while getting dragged to close.
-        bounds.loc.y += self.y_offset.round() as i32;
+        // Calculate target window bounds.
+        let delta = self.y_offset.round() as i32;
+        bounds.loc.y += delta;
 
         // Kill the window if it has moved completely offscreen.
-        if !Rectangle::from_loc_and_size((0, 0), canvas.size()).overlaps(*bounds) {
+        if !Rectangle::from_loc_and_size((0, 0), canvas.size()).overlaps(bounds) {
             let surface = {
                 let mut window = window.borrow_mut();
                 window.kill();
@@ -340,6 +357,8 @@ impl Overview {
             };
             layouts.reap(output, &surface);
         }
+
+        delta
     }
 
     /// Check if the overdrag has run into a hard limit.
@@ -391,12 +410,8 @@ impl DragAndDrop {
         );
 
         // Calculate original position of dragged window.
-        let mut start_location = if layout_position.secondary {
-            position.secondary_bounds().loc
-        } else {
-            position.bounds.loc
-        };
-        start_location += window.borrow().internal_offset(canvas.scale()).scale(position.scale);
+        let loc = window.borrow().bounds(canvas.scale()).loc;
+        let start_location = position.window_loc(loc);
 
         Self {
             start_location,
@@ -496,7 +511,9 @@ impl DragAction {
 /// Window placed in the application overview.
 #[derive(Debug)]
 struct OverviewPosition {
-    bounds: Rectangle<i32, Logical>,
+    layout_bounds: Rectangle<i32, Logical>,
+    available_start: Point<i32, Logical>,
+    offset: Point<i32, Logical>,
     scale: f64,
 }
 
@@ -516,22 +533,53 @@ impl OverviewPosition {
         let scale =
             secondary_percentage + (primary_percentage - secondary_percentage) * (1. - delta.abs());
 
-        // Calculate the window's size and position.
-        let bounds_size = available_rect.size.scale(scale);
-        let bounds_loc = available_rect.loc + available_rect.size.sub(bounds_size).scale(0.5);
-        let mut bounds = Rectangle::from_loc_and_size(bounds_loc, bounds_size);
-        bounds.loc.x += (delta * available_rect.size.w as f64 * primary_percentage) as i32;
+        // Calculate window's overview position.
+        let mut offset = available_rect.size.scale((1. - scale) / 2.).to_point();
+        offset.x += (delta * available_rect.size.w as f64 * primary_percentage) as i32;
 
-        Self { bounds, scale }
+        // Get space at the top-left reserved for exclusive windows in the overview.
+        let exclusive_top = available_rect.loc;
+
+        // Calculate maximum layout bounds.
+        let mut layout_bounds = available_rect;
+        layout_bounds.size = layout_bounds.size.scale(scale);
+        layout_bounds.loc += offset;
+
+        Self { layout_bounds, available_start: exclusive_top, offset, scale }
     }
 
-    /// Secondary window bounds for this layout's position.
-    fn secondary_bounds(&self) -> Rectangle<i32, Logical> {
-        let secondary_offset = self.bounds.size.h / 2;
+    /// Convert a window's position to its overview position.
+    #[must_use]
+    fn window_loc(&self, mut loc: Point<i32, Logical>) -> Point<i32, Logical> {
+        // Keep offsets from exclusive windows unscaled, while scaling everything else.
+        //
+        // We explicitly round towards zero when scaling here since a pixel overlap
+        // isn't visible, while a pixel gap creates a jarring hole.
+        loc -= self.available_start;
+        loc.x = (loc.x as f64 * self.scale).trunc() as i32;
+        loc.y = (loc.y as f64 * self.scale).trunc() as i32;
+        loc += self.available_start;
 
-        let mut secondary_bounds = self.bounds;
-        secondary_bounds.loc.y += secondary_offset;
-        secondary_bounds.size.h -= secondary_offset;
-        secondary_bounds
+        // Apply the overview offset.
+        loc += self.offset;
+
+        loc
+    }
+
+    /// Convert a window's bounds to its overview bounds.
+    #[must_use]
+    fn window_bounds(&self, mut bounds: Rectangle<i32, Logical>) -> Rectangle<i32, Logical> {
+        bounds.loc = self.window_loc(bounds.loc);
+        bounds.size = bounds.size.scale(self.scale);
+        bounds
+    }
+
+    /// Maximum bounds for both windows in this position's layout.
+    ///
+    /// While most well-behaved clients should always fall within these bounds,
+    /// it is necessary to clamp windows to this rectangle to avoid poorly
+    /// behaved clients from overlapping other overview positions.
+    fn layout_bounds(&self) -> Rectangle<i32, Logical> {
+        self.layout_bounds
     }
 }
