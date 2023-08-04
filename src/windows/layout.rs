@@ -107,26 +107,32 @@ impl Layouts {
         self.layouts.push(Layout::new(primary));
 
         // Stage switch to the new layout.
-        self.set_active(output, Some(self.layouts.len() - 1), false);
+        let position = LayoutPosition::new(self.layouts.len() - 1, false);
+        self.set_active(output, Some(position), false);
     }
 
     /// Switch the active layout.
     pub fn set_active(
         &mut self,
         output: &Output,
-        layout_index: Option<usize>,
+        layout_position: Option<LayoutPosition>,
         clear_parents: bool,
     ) {
-        // Send enter events for new layout's windows.
-        self.focus = None;
-        let layout = layout_index.and_then(|i| self.layouts.get(i)).unwrap_or(&DEFAULT_LAYOUT);
-        for window in layout.secondary.iter().chain(&layout.primary) {
-            self.focus = Some(Rc::downgrade(window));
-            window.borrow_mut().enter(output);
-        }
+        let layout_index = layout_position.map(|position| position.index);
 
-        // Ensure layout's windows have the correct size.
-        layout.resize(output);
+        self.focus = None;
+        if let Some(position) = layout_position {
+            // Send enter and update focus for new layout's windows.
+            let layout = self.layouts.get(position.index).unwrap_or(&DEFAULT_LAYOUT);
+            let window = if position.secondary { &layout.secondary } else { &layout.primary };
+            if let Some(window) = window {
+                self.focus = Some(Rc::downgrade(window));
+                window.borrow_mut().enter(output);
+            }
+
+            // Ensure layout's windows have the correct size.
+            layout.resize(output);
+        }
 
         // Clear layout history.
         if clear_parents {
@@ -156,7 +162,8 @@ impl Layouts {
         };
 
         let target_layout = (active_index as isize + n).rem_euclid(layout_count as isize);
-        self.set_active(output, Some(target_layout as usize), true);
+        let position = LayoutPosition::new(target_layout as usize, false);
+        self.set_active(output, Some(position), true);
     }
 
     /// Update the active layout's primary window.
@@ -168,7 +175,7 @@ impl Layouts {
 
         // Perform simple layout swap when no resize is necessary.
         if layout.secondary.is_none() {
-            self.set_active(output, Some(position.index), true);
+            self.set_active(output, Some(position), true);
             return;
         }
 

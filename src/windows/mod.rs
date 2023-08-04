@@ -825,7 +825,7 @@ impl Windows {
 
         // Click inside window opens it as new primary.
         if let Some(position) = overview.layout_position(&self.output, &self.layouts, point) {
-            self.layouts.set_active(&self.output, Some(position.index), true);
+            self.layouts.set_active(&self.output, Some(position), true);
         }
 
         // Return to workspace view.
