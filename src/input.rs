@@ -87,7 +87,13 @@ impl TouchState {
     }
 
     /// Start a new touch session.
-    fn start(&mut self, canvas: &Canvas, position: Point<f64, Logical>) {
+    fn start(&mut self, canvas: &Canvas, slot: TouchSlot, position: Point<f64, Logical>) {
+        // Allow only a single touch at a time.
+        if self.slot.is_some() {
+            return;
+        }
+        self.slot = Some(slot);
+
         self.cancel_velocity();
 
         self.start = TouchStart::new(canvas, position);
@@ -181,6 +187,7 @@ impl TouchState {
 }
 
 /// Start of a touch interaction.
+#[derive(Debug)]
 struct TouchStart {
     handle_direction: Option<HandleDirection>,
     position: Point<f64, Logical>,
@@ -402,6 +409,9 @@ impl Catacomb {
     fn on_touch_down(&mut self, event: TouchEvent) {
         let TouchEvent { time, slot, position, .. } = event;
 
+        // Initialize the touch state.
+        self.touch_state.start(self.windows.canvas(), slot, position);
+
         // Find surface at touch position.
         let surface = self.windows.surface_at(event.position);
 
@@ -412,12 +422,13 @@ impl Catacomb {
             // Get surface's App ID.
             let app_id = input_surface.toplevel.as_mut().and_then(InputSurfaceKind::take_app_id);
 
-            // Check if a user gesture is triggered by this touch event.
-            let gesture_active = self
-                .touch_state
-                .matching_gestures(self.windows.canvas(), app_id.as_ref(), event.position, None)
-                .next()
-                .is_some();
+            // Check if a gesture is triggered by this touch event.
+            let gesture_active = self.touch_state.start.is_handle_gesture
+                || self
+                    .touch_state
+                    .matching_gestures(self.windows.canvas(), app_id.as_ref(), event.position, None)
+                    .next()
+                    .is_some();
             self.touch_state.active_app_id = app_id;
 
             if !gesture_active {
@@ -445,15 +456,6 @@ impl Catacomb {
                 self.touch_state.input_surface = Some(input_surface);
             }
         }
-
-        // Allow only a single touch at a time.
-        if self.touch_state.slot.is_some() {
-            return;
-        }
-        self.touch_state.slot = Some(slot);
-
-        // Initialize the touch state.
-        self.touch_state.start(self.windows.canvas(), position);
 
         // Only send touch start if there's no handle gesture in progress.
         if !self.touch_state.start.is_handle_gesture {

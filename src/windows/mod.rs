@@ -983,6 +983,25 @@ impl Windows {
                     self.set_view(View::Workspace);
                 }
             },
+            // Leave fullscreen on "drag up".
+            (HandleGesture::Vertical(position), View::Fullscreen(window)) => {
+                // Require drag end to be above the gesture handle.
+                let available = self.output.available_overview().to_f64();
+                if position < available.loc.y || position >= available.loc.y + available.size.h {
+                    return;
+                }
+
+                // Unset XDG fullscreen state.
+                window.borrow().surface.set_state(|state| {
+                    state.states.unset(State::Fullscreen);
+                });
+
+                // Change back to workspace view.
+                self.set_view(View::Workspace);
+
+                // Resize back to workspace size.
+                self.resize_visible();
+            },
             (HandleGesture::Horizontal(delta), View::Workspace) => {
                 let delta_percentage = delta / self.output.size().w as f64;
                 if delta_percentage <= -CYCLE_PERCENTAGE {
