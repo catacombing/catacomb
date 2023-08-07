@@ -1129,15 +1129,16 @@ impl Windows {
         match view {
             // Skip transaction when switching to overview.
             View::Overview(_) => match &mut self.transaction {
-                // Skip overview transitions when lockscreen is staged.
-                Some(transaction) if matches!(transaction.view, Some(View::Lock(_))) => (),
                 // Clear pending view to go to overview.
                 Some(transaction) => {
                     transaction.view = None;
                     self.view = view;
                 },
                 // Directly apply overview without pending transaction.
-                None => self.view = view,
+                None => {
+                    self.dirty = true;
+                    self.view = view;
+                },
             },
             _ => self.start_transaction().view = Some(view),
         }
