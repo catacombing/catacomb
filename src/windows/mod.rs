@@ -185,7 +185,7 @@ impl Windows {
 
     /// Unlock the session.
     pub fn unlock(&mut self) {
-        self.set_view(View::Workspace);
+        self.start_transaction().view = Some(View::Workspace);
     }
 
     /// Check if the session lock is active.
@@ -941,18 +941,11 @@ impl Windows {
                     self.on_gesture_done(gesture);
                 }
             },
-            (HandleGesture::Vertical(position), _) if !self.layouts.is_empty() => {
+            (HandleGesture::Vertical(position), View::Workspace) if !self.layouts.is_empty() => {
                 // Ignore overview gesture until changes are required.
                 let available = self.output.available_overview().to_f64();
                 if position < available.loc.y || position >= available.loc.y + available.size.h {
                     return;
-                }
-
-                // Unset fullscreen XDG state if it's currently active.
-                if let View::Fullscreen(window) = &self.view {
-                    window.borrow().surface.set_state(|state| {
-                        state.states.unset(State::Fullscreen);
-                    });
                 }
 
                 // Change view and resize windows.
@@ -1109,6 +1102,11 @@ impl Windows {
 
     /// Change the active view.
     fn set_view(&mut self, view: View) {
+        // SAFETY: Prevent accidental unlock. Use [`Self::unlock`] instead.
+        if let View::Lock(_) = self.pending_view() {
+            return;
+        }
+
         match view {
             // Skip transaction when switching to overview.
             View::Overview(_) => match &mut self.transaction {
