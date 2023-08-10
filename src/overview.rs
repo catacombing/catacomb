@@ -361,10 +361,10 @@ impl Overview {
         delta
     }
 
-    /// Check if the overdrag has run into a hard limit.
-    pub fn overdrag_limited(&self, window_count: usize) -> bool {
+    /// Check if one of the horizontal scrolling boundaries was reached.
+    pub fn cycle_edge_reached(&self, window_count: usize) -> bool {
         let min_offset = -(window_count as f64) + 1.;
-        self.x_offset <= min_offset - OVERDRAG_LIMIT || self.x_offset >= OVERDRAG_LIMIT
+        self.x_offset <= min_offset || self.x_offset >= 0.
     }
 
     /// Check if overview requires a redraw.

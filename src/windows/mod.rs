@@ -889,7 +889,7 @@ impl Windows {
         }
 
         // Cancel velocity once drag actions are completed.
-        if overview.overdrag_limited(self.layouts.len()) {
+        if overview.cycle_edge_reached(self.layouts.len()) {
             touch_state.cancel_velocity();
         }
 
