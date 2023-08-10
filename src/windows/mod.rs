@@ -28,7 +28,7 @@ use crate::input::{HandleGesture, TouchState};
 use crate::layer::Layers;
 use crate::orientation::Orientation;
 use crate::output::{Canvas, Output, GESTURE_HANDLE_HEIGHT};
-use crate::overview::{DragAction, DragAndDrop, Overview};
+use crate::overview::{DragActionType, DragAndDrop, Overview};
 use crate::protocols::session_lock::surface::LockSurface;
 use crate::windows::layout::{LayoutPosition, Layouts};
 use crate::windows::surface::{CatacombLayerSurface, InputSurface, InputSurfaceKind, Surface};
@@ -777,7 +777,7 @@ impl Windows {
         }
 
         match &self.view {
-            View::Overview(overview) if overview.dirty(self.layouts.len()) => true,
+            View::Overview(overview) if overview.dirty() => true,
             View::Workspace | View::Overview(_) => {
                 self.layouts.windows().any(|window| window.dirty())
                     || self.layers.iter().any(Window::dirty)
@@ -802,7 +802,7 @@ impl Windows {
             overview.start_hold(&self.event_loop, position);
         }
 
-        overview.drag_action = DragAction::None;
+        overview.drag_action = Default::default();
         overview.last_drag_point = point;
         overview.y_offset = 0.;
     }
@@ -866,26 +866,26 @@ impl Windows {
         let delta = point - mem::replace(&mut overview.last_drag_point, point);
 
         // Lock current drag direction if it hasn't been determined yet.
-        if matches!(overview.drag_action, DragAction::None) {
+        if matches!(overview.drag_action.action_type, DragActionType::None) {
             if delta.x.abs() < delta.y.abs() {
                 overview.drag_action = overview
                     .layout_position(&self.output, &self.layouts, point)
                     .and_then(|position| self.layouts.window_at(position))
-                    .map(|window| DragAction::Close(Rc::downgrade(window)))
+                    .map(|window| DragActionType::Close(Rc::downgrade(window)).into())
                     .unwrap_or_default();
             } else {
-                overview.drag_action = DragAction::Cycle;
+                overview.drag_action = DragActionType::Cycle.into();
             }
         }
 
         // Update drag action.
-        match overview.drag_action {
-            DragAction::Cycle => {
+        match overview.drag_action.action_type {
+            DragActionType::Cycle => {
                 let sensitivity = self.output.physical_size().w as f64 * 0.4;
                 overview.x_offset += delta.x / sensitivity;
             },
-            DragAction::Close(_) => overview.y_offset += delta.y,
-            DragAction::None => (),
+            DragActionType::Close(_) => overview.y_offset += delta.y,
+            DragActionType::None => (),
         }
 
         // Cancel velocity once drag actions are completed.
@@ -893,7 +893,6 @@ impl Windows {
             touch_state.cancel_velocity();
         }
 
-        overview.last_animation_step = None;
         overview.cancel_hold(&self.event_loop);
 
         // Redraw when cycling through the overview.
@@ -903,11 +902,7 @@ impl Windows {
     /// Handle touch drag release.
     pub fn on_drag_release(&mut self) {
         match &mut self.view {
-            View::Overview(overview) => {
-                // Use synthetic last frame to ensure animation starts immediately.
-                let last_frame = Instant::now() - self.output.frame_interval();
-                overview.last_animation_step = Some(last_frame);
-            },
+            View::Overview(overview) => overview.drag_action.done = true,
             View::DragAndDrop(dnd) => {
                 let (primary_bounds, secondary_bounds) = dnd.drop_bounds(&self.output);
                 if primary_bounds.to_f64().contains(dnd.touch_position) {

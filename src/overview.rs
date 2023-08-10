@@ -2,7 +2,6 @@
 
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
-use std::time::Instant;
 
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
@@ -31,13 +30,6 @@ const DRAG_AND_DROP_PERCENTAGE: f64 = 0.3;
 /// the overview.
 const OVERVIEW_CLOSE_DISTANCE: f64 = 0.25;
 
-/// Animation speed for the return from close, lower means faster.
-const VERTICAL_DRAG_ANIMATION_SPEED: f64 = 0.3;
-
-/// Animation speed for the return to nearest integer x-offset, lower means
-/// faster.
-const HORIZONTAL_DRAG_ANIMATION_SPEED: f64 = 75.;
-
 /// Maximum amount of overdrag before inputs are ignored.
 const OVERDRAG_LIMIT: f64 = 0.25;
 
@@ -50,7 +42,6 @@ const MINIMIZE_PERCENTAGE: f64 = 0.1;
 pub struct Overview {
     pub hold_timer: Option<RegistrationToken>,
     pub last_drag_point: Point<f64, Logical>,
-    pub last_animation_step: Option<Instant>,
     pub drag_action: DragAction,
     pub primary_percentage: f64,
     pub x_offset: f64,
@@ -71,7 +62,6 @@ impl Overview {
             primary_percentage,
             opened,
             x_offset: active_offset,
-            last_animation_step: Default::default(),
             last_drag_point: Default::default(),
             drag_action: Default::default(),
             hold_timer: Default::default(),
@@ -186,47 +176,15 @@ impl Overview {
     }
 
     /// Clamp the X/Y offsets.
-    ///
-    /// This takes overdrag into account and will animate the bounce-back.
-    fn clamp_offset(&mut self, canvas: &Canvas, window_count: i32) {
+    fn clamp_offset(&mut self, window_count: i32) {
         // Limit maximum overdrag.
         let min_offset = -window_count as f64 + 1.;
         self.x_offset = self.x_offset.clamp(min_offset - OVERDRAG_LIMIT, OVERDRAG_LIMIT);
 
-        let last_animation_step = match &mut self.last_animation_step {
-            Some(last_animation_step) => last_animation_step,
-            None => return,
-        };
-
-        // Handle horizontal and vertical bounce-back.
-
-        // Compute framerate-independent delta.
-        let delta = last_animation_step.elapsed().as_millis() as f64;
-        let horizontal_delta = delta / HORIZONTAL_DRAG_ANIMATION_SPEED;
-        let vertical_delta = delta / VERTICAL_DRAG_ANIMATION_SPEED;
-
-        // Horizontal bounce-back to closes valid integer offset.
-        let target = self.x_offset.round().clamp(min_offset, 0.);
-        let fract = self.x_offset.fract();
-        if self.x_offset > 0. || fract <= -0.5 {
-            self.x_offset = (self.x_offset - horizontal_delta).max(target);
-        } else if self.x_offset < min_offset || fract <= f64::EPSILON {
-            self.x_offset = (self.x_offset + horizontal_delta).min(target);
+        // Horizontal bounce-back to closest valid integer offset.
+        if self.drag_action.done {
+            self.x_offset = self.x_offset.round().clamp(min_offset, 0.);
         }
-
-        // Check if window is past the point of no return for closing.
-        let close_distance = canvas.available_overview().size.h as f64 * OVERVIEW_CLOSE_DISTANCE;
-        let is_closing = self.y_offset.abs() >= close_distance;
-
-        if is_closing {
-            // Continue animation until window is offscreen.
-            self.y_offset += vertical_delta.copysign(self.y_offset);
-        } else {
-            // Close window bounce-back.
-            self.y_offset -= vertical_delta.min(self.y_offset.abs()).copysign(self.y_offset);
-        }
-
-        *last_animation_step = Instant::now();
     }
 
     /// Get textures for rendering the overview.
@@ -241,7 +199,7 @@ impl Overview {
         self.dirty = false;
 
         let layout_count = layouts.len() as i32;
-        self.clamp_offset(canvas, layout_count);
+        self.clamp_offset(layout_count);
 
         let available_overview = canvas.available_overview();
         let scale = canvas.scale();
@@ -273,8 +231,7 @@ impl Overview {
                 let mut bounds = position.window_bounds(secondary.borrow().bounds(scale));
 
                 // Offset bounds for closing windows.
-                let closing_offset =
-                    self.handle_closing(output, canvas, layouts, secondary, bounds, false);
+                let closing_offset = self.handle_closing(output, canvas, layouts, secondary, false);
                 bounds.loc.y += closing_offset;
 
                 // Get physical bounds for clamping.
@@ -298,8 +255,7 @@ impl Overview {
                 let mut bounds = position.window_bounds(primary.borrow().bounds(scale));
 
                 // Offset bounds for closing windows.
-                let closing_offset =
-                    self.handle_closing(output, canvas, layouts, primary, bounds, true);
+                let closing_offset = self.handle_closing(output, canvas, layouts, primary, true);
                 bounds.loc.y += closing_offset;
 
                 // Get physical bounds for clamping.
@@ -328,7 +284,6 @@ impl Overview {
         canvas: &Canvas,
         layouts: &Layouts,
         window: &Rc<RefCell<Window>>,
-        mut bounds: Rectangle<i32, Logical>,
         is_primary: bool,
     ) -> i32 {
         // Check if this window is being closed.
@@ -346,16 +301,26 @@ impl Overview {
 
         // Calculate target window bounds.
         let delta = self.y_offset.round() as i32;
-        bounds.loc.y += delta;
 
-        // Kill the window if it has moved completely offscreen.
-        if !Rectangle::from_loc_and_size((0, 0), canvas.size()).overlaps(bounds) {
-            let surface = {
-                let mut window = window.borrow_mut();
-                window.kill();
-                window.surface.clone()
-            };
-            layouts.reap(output, &surface);
+        // Handle close drag termination.
+        if self.drag_action.done {
+            let close_distance =
+                canvas.available_overview().size.h as f64 * OVERVIEW_CLOSE_DISTANCE;
+
+            if self.y_offset.abs() >= close_distance {
+                // Kill the window if it is beyond the point of no return.
+                let surface = {
+                    let mut window = window.borrow_mut();
+                    window.kill();
+                    window.surface.clone()
+                };
+                layouts.reap(output, &surface);
+            } else {
+                // Reset if the window shouldn't be closed.
+                self.y_offset = 0.;
+            }
+
+            self.dirty = true;
         }
 
         delta
@@ -368,13 +333,8 @@ impl Overview {
     }
 
     /// Check if overview requires a redraw.
-    pub fn dirty(&self, window_count: usize) -> bool {
-        let min_offset = -(window_count as f64) + 1.;
+    pub fn dirty(&self) -> bool {
         self.dirty
-            || self.x_offset > 0.
-            || self.x_offset < min_offset
-            || self.x_offset.fract().abs() > f64::EPSILON
-            || self.y_offset != 0.
     }
 }
 
@@ -486,9 +446,32 @@ impl DragAndDrop {
     }
 }
 
+/// Overview touch drag state.
+#[derive(Default, Debug)]
+pub struct DragAction {
+    pub action_type: DragActionType,
+    pub done: bool,
+}
+
+impl DragAction {
+    /// Window in the process of being closed.
+    pub fn closing_window(&self) -> Weak<RefCell<Window>> {
+        match &self.action_type {
+            DragActionType::Close(window) => window.clone(),
+            _ => Weak::new(),
+        }
+    }
+}
+
+impl From<DragActionType> for DragAction {
+    fn from(action_type: DragActionType) -> Self {
+        Self { action_type, done: false }
+    }
+}
+
 /// Purpose of an overview touch drag action.
 #[derive(Default, Debug)]
-pub enum DragAction {
+pub enum DragActionType {
     /// Close a window in the overview.
     Close(Weak<RefCell<Window>>),
     /// Cycle through overview windows.
@@ -496,16 +479,6 @@ pub enum DragAction {
     /// No action active.
     #[default]
     None,
-}
-
-impl DragAction {
-    /// Window in the process of being closed.
-    pub fn closing_window(&self) -> Weak<RefCell<Window>> {
-        match self {
-            Self::Close(window) => window.clone(),
-            _ => Weak::new(),
-        }
-    }
 }
 
 /// Window placed in the application overview.
