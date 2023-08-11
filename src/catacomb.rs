@@ -38,6 +38,7 @@ use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportE
 use smithay::wayland::fractional_scale::{
     self, FractionalScaleHandler, FractionalScaleManagerState,
 };
+use smithay::wayland::idle_inhibit::{IdleInhibitHandler, IdleInhibitManagerState};
 use smithay::wayland::input_method::InputMethodManagerState;
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::presentation::PresentationState;
@@ -57,10 +58,10 @@ use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 use smithay::wayland::{compositor, data_device};
 use smithay::{
     delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_fractional_scale,
-    delegate_input_method_manager, delegate_kde_decoration, delegate_layer_shell, delegate_output,
-    delegate_presentation, delegate_seat, delegate_shm, delegate_text_input_manager,
-    delegate_viewporter, delegate_virtual_keyboard_manager, delegate_xdg_decoration,
-    delegate_xdg_shell,
+    delegate_idle_inhibit, delegate_input_method_manager, delegate_kde_decoration,
+    delegate_layer_shell, delegate_output, delegate_presentation, delegate_seat, delegate_shm,
+    delegate_text_input_manager, delegate_viewporter, delegate_virtual_keyboard_manager,
+    delegate_xdg_decoration, delegate_xdg_shell,
 };
 use tracing::{error, info};
 use zbus::zvariant::OwnedFd;
@@ -71,7 +72,6 @@ use crate::drawing::CatacombSurfaceData;
 use crate::input::{PhysicalButtonState, TouchState};
 use crate::orientation::{Accelerometer, AccelerometerSource};
 use crate::output::Output;
-use crate::protocols::idle_inhibit::{IdleInhibitHandler, IdleInhibitManagerState};
 use crate::protocols::screencopy::frame::Screencopy;
 use crate::protocols::screencopy::{ScreencopyHandler, ScreencopyManagerState};
 use crate::protocols::session_lock::surface::LockSurface;
@@ -80,9 +80,7 @@ use crate::udev::Udev;
 use crate::vibrate::Vibrator;
 use crate::windows::surface::Surface;
 use crate::windows::Windows;
-use crate::{
-    delegate_idle_inhibit, delegate_screencopy, delegate_session_lock, ipc_server, trace_error,
-};
+use crate::{delegate_screencopy, delegate_session_lock, ipc_server, trace_error};
 
 /// Duration until suspend after screen is turned off.
 const SUSPEND_TIMEOUT: Duration = Duration::from_secs(30);
@@ -722,13 +720,13 @@ impl ScreencopyHandler for Catacomb {
 delegate_screencopy!(Catacomb);
 
 impl IdleInhibitHandler for Catacomb {
-    fn inhibit(&mut self, surface: &WlSurface) {
+    fn inhibit(&mut self, surface: WlSurface) {
         self.idle_inhibitors.push(surface.clone());
     }
 
-    fn uninhibit(&mut self, surface: &WlSurface) {
+    fn uninhibit(&mut self, surface: WlSurface) {
         self.idle_inhibitors.retain(|inhibitor_surface| {
-            inhibitor_surface.is_alive() && inhibitor_surface != surface
+            inhibitor_surface.is_alive() && inhibitor_surface != &surface
         });
     }
 }
