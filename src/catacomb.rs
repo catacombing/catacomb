@@ -42,6 +42,7 @@ use smithay::wayland::idle_inhibit::{IdleInhibitHandler, IdleInhibitManagerState
 use smithay::wayland::input_method::InputMethodManagerState;
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::presentation::PresentationState;
+use smithay::wayland::primary_selection::{self, PrimarySelectionHandler, PrimarySelectionState};
 use smithay::wayland::shell::kde::decoration::{KdeDecorationHandler, KdeDecorationState};
 use smithay::wayland::shell::wlr_layer::{
     Layer, LayerSurface, WlrLayerShellHandler, WlrLayerShellState,
@@ -62,9 +63,10 @@ use smithay::wayland::{compositor, data_device};
 use smithay::{
     delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_fractional_scale,
     delegate_idle_inhibit, delegate_input_method_manager, delegate_kde_decoration,
-    delegate_layer_shell, delegate_output, delegate_presentation, delegate_seat, delegate_shm,
-    delegate_text_input_manager, delegate_viewporter, delegate_virtual_keyboard_manager,
-    delegate_xdg_activation, delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_layer_shell, delegate_output, delegate_presentation, delegate_primary_selection,
+    delegate_seat, delegate_shm, delegate_text_input_manager, delegate_viewporter,
+    delegate_virtual_keyboard_manager, delegate_xdg_activation, delegate_xdg_decoration,
+    delegate_xdg_shell,
 };
 use tracing::{error, info};
 use zbus::zvariant::OwnedFd;
@@ -117,6 +119,7 @@ pub struct Catacomb {
 
     // Smithay state.
     pub dmabuf_state: DmabufState,
+    primary_selection_state: PrimarySelectionState,
     xdg_activation_state: XdgActivationState,
     kde_decoration_state: KdeDecorationState,
     layer_shell_state: WlrLayerShellState,
@@ -228,6 +231,9 @@ impl Catacomb {
         // Initalize xdg-activation protocol.
         let xdg_activation_state = XdgActivationState::new::<Self>(&display_handle);
 
+        // Initalize primary-selection protocol.
+        let primary_selection_state = PrimarySelectionState::new::<Self>(&display_handle);
+
         // Initialize seat.
         let seat_name = backend.seat_name();
         let mut seat_state = SeatState::new();
@@ -294,6 +300,7 @@ impl Catacomb {
             };
 
         let mut catacomb = Self {
+            primary_selection_state,
             xdg_activation_state,
             kde_decoration_state,
             layer_shell_state,
@@ -668,8 +675,12 @@ impl SeatHandler for Catacomb {
     }
 
     fn focus_changed(&mut self, seat: &Seat<Self>, surface: Option<&Self::KeyboardFocus>) {
+        // Update data device focus.
         let client = surface.and_then(|surface| self.display_handle.get_client(surface.id()).ok());
-        data_device::set_data_device_focus(&self.display_handle, seat, client);
+        data_device::set_data_device_focus(&self.display_handle, seat, client.clone());
+
+        // Update primary selection focus.
+        primary_selection::set_primary_focus(&self.display_handle, &self.seat, client);
     }
 }
 delegate_seat!(Catacomb);
@@ -794,6 +805,15 @@ impl XdgActivationHandler for Catacomb {
     }
 }
 delegate_xdg_activation!(Catacomb);
+
+impl PrimarySelectionHandler for Catacomb {
+    type SelectionUserData = ();
+
+    fn primary_selection_state(&self) -> &PrimarySelectionState {
+        &self.primary_selection_state
+    }
+}
+delegate_primary_selection!(Catacomb);
 
 delegate_presentation!(Catacomb);
 
