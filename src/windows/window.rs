@@ -56,6 +56,9 @@ pub struct Window<S = ToplevelSurface> {
     /// Application ID.
     pub app_id: Option<String>,
 
+    /// User attention request status.
+    pub urgent: bool,
+
     /// Buffers pending to be updated.
     dirty: bool,
 
@@ -106,6 +109,7 @@ impl<S: Surface + 'static> Window<S> {
             acked_size: Default::default(),
             visible: Default::default(),
             popups: Default::default(),
+            urgent: Default::default(),
             dirty: Default::default(),
             scale: Default::default(),
             size: Default::default(),

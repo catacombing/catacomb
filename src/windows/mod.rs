@@ -369,7 +369,13 @@ impl Windows {
                 }
             },
             View::Overview(overview) => {
-                overview.textures(&mut self.textures, &self.output, &self.canvas, &self.layouts);
+                overview.textures(
+                    &mut self.textures,
+                    &self.output,
+                    &self.canvas,
+                    &self.layouts,
+                    graphics,
+                );
 
                 for layer in self.layers.background() {
                     layer.textures(&mut self.textures, scale, None, None);
@@ -483,7 +489,7 @@ impl Windows {
 
     /// Fullscreen the supplied XDG surface.
     pub fn fullscreen(&mut self, surface: &ToplevelSurface) {
-        if let Some(window) = self.layouts.find_window(surface) {
+        if let Some(window) = self.layouts.find_window(surface.surface()) {
             // Update window's XDG state.
             window.borrow_mut().surface.set_state(|state| {
                 state.states.set(State::Fullscreen);
@@ -906,12 +912,14 @@ impl Windows {
             View::DragAndDrop(dnd) => {
                 let (primary_bounds, secondary_bounds) = dnd.drop_bounds(&self.output);
                 if primary_bounds.to_f64().contains(dnd.touch_position) {
-                    if let Some(position) = self.layouts.position(&dnd.window) {
+                    let surface = dnd.window.borrow().surface().clone();
+                    if let Some(position) = self.layouts.position(&surface) {
                         self.layouts.set_primary(&self.output, position);
                         self.set_view(View::Workspace);
                     }
                 } else if secondary_bounds.to_f64().contains(dnd.touch_position) {
-                    if let Some(position) = self.layouts.position(&dnd.window) {
+                    let surface = dnd.window.borrow().surface().clone();
+                    if let Some(position) = self.layouts.position(&surface) {
                         self.layouts.set_secondary(&self.output, position);
                         self.set_view(View::Workspace);
                     }
@@ -1177,6 +1185,20 @@ impl Windows {
     /// Mark the entire screen as dirty.
     pub fn set_dirty(&mut self) {
         self.dirty = true;
+    }
+
+    /// Raise a surface's window to the foreground.
+    pub fn raise(&mut self, surface: WlSurface) {
+        if let Some(layout_position) = self.layouts.position(&surface) {
+            self.layouts.set_active(&self.output, Some(layout_position), false);
+        }
+    }
+
+    /// Mark a surface's window as urgent.
+    pub fn set_urgent(&mut self, surface: WlSurface, urgent: bool) {
+        if let Some(window) = self.layouts.find_window(&surface) {
+            window.borrow_mut().urgent = urgent;
+        }
     }
 }
 

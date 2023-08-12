@@ -55,13 +55,16 @@ use smithay::wayland::socket::ListeningSocketSource;
 use smithay::wayland::text_input::TextInputManagerState;
 use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
+use smithay::wayland::xdg_activation::{
+    XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
+};
 use smithay::wayland::{compositor, data_device};
 use smithay::{
     delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_fractional_scale,
     delegate_idle_inhibit, delegate_input_method_manager, delegate_kde_decoration,
     delegate_layer_shell, delegate_output, delegate_presentation, delegate_seat, delegate_shm,
     delegate_text_input_manager, delegate_viewporter, delegate_virtual_keyboard_manager,
-    delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_xdg_activation, delegate_xdg_decoration, delegate_xdg_shell,
 };
 use tracing::{error, info};
 use zbus::zvariant::OwnedFd;
@@ -88,6 +91,9 @@ const SUSPEND_TIMEOUT: Duration = Duration::from_secs(30);
 /// Idle duration before automatic sleep.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60 * 5);
 
+/// Time before xdg_activation tokens are invalidated.
+const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// The script to run after compositor start.
 const POST_START_SCRIPT: &str = "post_start.sh";
 
@@ -111,6 +117,7 @@ pub struct Catacomb {
 
     // Smithay state.
     pub dmabuf_state: DmabufState,
+    xdg_activation_state: XdgActivationState,
     kde_decoration_state: KdeDecorationState,
     layer_shell_state: WlrLayerShellState,
     lock_state: SessionLockManagerState,
@@ -218,6 +225,9 @@ impl Catacomb {
         // Initialize session-lock protocol.
         let lock_state = SessionLockManagerState::new::<Self>(&display_handle);
 
+        // Initalize xdg-activation protocol.
+        let xdg_activation_state = XdgActivationState::new::<Self>(&display_handle);
+
         // Initialize seat.
         let seat_name = backend.seat_name();
         let mut seat_state = SeatState::new();
@@ -284,6 +294,7 @@ impl Catacomb {
             };
 
         let mut catacomb = Self {
+            xdg_activation_state,
             kde_decoration_state,
             layer_shell_state,
             data_device_state,
@@ -732,8 +743,6 @@ impl IdleInhibitHandler for Catacomb {
 }
 delegate_idle_inhibit!(Catacomb);
 
-delegate_presentation!(Catacomb);
-
 impl FractionalScaleHandler for Catacomb {
     fn new_fractional_scale(&mut self, surface: WlSurface) {
         // Submit last cached preferred scale.
@@ -748,6 +757,45 @@ impl FractionalScaleHandler for Catacomb {
     }
 }
 delegate_fractional_scale!(Catacomb);
+
+impl XdgActivationHandler for Catacomb {
+    fn activation_state(&mut self) -> &mut XdgActivationState {
+        &mut self.xdg_activation_state
+    }
+
+    fn request_activation(
+        &mut self,
+        token: XdgActivationToken,
+        token_data: XdgActivationTokenData,
+        surface: WlSurface,
+    ) {
+        // Remove tokens which are too old.
+        if token_data.timestamp.elapsed() >= ACTIVATION_TIMEOUT {
+            self.xdg_activation_state.remove_request(&token);
+            return;
+        }
+
+        // Select raise/urgency based on focus of the client which created the token.
+        if token_data.surface == self.last_focus {
+            self.windows.raise(surface);
+        } else {
+            self.windows.set_urgent(surface, true);
+        }
+    }
+
+    fn destroy_activation(
+        &mut self,
+        _token: XdgActivationToken,
+        _token_data: XdgActivationTokenData,
+        surface: WlSurface,
+    ) {
+        // Ensure urgency is cleared.
+        self.windows.set_urgent(surface, false);
+    }
+}
+delegate_xdg_activation!(Catacomb);
+
+delegate_presentation!(Catacomb);
 
 delegate_viewporter!(Catacomb);
 

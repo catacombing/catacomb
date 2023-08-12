@@ -11,7 +11,7 @@ use smithay::wayland::shell::xdg::ToplevelSurface;
 
 use crate::drawing::CatacombElement;
 use crate::windows::surface::InputSurfaceKind;
-use crate::windows::{self, InputSurface, Output, Window};
+use crate::windows::{self, InputSurface, Output, Window, WlSurface};
 
 /// Default layout as const for borrowing purposes.
 const DEFAULT_LAYOUT: Layout = Layout { primary: None, secondary: None, id: LayoutId(0) };
@@ -497,13 +497,13 @@ impl Layouts {
     }
 
     /// Get overview layout position of a window.
-    pub fn position(&self, window: &Rc<RefCell<Window>>) -> Option<LayoutPosition> {
+    pub fn position(&self, surface: &WlSurface) -> Option<LayoutPosition> {
         for (i, layout) in self.layouts.iter().enumerate() {
             match (&layout.primary, &layout.secondary) {
-                (Some(primary), _) if Rc::ptr_eq(primary, window) => {
+                (Some(primary), _) if primary.borrow().owns_surface(surface) => {
                     return Some(LayoutPosition::new(i, false))
                 },
-                (_, Some(secondary)) if Rc::ptr_eq(secondary, window) => {
+                (_, Some(secondary)) if secondary.borrow().owns_surface(surface) => {
                     return Some(LayoutPosition::new(i, true))
                 },
                 _ => (),
@@ -523,12 +523,12 @@ impl Layouts {
         })
     }
 
-    /// Find the window for the given toplevel surface.
-    pub fn find_window(&self, surface: &ToplevelSurface) -> Option<&Rc<RefCell<Window>>> {
+    /// Find the window for the given surface.
+    pub fn find_window(&self, surface: &WlSurface) -> Option<&Rc<RefCell<Window>>> {
         self.layouts
             .iter()
             .flat_map(|layout| layout.windows())
-            .find(|window| &window.borrow().surface == surface)
+            .find(|window| window.borrow().surface() == surface)
     }
 
     /// Touch and return surface at the specified location.

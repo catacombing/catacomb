@@ -27,6 +27,9 @@ use crate::output::{Canvas, GESTURE_HANDLE_HEIGHT};
 const ACTIVE_DROP_TARGET_RGBA: [u8; 4] = [64, 64, 64, 128];
 
 /// Color of the overview tiling location highlight.
+const URGENCY_ICON_RGBA: [u8; 4] = [172, 66, 66, 255];
+
+/// Color of the overview tiling location highlight.
 const DROP_TARGET_RGBA: [u8; 4] = [32, 32, 32, 64];
 
 /// Relative size of gesture notch to the handle's whole width/height.
@@ -337,6 +340,7 @@ impl RenderElement<GlesRenderer> for CatacombElement {
 pub struct Graphics {
     pub gesture_handle: Option<RenderTexture>,
     pub active_drop_target: RenderTexture,
+    pub urgency_icon: RenderTexture,
     pub drop_target: RenderTexture,
 }
 
@@ -345,8 +349,12 @@ impl Graphics {
         let active_drop_target =
             Texture::from_buffer(renderer, 1., &ACTIVE_DROP_TARGET_RGBA, 1, 1, false);
         let drop_target = Texture::from_buffer(renderer, 1., &DROP_TARGET_RGBA, 1, 1, false);
+
+        let urgency_icon = Texture::from_buffer(renderer, 1., &URGENCY_ICON_RGBA, 1, 1, true);
+
         Self {
             active_drop_target: RenderTexture::new(active_drop_target),
+            urgency_icon: RenderTexture::new(urgency_icon),
             drop_target: RenderTexture::new(drop_target),
             gesture_handle: None,
         }

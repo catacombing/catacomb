@@ -1,6 +1,7 @@
 //! Application overview.
 
 use std::cell::RefCell;
+use std::cmp;
 use std::rc::{Rc, Weak};
 
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
@@ -36,6 +37,9 @@ const OVERDRAG_LIMIT: f64 = 0.25;
 /// Primary percentage below which a minimize action will be considered
 /// successful.
 const MINIMIZE_PERCENTAGE: f64 = 0.1;
+
+/// Height of the urgency highlight bar.
+const URGENCY_BAR_HEIGHT: i32 = 16;
 
 /// Overview view state.
 #[derive(Debug)]
@@ -194,6 +198,7 @@ impl Overview {
         output: &Output,
         canvas: &Canvas,
         layouts: &Layouts,
+        graphics: &Graphics,
     ) {
         // Reset redraw flag.
         self.dirty = false;
@@ -202,7 +207,6 @@ impl Overview {
         self.clamp_offset(layout_count);
 
         let available_overview = canvas.available_overview();
-        let scale = canvas.scale();
 
         // Draw up to three visible windows (center and one to each side).
         let mut offset = self.x_offset - 1.;
@@ -227,54 +231,72 @@ impl Overview {
 
             // Add secondary window textures.
             if let Some(secondary) = layout.secondary() {
-                // Scale window bounds to overview scale.
-                let mut bounds = position.window_bounds(secondary.borrow().bounds(scale));
-
-                // Offset bounds for closing windows.
-                let closing_offset = self.handle_closing(output, canvas, layouts, secondary, false);
-                bounds.loc.y += closing_offset;
-
-                // Get physical bounds for clamping.
-                let mut layout_bounds = position.layout_bounds();
-                layout_bounds.loc.y += closing_offset;
-                let physical_bounds = layout_bounds.to_physical_precise_round(scale);
-
-                // Get window textures within its overview bounds.
-                secondary.borrow().textures_with_bounds(
-                    textures,
-                    scale,
-                    position.scale,
-                    bounds.loc,
-                    physical_bounds,
+                self.window_textures(
+                    textures, output, canvas, layouts, graphics, secondary, &position, false,
                 );
             }
 
             // Add primary window textures.
             if let Some(primary) = layout.primary() {
-                // Scale window bounds to overview scale.
-                let mut bounds = position.window_bounds(primary.borrow().bounds(scale));
-
-                // Offset bounds for closing windows.
-                let closing_offset = self.handle_closing(output, canvas, layouts, primary, true);
-                bounds.loc.y += closing_offset;
-
-                // Get physical bounds for clamping.
-                let mut layout_bounds = position.layout_bounds();
-                layout_bounds.loc.y += closing_offset;
-                let physical_bounds = layout_bounds.to_physical_precise_round(scale);
-
-                // Get window textures within its overview bounds.
-                primary.borrow().textures_with_bounds(
-                    textures,
-                    scale,
-                    position.scale,
-                    bounds.loc,
-                    physical_bounds,
+                self.window_textures(
+                    textures, output, canvas, layouts, graphics, primary, &position, true,
                 );
             }
 
             offset += 1.;
         }
+    }
+
+    /// Get textures for a window in the overview.
+    #[allow(clippy::too_many_arguments)]
+    fn window_textures(
+        &mut self,
+        textures: &mut Vec<CatacombElement>,
+        output: &Output,
+        canvas: &Canvas,
+        layouts: &Layouts,
+        graphics: &Graphics,
+        window: &Rc<RefCell<Window>>,
+        position: &OverviewPosition,
+        is_primary: bool,
+    ) {
+        let scale = canvas.scale();
+
+        // Scale window bounds to overview scale.
+        let mut bounds = position.window_bounds(window.borrow().bounds(scale));
+
+        // Offset bounds for closing windows.
+        let closing_offset = self.handle_closing(output, canvas, layouts, window, is_primary);
+        bounds.loc.y += closing_offset;
+
+        // Get physical bounds for clamping.
+        let mut layout_bounds = position.layout_bounds();
+        layout_bounds.loc.y += closing_offset;
+        let physical_bounds = layout_bounds.to_physical_precise_round(scale);
+
+        // Add urgency texture.
+        let window = window.borrow();
+        if window.urgent {
+            let texture = graphics.urgency_icon.clone();
+
+            // Scale urgency texture to create a bar above the window.
+            let mut bounds = physical_bounds;
+            bounds.size.h = (URGENCY_BAR_HEIGHT as f64 * position.scale).round() as i32;
+            bounds.loc.y -= bounds.size.h;
+            let window_scale = Some(cmp::max(bounds.size.w, bounds.size.h) as f64);
+
+            CatacombElement::add_element(
+                textures,
+                texture,
+                bounds.loc,
+                bounds,
+                window_scale,
+                scale,
+            );
+        }
+
+        // Get window textures within its overview bounds.
+        window.textures_with_bounds(textures, scale, position.scale, bounds.loc, physical_bounds);
     }
 
     /// Handle closing window for drawing the overview.
