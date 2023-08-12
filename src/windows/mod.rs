@@ -531,7 +531,10 @@ impl Windows {
         let focused = match self.layouts.focus.as_ref().map(Weak::upgrade) {
             // Use focused surface if the window is still alive.
             Some(Some(window)) => {
-                let window = window.borrow();
+                // Clear urgency.
+                let mut window = window.borrow_mut();
+                window.urgent = false;
+
                 Some((window.surface.clone(), window.app_id.clone()))
             },
             // Fallback to primary if secondary perished.
@@ -539,7 +542,10 @@ impl Windows {
                 let active_layout = self.layouts.pending_active();
                 let primary = active_layout.primary();
                 let focused = primary.map(|window| {
-                    let window = window.borrow();
+                    // Clear urgency.
+                    let mut window = window.borrow_mut();
+                    window.urgent = false;
+
                     (window.surface.clone(), window.app_id.clone())
                 });
                 self.layouts.focus = primary.map(Rc::downgrade);
@@ -1188,15 +1194,15 @@ impl Windows {
     }
 
     /// Raise a surface's window to the foreground.
-    pub fn raise(&mut self, surface: WlSurface) {
-        if let Some(layout_position) = self.layouts.position(&surface) {
+    pub fn raise(&mut self, surface: &WlSurface) {
+        if let Some(layout_position) = self.layouts.position(surface) {
             self.layouts.set_active(&self.output, Some(layout_position), false);
         }
     }
 
     /// Mark a surface's window as urgent.
-    pub fn set_urgent(&mut self, surface: WlSurface, urgent: bool) {
-        if let Some(window) = self.layouts.find_window(&surface) {
+    pub fn set_urgent(&mut self, surface: &WlSurface, urgent: bool) {
+        if let Some(window) = self.layouts.find_window(surface) {
             window.borrow_mut().urgent = urgent;
         }
     }

@@ -788,9 +788,13 @@ impl XdgActivationHandler for Catacomb {
 
         // Select raise/urgency based on focus of the client which created the token.
         if token_data.surface == self.last_focus {
-            self.windows.raise(surface);
-        } else {
-            self.windows.set_urgent(surface, true);
+            self.windows.raise(&surface);
+            self.windows.set_dirty();
+            self.unstall();
+        } else if Some(&surface) != self.last_focus.as_ref() {
+            self.windows.set_urgent(&surface, true);
+            self.windows.set_dirty();
+            self.unstall();
         }
     }
 
@@ -801,7 +805,7 @@ impl XdgActivationHandler for Catacomb {
         surface: WlSurface,
     ) {
         // Ensure urgency is cleared.
-        self.windows.set_urgent(surface, false);
+        self.windows.set_urgent(&surface, false);
     }
 }
 delegate_xdg_activation!(Catacomb);
