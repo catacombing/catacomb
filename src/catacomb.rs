@@ -40,6 +40,9 @@ use smithay::wayland::fractional_scale::{
 };
 use smithay::wayland::idle_inhibit::{IdleInhibitHandler, IdleInhibitManagerState};
 use smithay::wayland::input_method::InputMethodManagerState;
+use smithay::wayland::keyboard_shortcuts_inhibit::{
+    KeyboardShortcutsInhibitHandler, KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitor,
+};
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::presentation::PresentationState;
 use smithay::wayland::primary_selection::{self, PrimarySelectionHandler, PrimarySelectionState};
@@ -63,10 +66,10 @@ use smithay::wayland::{compositor, data_device};
 use smithay::{
     delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_fractional_scale,
     delegate_idle_inhibit, delegate_input_method_manager, delegate_kde_decoration,
-    delegate_layer_shell, delegate_output, delegate_presentation, delegate_primary_selection,
-    delegate_seat, delegate_shm, delegate_text_input_manager, delegate_viewporter,
-    delegate_virtual_keyboard_manager, delegate_xdg_activation, delegate_xdg_decoration,
-    delegate_xdg_shell,
+    delegate_keyboard_shortcuts_inhibit, delegate_layer_shell, delegate_output,
+    delegate_presentation, delegate_primary_selection, delegate_seat, delegate_shm,
+    delegate_text_input_manager, delegate_viewporter, delegate_virtual_keyboard_manager,
+    delegate_xdg_activation, delegate_xdg_decoration, delegate_xdg_shell,
 };
 use tracing::{error, info};
 use zbus::zvariant::OwnedFd;
@@ -119,6 +122,7 @@ pub struct Catacomb {
 
     // Smithay state.
     pub dmabuf_state: DmabufState,
+    keyboard_shortcuts_inhibit_state: KeyboardShortcutsInhibitState,
     primary_selection_state: PrimarySelectionState,
     xdg_activation_state: XdgActivationState,
     kde_decoration_state: KdeDecorationState,
@@ -234,6 +238,10 @@ impl Catacomb {
         // Initalize primary-selection protocol.
         let primary_selection_state = PrimarySelectionState::new::<Self>(&display_handle);
 
+        // Initalize keyboard-shortcuts-inhibit protocol.
+        let keyboard_shortcuts_inhibit_state =
+            KeyboardShortcutsInhibitState::new::<Self>(&display_handle);
+
         // Initialize seat.
         let seat_name = backend.seat_name();
         let mut seat_state = SeatState::new();
@@ -300,6 +308,7 @@ impl Catacomb {
             };
 
         let mut catacomb = Self {
+            keyboard_shortcuts_inhibit_state,
             primary_selection_state,
             xdg_activation_state,
             kde_decoration_state,
@@ -408,10 +417,15 @@ impl Catacomb {
     }
 
     /// Focus a new surface.
-    pub fn focus(&mut self, surface: Option<WlSurface>) {
+    fn focus(&mut self, surface: Option<WlSurface>) {
         if let Some(keyboard) = self.seat.get_keyboard() {
             keyboard.set_focus(self, surface, SERIAL_COUNTER.next_serial());
         }
+    }
+
+    /// Get the last focused surface.
+    pub fn last_focus(&self) -> Option<&WlSurface> {
+        self.last_focus.as_ref()
     }
 
     /// Start rendering again if we're currently stalled.
@@ -818,6 +832,33 @@ impl PrimarySelectionHandler for Catacomb {
     }
 }
 delegate_primary_selection!(Catacomb);
+
+impl KeyboardShortcutsInhibitHandler for Catacomb {
+    fn keyboard_shortcuts_inhibit_state(&mut self) -> &mut KeyboardShortcutsInhibitState {
+        &mut self.keyboard_shortcuts_inhibit_state
+    }
+
+    fn new_inhibitor(&mut self, inhibitor: KeyboardShortcutsInhibitor) {
+        // Mark surface as inhibiting.
+        compositor::with_states(inhibitor.wl_surface(), |states| {
+            let surface_data =
+                states.data_map.get_or_insert(|| RefCell::new(CatacombSurfaceData::new()));
+            surface_data.borrow_mut().inhibits_shortcuts = true;
+        });
+
+        inhibitor.activate();
+    }
+
+    fn inhibitor_destroyed(&mut self, inhibitor: KeyboardShortcutsInhibitor) {
+        // Remove inhibition flag from the surface.
+        compositor::with_states(inhibitor.wl_surface(), |states| {
+            let surface_data =
+                states.data_map.get_or_insert(|| RefCell::new(CatacombSurfaceData::new()));
+            surface_data.borrow_mut().inhibits_shortcuts = false;
+        });
+    }
+}
+delegate_keyboard_shortcuts_inhibit!(Catacomb);
 
 delegate_presentation!(Catacomb);
 

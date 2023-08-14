@@ -411,6 +411,7 @@ pub struct CatacombSurfaceData {
     pub buffer_size: Size<i32, Logical>,
     pub src_rect: Rectangle<f64, Logical>,
     pub dst_size: Size<i32, Logical>,
+    pub inhibits_shortcuts: bool,
     pub buffer: Option<Buffer>,
     pub transform: Transform,
     pub damage: Damage,
@@ -422,6 +423,7 @@ impl Default for CatacombSurfaceData {
         Self {
             preferred_fractional_scale: 1.,
             scale: 1,
+            inhibits_shortcuts: Default::default(),
             opaque_region: Default::default(),
             buffer_size: Default::default(),
             transform: Default::default(),

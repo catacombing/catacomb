@@ -11,12 +11,14 @@ use smithay::input::keyboard::{keysyms, FilterResult, Keysym, KeysymHandle, Modi
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
+use smithay::wayland::compositor;
 use smithay::wayland::seat::TouchHandle;
 use tracing::error;
 
 use crate::catacomb::Catacomb;
 use crate::config::GestureBinding;
 use crate::daemon;
+use crate::drawing::CatacombSurfaceData;
 use crate::orientation::Orientation;
 use crate::output::{Canvas, GESTURE_HANDLE_HEIGHT};
 use crate::windows::surface::{InputSurface, InputSurfaceKind};
@@ -138,7 +140,7 @@ impl TouchState {
 
         // Check if a user gesture was completed.
         let touching = self.touching();
-        if !touching {
+        if !touching && self.input_surface.is_none() {
             // Find matching user gestures.
             let app_id = self.active_app_id.as_ref();
             let start = self.start.position;
@@ -422,13 +424,25 @@ impl Catacomb {
             // Get surface's App ID.
             let app_id = input_surface.toplevel.as_mut().and_then(InputSurfaceKind::take_app_id);
 
-            // Check if a gesture is triggered by this touch event.
-            let gesture_active = self.touch_state.start.is_handle_gesture
-                || self
-                    .touch_state
+            // Check if surface captures shortcuts.
+            let inhibits_shortcuts = compositor::with_states(&input_surface.surface, |states| {
+                let data = states.data_map.get::<CatacombSurfaceData>();
+                data.map_or(false, |data| data.inhibits_shortcuts)
+            });
+
+            // Check if there's a gesture for this touch event.
+            let has_gesture = || {
+                self.touch_state
                     .matching_gestures(self.windows.canvas(), app_id.as_ref(), event.position, None)
                     .next()
-                    .is_some();
+                    .is_some()
+            };
+
+            // TODO: This doesn't actually prevent anything.
+            //
+            // Check if a gesture is triggered by this touch event.
+            let gesture_active =
+                self.touch_state.start.is_handle_gesture || (!inhibits_shortcuts && has_gesture());
             self.touch_state.active_app_id = app_id;
 
             if !gesture_active {
@@ -703,6 +717,18 @@ impl Catacomb {
         mods: impl Into<Modifiers>,
         raw_keysym: Keysym,
     ) -> FilterResult<InputAction> {
+        // Check if focused surface inhibits shortcuts.
+        let inhibits_shortcuts = catacomb.last_focus().map_or(false, |surface| {
+            compositor::with_states(surface, |states| {
+                let data = states.data_map.get::<CatacombSurfaceData>();
+                data.map_or(false, |data| data.inhibits_shortcuts)
+            })
+        });
+
+        if inhibits_shortcuts {
+            return FilterResult::Forward;
+        }
+
         let mods = mods.into();
 
         // Get currently focused app.
