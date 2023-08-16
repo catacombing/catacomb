@@ -269,13 +269,18 @@ impl Overview {
         let closing_offset = self.handle_closing(output, canvas, layouts, window, is_primary);
         bounds.loc.y += closing_offset;
 
+        // Do not render windows in the process of closing.
+        let window = window.borrow();
+        if !window.alive() {
+            return;
+        }
+
         // Get physical bounds for clamping.
         let mut layout_bounds = position.layout_bounds();
         layout_bounds.loc.y += closing_offset;
         let physical_bounds = layout_bounds.to_physical_precise_round(scale);
 
         // Add urgency texture.
-        let window = window.borrow();
         if window.urgent {
             let texture = graphics.urgency_icon.clone();
 
