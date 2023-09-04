@@ -13,6 +13,14 @@ responsive window management without cutting down on useful features.
   <img src="https://user-images.githubusercontent.com/8886672/210189206-3d9d738f-dd60-47bb-99ab-7a6450be9da1.png" width="30%"/>
 </p>
 
+## Configuration
+
+Catacomb is configured through IPC using `catacomb msg`.
+
+For persistent configuration or to launch applications on startup, Catacomb
+automatically loads `$XDG_CONFIG_HOME/catacomb/post_start.sh` (or
+`~/.config/catacomb/post_start.sh` if `XDG_CONFIG_HOME` is not defined).
+
 ## Polkit
 
 Catacomb uses logind's DBus API to automatically suspend the system when the
