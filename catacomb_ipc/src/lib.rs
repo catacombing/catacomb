@@ -58,7 +58,12 @@ pub enum IpcMessage {
     },
     /// Add a gesture.
     BindGesture {
-        /// App ID regex for which the gesture.
+        /// App ID regex.
+        ///
+        /// The binding will be enabled when the focused window's App ID matches
+        /// the regex.
+        ///
+        /// Use `*` to bind the gesture globally.
         app_id: String,
         /// Starting sector of the gesture.
         start: GestureSector,
@@ -81,7 +86,12 @@ pub enum IpcMessage {
     },
     /// Add a key.
     BindKey {
-        /// App ID regex for which the gesture.
+        /// App ID regex.
+        ///
+        /// The binding will be enabled when the focused window's App ID matches
+        /// the regex.
+        ///
+        /// Use `*` to bind the key globally.
         app_id: String,
         /// Required modifiers.
         #[cfg_attr(feature = "clap", clap(long, short))]
