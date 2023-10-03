@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
 use std::fmt::Display;
+use std::mem::MaybeUninit;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::{env, io, ptr};
@@ -7,6 +8,7 @@ use std::{env, io, ptr};
 use catacomb_ipc::IpcMessage;
 use clap::{self, Parser, Subcommand};
 use tracing::error;
+use tracing_log::LogTracer;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 mod catacomb;
@@ -43,6 +45,9 @@ pub enum Subcommands {
 }
 
 pub fn main() {
+    // Try to initialize log-compatibility shim.
+    let _ = LogTracer::init();
+
     // Set default level to WARN with Catacomb itself at INFO.
     let mut directives = String::from("warn,catacomb=info");
 
@@ -96,7 +101,7 @@ where
             }
 
             // Reset signal handlers.
-            let mut signal_set = std::mem::MaybeUninit::uninit();
+            let mut signal_set = MaybeUninit::uninit();
             libc::sigemptyset(signal_set.as_mut_ptr());
             libc::sigprocmask(libc::SIG_SETMASK, signal_set.as_mut_ptr(), ptr::null_mut());
 

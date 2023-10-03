@@ -2,8 +2,6 @@
 
 use std::cell::RefCell;
 use std::env;
-use std::os::unix::io::AsRawFd;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -14,7 +12,7 @@ use smithay::backend::renderer::ImportDma;
 use smithay::input::keyboard::XkbConfig;
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::calloop::channel::Event as ChannelEvent;
-use smithay::reexports::calloop::generic::Generic;
+use smithay::reexports::calloop::generic::{Generic, NoIoDrop};
 use smithay::reexports::calloop::signals::{Signal, Signals};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{
@@ -28,24 +26,30 @@ use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, Resource};
-use smithay::utils::{Serial, SERIAL_COUNTER};
+use smithay::utils::{Logical, Rectangle, Serial, SERIAL_COUNTER};
 use smithay::wayland::buffer::BufferHandler;
+use smithay::wayland::compositor;
 use smithay::wayland::compositor::{CompositorClientState, CompositorHandler, CompositorState};
-use smithay::wayland::data_device::{
-    ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
-};
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportError};
 use smithay::wayland::fractional_scale::{
     self, FractionalScaleHandler, FractionalScaleManagerState,
 };
 use smithay::wayland::idle_inhibit::{IdleInhibitHandler, IdleInhibitManagerState};
-use smithay::wayland::input_method::InputMethodManagerState;
+use smithay::wayland::input_method::{
+    InputMethodHandler, InputMethodManagerState, PopupSurface as ImeSurface,
+};
 use smithay::wayland::keyboard_shortcuts_inhibit::{
     KeyboardShortcutsInhibitHandler, KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitor,
 };
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::presentation::PresentationState;
-use smithay::wayland::primary_selection::{self, PrimarySelectionHandler, PrimarySelectionState};
+use smithay::wayland::selection::data_device::{
+    self, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
+};
+use smithay::wayland::selection::primary_selection::{
+    self, PrimarySelectionHandler, PrimarySelectionState,
+};
+use smithay::wayland::selection::SelectionHandler;
 use smithay::wayland::shell::kde::decoration::{KdeDecorationHandler, KdeDecorationState};
 use smithay::wayland::shell::wlr_layer::{
     Layer, LayerSurface, WlrLayerShellHandler, WlrLayerShellState,
@@ -62,7 +66,6 @@ use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 use smithay::wayland::xdg_activation::{
     XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
 };
-use smithay::wayland::{compositor, data_device};
 use smithay::{
     delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_fractional_scale,
     delegate_idle_inhibit, delegate_input_method_manager, delegate_kde_decoration,
@@ -146,15 +149,12 @@ pub struct Catacomb {
     // rendering and further VBlank. If this is `true`, rendering needs to be kicked of manually
     // again when damage is received.
     stalled: bool,
-
-    // NOTE: Must be last field to ensure it's dropped after any global.
-    pub display: Rc<RefCell<Display<Self>>>,
 }
 
 impl Catacomb {
     /// Initialize the compositor.
     pub fn new(event_loop: LoopHandle<'static, Self>, backend: Udev) -> Self {
-        let mut display = Display::new().expect("Wayland display creation");
+        let display = Display::new().expect("Wayland display creation");
         let display_handle = display.handle();
 
         // Setup SIGTERM handler for clean shutdown.
@@ -181,12 +181,8 @@ impl Catacomb {
         // Register display event source.
         event_loop
             .insert_source(
-                Generic::new(
-                    display.backend().poll_fd().as_raw_fd(),
-                    Interest::READ,
-                    TriggerMode::Level,
-                ),
-                |_, _, catacomb| Ok(catacomb.handle_socket_readiness()),
+                Generic::new(display, Interest::READ, TriggerMode::Level),
+                |_, display, catacomb| Ok(catacomb.handle_socket_readiness(display)),
             )
             .expect("register display");
 
@@ -328,7 +324,6 @@ impl Catacomb {
             windows,
             backend,
             seat,
-            display: Rc::new(RefCell::new(display)),
             _power_inhibitor: power_inhibitor,
             accelerometer_token: accel_token,
             last_resume: Instant::now(),
@@ -351,10 +346,10 @@ impl Catacomb {
     }
 
     /// Handle Wayland event socket read readiness.
-    fn handle_socket_readiness(&mut self) -> PostAction {
-        let display = self.display.clone();
-        let mut display = display.borrow_mut();
-        display.dispatch_clients(self).expect("Wayland dispatch error");
+    fn handle_socket_readiness(&mut self, display: &mut NoIoDrop<Display<Catacomb>>) -> PostAction {
+        unsafe {
+            display.get_mut().dispatch_clients(self).expect("Wayland dispatch error");
+        }
         PostAction::Continue
     }
 
@@ -699,20 +694,17 @@ impl SeatHandler for Catacomb {
 }
 delegate_seat!(Catacomb);
 
+impl InputMethodHandler for Catacomb {
+    fn new_popup(&mut self, _surface: ImeSurface) {}
+
+    fn parent_geometry(&self, parent: &WlSurface) -> Rectangle<i32, Logical> {
+        self.windows.parent_geometry(parent)
+    }
+}
+
 delegate_virtual_keyboard_manager!(Catacomb);
 delegate_input_method_manager!(Catacomb);
 delegate_text_input_manager!(Catacomb);
-
-impl DataDeviceHandler for Catacomb {
-    type SelectionUserData = ();
-
-    fn data_device_state(&self) -> &DataDeviceState {
-        &self.data_device_state
-    }
-}
-impl ClientDndGrabHandler for Catacomb {}
-impl ServerDndGrabHandler for Catacomb {}
-delegate_data_device!(Catacomb);
 
 delegate_output!(Catacomb);
 
@@ -824,14 +816,25 @@ impl XdgActivationHandler for Catacomb {
 }
 delegate_xdg_activation!(Catacomb);
 
-impl PrimarySelectionHandler for Catacomb {
+impl SelectionHandler for Catacomb {
     type SelectionUserData = ();
+}
 
+impl PrimarySelectionHandler for Catacomb {
     fn primary_selection_state(&self) -> &PrimarySelectionState {
         &self.primary_selection_state
     }
 }
 delegate_primary_selection!(Catacomb);
+
+impl DataDeviceHandler for Catacomb {
+    fn data_device_state(&self) -> &DataDeviceState {
+        &self.data_device_state
+    }
+}
+impl ClientDndGrabHandler for Catacomb {}
+impl ServerDndGrabHandler for Catacomb {}
+delegate_data_device!(Catacomb);
 
 impl KeyboardShortcutsInhibitHandler for Catacomb {
     fn keyboard_shortcuts_inhibit_state(&mut self) -> &mut KeyboardShortcutsInhibitState {

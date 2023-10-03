@@ -339,7 +339,7 @@ impl<S: Surface + 'static> Window<S> {
             return;
         }
 
-        let refresh = output.frame_interval().as_nanos() as u32;
+        let refresh = output.frame_interval();
         let output = output.smithay_output();
 
         // Try to get monitor clock.
@@ -1102,13 +1102,14 @@ mod tests {
 
     // Get a dummy positioner.
     fn dummy_positioner() -> PositionerState {
-        let mut positioner = PositionerState::default();
-        positioner.rect_size = (10, 10).into();
-        positioner.anchor_rect = Rectangle::from_loc_and_size((0, 0), (10, 10));
-        positioner.anchor_edges = xdg_positioner::Anchor::TopLeft;
-        positioner.gravity = Gravity::BottomRight;
-        positioner.constraint_adjustment = ConstraintAdjustment::None;
-        positioner
+        PositionerState {
+            rect_size: (10, 10).into(),
+            anchor_rect: Rectangle::from_loc_and_size((0, 0), (10, 10)),
+            anchor_edges: xdg_positioner::Anchor::TopLeft,
+            gravity: Gravity::BottomRight,
+            constraint_adjustment: ConstraintAdjustment::None,
+            ..Default::default()
+        }
     }
 
     fn constrain(positioner: &mut PositionerState) -> Point<i32, Logical> {

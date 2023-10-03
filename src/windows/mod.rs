@@ -1206,6 +1206,26 @@ impl Windows {
             window.borrow_mut().urgent = urgent;
         }
     }
+
+    /// Get parent geometry of the window owning a surface.
+    pub fn parent_geometry(&self, surface: &WlSurface) -> Rectangle<i32, Logical> {
+        // Check XDG windows.
+        for window in self.layouts.windows() {
+            if window.owns_surface(surface) {
+                return window.bounds(self.output().scale());
+            }
+        }
+
+        // Check layer-shell windows.
+        for window in self.layers.iter() {
+            if window.owns_surface(surface) {
+                return window.bounds(self.output().scale());
+            }
+        }
+
+        // Default to full output size.
+        Rectangle::from_loc_and_size((0, 0), self.output().size())
+    }
 }
 
 /// Atomic changes to [`Windows`].

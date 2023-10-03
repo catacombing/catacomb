@@ -117,7 +117,7 @@ pub fn run() {
             error!("Event loop error: {error}");
             break;
         }
-        catacomb.display.borrow_mut().flush_clients().expect("flushing clients");
+        catacomb.display_handle.flush_clients().expect("flushing clients");
     }
 }
 
@@ -712,15 +712,13 @@ impl OutputDevice {
     fn default_dmabuf_feedback(&self) -> Result<DmabufFeedback, Box<dyn Error>> {
         // Get planes for the DRM surface.
         let surface = self.drm_compositor.surface();
-        let planes = surface.planes()?;
+        let planes = surface.planes();
 
         // Get supported plane formats.
-        let primary_formats = surface.supported_formats(planes.primary.handle)?;
+        let primary_formats = planes.primary.formats.iter().copied();
         let overlay_planes = planes.overlay.iter();
-        let overlay_formats = overlay_planes
-            .flat_map(|plane| surface.supported_formats(plane.handle))
-            .collect::<Vec<HashSet<_>>>();
-        let all_overlay_planes = Self::format_intersection(&overlay_formats);
+        let mut overlay_formats = overlay_planes.map(|plane| plane.formats.clone());
+        let all_overlay_planes = Self::format_intersection(&mut overlay_formats);
 
         // Setup feedback builder.
         let gbm_id = self.gbm.dev_id()?;
@@ -734,7 +732,7 @@ impl OutputDevice {
             // Ideally pick a format which can be scanned out on ALL overlay planes.
             .add_preference_tranche(surface_id, flags, all_overlay_planes)
             // Otherwise try formats which can be scanned out on ANY overlay plane.
-            .add_preference_tranche(surface_id, flags, overlay_formats.into_iter().flatten())
+            .add_preference_tranche(surface_id, flags, overlay_formats.flatten())
             // Fallback to primary formats, still supporting direct scanout in fullscreen.
             .add_preference_tranche(surface_id, flags, primary_formats)
             .build()?;
@@ -743,15 +741,17 @@ impl OutputDevice {
     }
 
     /// Calculate the intersection of DRM formats between planes.
-    fn format_intersection(formats: &[HashSet<Format>]) -> HashSet<Format> {
-        if formats.is_empty() {
-            return HashSet::new();
-        }
-
-        let mut intersection = formats[0].clone();
+    fn format_intersection<D>(drm_formats: &mut D) -> HashSet<Format>
+    where
+        D: Iterator<Item = HashSet<Format>>,
+    {
+        let mut intersection = match drm_formats.next() {
+            Some(format) => format,
+            None => return HashSet::new(),
+        };
 
         // Filter formats which aren't supported by all other planes.
-        for formats in formats.iter().skip(1) {
+        for formats in drm_formats {
             intersection.retain(|format| formats.contains(format));
 
             // Abort early if no format intersects.

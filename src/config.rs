@@ -1,7 +1,6 @@
 //! Compositor configuration.
 
 use catacomb_ipc::{AppIdMatcher, GestureSector, Modifiers};
-use smithay::input::keyboard::Keysym;
 
 /// User-defined gesture action.
 #[derive(Debug)]
@@ -18,7 +17,7 @@ pub struct GestureBinding {
 pub struct KeyBinding {
     pub app_id: AppIdMatcher,
     pub mods: Modifiers,
-    pub key: Keysym,
+    pub key: u32,
     pub program: String,
     pub arguments: Vec<String>,
 }

@@ -7,7 +7,7 @@ use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Event, InputBackend, InputEvent, KeyState,
     KeyboardKeyEvent, MouseButton, PointerButtonEvent, TouchEvent as _, TouchSlot,
 };
-use smithay::input::keyboard::{keysyms, FilterResult, Keysym, KeysymHandle, ModifiersState};
+use smithay::input::keyboard::{keysyms, FilterResult, KeysymHandle, ModifiersState};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
@@ -438,8 +438,6 @@ impl Catacomb {
                     .is_some()
             };
 
-            // TODO: This doesn't actually prevent anything.
-            //
             // Check if a gesture is triggered by this touch event.
             let gesture_active =
                 self.touch_state.start.is_handle_gesture || (!inhibits_shortcuts && has_gesture());
@@ -675,7 +673,7 @@ impl Catacomb {
         keysym: KeysymHandle,
         state: KeyState,
     ) -> FilterResult<InputAction> {
-        match (keysym.modified_sym(), state) {
+        match (keysym.modified_sym().raw(), state) {
             (keysym @ keysyms::KEY_XF86Switch_VT_1..=keysyms::KEY_XF86Switch_VT_12, _) => {
                 let vt = (keysym - keysyms::KEY_XF86Switch_VT_1 + 1) as i32;
                 InputAction::ChangeVt(vt).into()
@@ -704,7 +702,7 @@ impl Catacomb {
                 if raw_keysym.len() != 1 {
                     FilterResult::Forward
                 } else {
-                    Self::handle_user_binding(catacomb, mods, raw_keysym[0])
+                    Self::handle_user_binding(catacomb, mods, raw_keysym[0].raw())
                 }
             },
             _ => FilterResult::Forward,
@@ -715,7 +713,7 @@ impl Catacomb {
     fn handle_user_binding(
         catacomb: &mut Catacomb,
         mods: impl Into<Modifiers>,
-        raw_keysym: Keysym,
+        raw_keysym: u32,
     ) -> FilterResult<InputAction> {
         // Check if focused surface inhibits shortcuts.
         let inhibits_shortcuts = catacomb.last_focus().map_or(false, |surface| {
