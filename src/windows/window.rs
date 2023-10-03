@@ -741,7 +741,7 @@ impl<S: Surface + 'static> Window<S> {
 
     /// Check if this window requires a redraw.
     pub fn dirty(&self) -> bool {
-        self.dirty && self.transaction.is_none()
+        self.transaction.is_none() && (self.dirty || self.popups.iter().any(|popup| popup.dirty()))
     }
 
     /// Get primary window surface.
