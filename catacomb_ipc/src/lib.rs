@@ -26,7 +26,8 @@ use smithay::input::keyboard::ModifiersState;
 use smithay::utils::{Logical, Point, Size, Transform};
 #[cfg(feature = "clap")]
 use xkbcommon::xkb;
-use xkbcommon::xkb::Keysym;
+#[cfg(feature = "clap")]
+use xkbcommon::xkb::keysyms;
 
 /// IPC message format.
 #[cfg_attr(feature = "clap", derive(Subcommand))]
@@ -367,15 +368,15 @@ impl FromStr for Modifiers {
 
 /// Clap wrapper for XKB keysym.
 #[derive(Deserialize, Serialize, Copy, Clone, Debug)]
-pub struct ClapKeysym(pub Keysym);
+pub struct ClapKeysym(pub u32);
 
 #[cfg(feature = "clap")]
 impl FromStr for ClapKeysym {
     type Err = ClapError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match xkb::keysym_from_name(s, xkb::KEYSYM_NO_FLAGS) {
-            xkb::KEY_NoSymbol => {
+        match xkb::keysym_from_name(s, xkb::KEYSYM_NO_FLAGS).raw() {
+            keysyms::KEY_NoSymbol => {
                 Err(ClapError::raw(ClapErrorKind::InvalidValue, format!("invalid keysym {s:?}")))
             },
             keysym => Ok(Self(keysym)),
