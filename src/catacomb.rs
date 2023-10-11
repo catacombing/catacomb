@@ -49,6 +49,7 @@ use smithay::wayland::selection::data_device::{
 use smithay::wayland::selection::primary_selection::{
     self, PrimarySelectionHandler, PrimarySelectionState,
 };
+use smithay::wayland::selection::wlr_data_control::{DataControlHandler, DataControlState};
 use smithay::wayland::selection::SelectionHandler;
 use smithay::wayland::shell::kde::decoration::{KdeDecorationHandler, KdeDecorationState};
 use smithay::wayland::shell::wlr_layer::{
@@ -67,12 +68,13 @@ use smithay::wayland::xdg_activation::{
     XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
 };
 use smithay::{
-    delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_fractional_scale,
-    delegate_idle_inhibit, delegate_input_method_manager, delegate_kde_decoration,
-    delegate_keyboard_shortcuts_inhibit, delegate_layer_shell, delegate_output,
-    delegate_presentation, delegate_primary_selection, delegate_seat, delegate_shm,
-    delegate_text_input_manager, delegate_viewporter, delegate_virtual_keyboard_manager,
-    delegate_xdg_activation, delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_compositor, delegate_data_control, delegate_data_device, delegate_dmabuf,
+    delegate_fractional_scale, delegate_idle_inhibit, delegate_input_method_manager,
+    delegate_kde_decoration, delegate_keyboard_shortcuts_inhibit, delegate_layer_shell,
+    delegate_output, delegate_presentation, delegate_primary_selection, delegate_seat,
+    delegate_shm, delegate_text_input_manager, delegate_viewporter,
+    delegate_virtual_keyboard_manager, delegate_xdg_activation, delegate_xdg_decoration,
+    delegate_xdg_shell,
 };
 use tracing::{error, info};
 use zbus::zvariant::OwnedFd;
@@ -130,6 +132,7 @@ pub struct Catacomb {
     xdg_activation_state: XdgActivationState,
     kde_decoration_state: KdeDecorationState,
     layer_shell_state: WlrLayerShellState,
+    data_control_state: DataControlState,
     lock_state: SessionLockManagerState,
     data_device_state: DataDeviceState,
     compositor_state: CompositorState,
@@ -252,6 +255,12 @@ impl Catacomb {
         let data_device_state = DataDeviceState::new::<Self>(&display_handle);
         seat.add_keyboard(XkbConfig::default(), 200, 25).expect("adding keyboard");
 
+        let data_control_state = DataControlState::new::<Self, _>(
+            &display_handle,
+            Some(&primary_selection_state),
+            |_| true,
+        );
+
         // Initialize touch state.
         let touch = seat.add_touch();
         let touch_state = TouchState::new(event_loop.clone(), touch);
@@ -308,6 +317,7 @@ impl Catacomb {
             primary_selection_state,
             xdg_activation_state,
             kde_decoration_state,
+            data_control_state,
             layer_shell_state,
             data_device_state,
             compositor_state,
@@ -835,6 +845,13 @@ impl DataDeviceHandler for Catacomb {
 impl ClientDndGrabHandler for Catacomb {}
 impl ServerDndGrabHandler for Catacomb {}
 delegate_data_device!(Catacomb);
+
+impl DataControlHandler for Catacomb {
+    fn data_control_state(&self) -> &DataControlState {
+        &self.data_control_state
+    }
+}
+delegate_data_control!(Catacomb);
 
 impl KeyboardShortcutsInhibitHandler for Catacomb {
     fn keyboard_shortcuts_inhibit_state(&mut self) -> &mut KeyboardShortcutsInhibitState {
