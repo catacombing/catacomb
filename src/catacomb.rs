@@ -247,7 +247,7 @@ impl Catacomb {
         let mut seat = seat_state.new_wl_seat(&display_handle, seat_name.clone());
 
         // Initialize IME and virtual keyboard.
-        InputMethodManagerState::new::<Self>(&display_handle);
+        InputMethodManagerState::new::<Self, _>(&display_handle, |_| true);
         TextInputManagerState::new::<Self>(&display_handle);
         VirtualKeyboardManagerState::new::<Self, _>(&display_handle, |_| true);
 
@@ -706,6 +706,8 @@ delegate_seat!(Catacomb);
 
 impl InputMethodHandler for Catacomb {
     fn new_popup(&mut self, _surface: ImeSurface) {}
+
+    fn dismiss_popup(&mut self, _surface: ImeSurface) {}
 
     fn parent_geometry(&self, parent: &WlSurface) -> Rectangle<i32, Logical> {
         self.windows.parent_geometry(parent)

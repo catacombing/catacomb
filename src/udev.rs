@@ -2,12 +2,12 @@
 
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
-use std::os::unix::io::FromRawFd;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::{env, mem, process, ptr};
 
 use _linux_dmabuf::zv1::server::zwp_linux_dmabuf_feedback_v1::TrancheFlags;
+use libc::dev_t as DeviceId;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBuffer, GbmBufferFlags, GbmDevice};
 use smithay::backend::allocator::{Format, Fourcc};
@@ -39,8 +39,7 @@ use smithay::reexports::drm::control::property::{
 };
 use smithay::reexports::drm::control::Device;
 use smithay::reexports::input::Libinput;
-use smithay::reexports::nix::fcntl::OFlag;
-use smithay::reexports::nix::sys::stat::dev_t as DeviceId;
+use smithay::reexports::rustix::fs::OFlags;
 use smithay::reexports::wayland_protocols::wp::linux_dmabuf as _linux_dmabuf;
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_shm;
@@ -314,9 +313,9 @@ impl Udev {
         windows: &mut Windows,
         path: PathBuf,
     ) -> Result<(), Box<dyn Error>> {
-        let open_flags = OFlag::O_RDWR | OFlag::O_CLOEXEC | OFlag::O_NOCTTY | OFlag::O_NONBLOCK;
+        let open_flags = OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK;
         let fd = self.session.open(&path, open_flags)?;
-        let device_fd = unsafe { DrmDeviceFd::new(DeviceFd::from_raw_fd(fd)) };
+        let device_fd = DrmDeviceFd::new(DeviceFd::from(fd));
 
         let (drm, drm_notifier) = DrmDevice::new(device_fd.clone(), true)?;
         let gbm = GbmDevice::new(device_fd)?;
