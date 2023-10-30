@@ -51,6 +51,9 @@ use smithay::wayland::selection::primary_selection::{
 };
 use smithay::wayland::selection::wlr_data_control::{DataControlHandler, DataControlState};
 use smithay::wayland::selection::SelectionHandler;
+use smithay::wayland::session_lock::{
+    LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker,
+};
 use smithay::wayland::shell::kde::decoration::{KdeDecorationHandler, KdeDecorationState};
 use smithay::wayland::shell::wlr_layer::{
     Layer, LayerSurface, WlrLayerShellHandler, WlrLayerShellState,
@@ -72,7 +75,7 @@ use smithay::{
     delegate_fractional_scale, delegate_idle_inhibit, delegate_input_method_manager,
     delegate_kde_decoration, delegate_keyboard_shortcuts_inhibit, delegate_layer_shell,
     delegate_output, delegate_presentation, delegate_primary_selection, delegate_seat,
-    delegate_shm, delegate_text_input_manager, delegate_viewporter,
+    delegate_session_lock, delegate_shm, delegate_text_input_manager, delegate_viewporter,
     delegate_virtual_keyboard_manager, delegate_xdg_activation, delegate_xdg_decoration,
     delegate_xdg_shell,
 };
@@ -87,13 +90,11 @@ use crate::orientation::{Accelerometer, AccelerometerSource};
 use crate::output::Output;
 use crate::protocols::screencopy::frame::Screencopy;
 use crate::protocols::screencopy::{ScreencopyHandler, ScreencopyManagerState};
-use crate::protocols::session_lock::surface::LockSurface;
-use crate::protocols::session_lock::{SessionLockHandler, SessionLockManagerState, SessionLocker};
 use crate::udev::Udev;
 use crate::vibrate::Vibrator;
 use crate::windows::surface::Surface;
 use crate::windows::Windows;
-use crate::{delegate_screencopy, delegate_session_lock, ipc_server, trace_error};
+use crate::{delegate_screencopy, ipc_server, trace_error};
 
 /// Duration until suspend after screen is turned off.
 const SUSPEND_TIMEOUT: Duration = Duration::from_secs(30);
@@ -229,7 +230,7 @@ impl Catacomb {
         IdleInhibitManagerState::new::<Self>(&display_handle);
 
         // Initialize session-lock protocol.
-        let lock_state = SessionLockManagerState::new::<Self>(&display_handle);
+        let lock_state = SessionLockManagerState::new::<Self, _>(&display_handle, |_| true);
 
         // Initalize xdg-activation protocol.
         let xdg_activation_state = XdgActivationState::new::<Self>(&display_handle);

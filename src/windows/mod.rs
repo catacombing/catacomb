@@ -19,6 +19,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::utils::{Logical, Point, Rectangle};
 use smithay::wayland::compositor;
+use smithay::wayland::session_lock::LockSurface;
 use smithay::wayland::shell::wlr_layer::{Layer, LayerSurface};
 use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface};
 
@@ -29,7 +30,6 @@ use crate::layer::Layers;
 use crate::orientation::Orientation;
 use crate::output::{Canvas, Output, GESTURE_HANDLE_HEIGHT};
 use crate::overview::{DragActionType, DragAndDrop, Overview};
-use crate::protocols::session_lock::surface::LockSurface;
 use crate::windows::layout::{LayoutPosition, Layouts};
 use crate::windows::surface::{CatacombLayerSurface, InputSurface, InputSurfaceKind, Surface};
 use crate::windows::window::Window;

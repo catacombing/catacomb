@@ -8,6 +8,7 @@ use std::sync::Mutex;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::compositor;
+use smithay::wayland::session_lock::{LockSurface, LockSurfaceState};
 use smithay::wayland::shell::wlr_layer::{
     Anchor, ExclusiveZone, Layer, LayerSurface, LayerSurfaceAttributes, LayerSurfaceState,
 };
@@ -16,7 +17,6 @@ use smithay::wayland::shell::xdg::{
     XdgPopupSurfaceData, XdgToplevelSurfaceData, XdgToplevelSurfaceRoleAttributes,
 };
 
-use crate::protocols::session_lock::surface::{LockSurface, LockSurfaceState};
 use crate::windows::Window;
 
 /// Common surface functionality.
