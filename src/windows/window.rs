@@ -706,11 +706,16 @@ impl<S: Surface + 'static> Window<S> {
 
         self.popups.iter_mut().any(|popup| {
             if popup.surface.surface() == root_surface {
-                popup.surface_commit_common(output_scale, &[], surface);
-
                 // Calculate popup position and convert it to output scale.
                 let popup_loc = popup.constrained_location(window_size);
                 popup.output_rectangle.loc = popup_loc.scale(window_scale / output_scale);
+
+                // Update popup loc for configure.
+                popup.surface.with_pending_state(|state| {
+                    state.geometry.loc = popup.output_rectangle.loc;
+                });
+
+                popup.surface_commit_common(output_scale, &[], surface);
 
                 return true;
             }
@@ -727,6 +732,31 @@ impl<S: Surface + 'static> Window<S> {
             if !self.popups[i].alive() {
                 self.popups.swap_remove(i);
             }
+        }
+    }
+
+    /// Move popup location.
+    pub fn reposition_popup(&mut self, output_scale: f64, surface: &PopupSurface, token: u32) {
+        // Convert window bounds to per-window scale.
+        let window_scale = self.window_scale(output_scale);
+        let window_size = self.bounds(output_scale).size.scale(output_scale / window_scale);
+
+        for popup in &mut self.popups {
+            // Recurse to search children.
+            if &popup.surface != surface {
+                popup.reposition_popup(output_scale, surface, token);
+                continue;
+            }
+
+            // Handle move.
+            let popup_loc = popup.constrained_location(window_size);
+            popup.output_rectangle.loc = popup_loc.scale(window_scale / output_scale);
+
+            popup.surface.with_pending_state(|state| {
+                state.geometry.loc = popup.output_rectangle.loc;
+            });
+
+            surface.send_repositioned(token);
         }
     }
 

@@ -438,7 +438,7 @@ impl Udev {
                 .ok()
                 .filter(|conn| conn.state() == ConnectorState::Connected)
         })?;
-        let connector_mode = *connector.modes().get(0)?;
+        let connector_mode = *connector.modes().first()?;
 
         let surface = connector
             // Get all available encoders.

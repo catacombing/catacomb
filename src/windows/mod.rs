@@ -160,6 +160,14 @@ impl Windows {
         self.orphan_popups.push(Window::new(&[], popup, self.output.scale(), None));
     }
 
+    /// Move popup location.
+    pub fn reposition_popup(&mut self, popup: &PopupSurface, token: u32) {
+        for mut window in self.layouts.windows_mut() {
+            let scale = self.output.scale();
+            window.reposition_popup(scale, popup, token);
+        }
+    }
+
     /// Update the session lock surface.
     pub fn set_lock_surface(&mut self, surface: LockSurface) {
         let output_scale = self.output.scale();

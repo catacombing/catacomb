@@ -19,6 +19,7 @@ use smithay::reexports::calloop::{
     Interest, LoopHandle, Mode as TriggerMode, PostAction, RegistrationToken,
 };
 use smithay::reexports::wayland_protocols::xdg::decoration as _decoration;
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::WmCapabilities;
 use smithay::reexports::wayland_protocols_misc::server_decoration as _server_decoration;
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
@@ -194,7 +195,9 @@ impl Catacomb {
         let compositor_state = CompositorState::new::<Self>(&display_handle);
 
         // Setup XDG Shell.
-        let xdg_shell_state = XdgShellState::new::<Self>(&display_handle);
+        let xdg_shell_state = XdgShellState::new_with_capabilities::<Self>(&display_handle, [
+            WmCapabilities::Fullscreen,
+        ]);
 
         // Setup layer shell.
         let layer_shell_state = WlrLayerShellState::new::<Self>(&display_handle);
@@ -609,10 +612,6 @@ impl XdgShellHandler for Catacomb {
         self.windows.add(surface);
     }
 
-    fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
-        self.windows.add_popup(surface);
-    }
-
     fn ack_configure(&mut self, surface: WlSurface, _configure: Configure) {
         // Request new frames after each resize.
         let runtime = self.windows.runtime();
@@ -632,6 +631,23 @@ impl XdgShellHandler for Catacomb {
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         self.windows.reap_xdg(&surface);
         self.unstall();
+    }
+
+    fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
+        self.windows.add_popup(surface);
+    }
+
+    fn reposition_request(
+        &mut self,
+        surface: PopupSurface,
+        positioner: PositionerState,
+        token: u32,
+    ) {
+        // Update positioner.
+        surface.with_pending_state(|state| state.positioner = positioner);
+
+        // Handle popup constraints and send configure.
+        self.windows.reposition_popup(&surface, token);
     }
 
     fn popup_destroyed(&mut self, _surface: PopupSurface) {
