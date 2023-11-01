@@ -809,15 +809,26 @@ impl XdgActivationHandler for Catacomb {
         &mut self.xdg_activation_state
     }
 
+    fn token_created(&mut self, _token: XdgActivationToken, data: XdgActivationTokenData) -> bool {
+        let (serial, seat, keyboard) = match (data.serial, self.seat.get_keyboard()) {
+            (Some((serial, seat)), Some(keyboard)) => (serial, seat, keyboard),
+            _ => return false,
+        };
+
+        Seat::from_resource(&seat).as_ref() == Some(&self.seat)
+            && keyboard
+                .last_enter()
+                .map_or(false, |last_enter| serial.is_no_older_than(&last_enter))
+    }
+
     fn request_activation(
         &mut self,
-        token: XdgActivationToken,
+        _token: XdgActivationToken,
         token_data: XdgActivationTokenData,
         surface: WlSurface,
     ) {
-        // Remove tokens which are too old.
+        // Ignore tokens which are too old.
         if token_data.timestamp.elapsed() >= ACTIVATION_TIMEOUT {
-            self.xdg_activation_state.remove_request(&token);
             return;
         }
 
@@ -831,16 +842,6 @@ impl XdgActivationHandler for Catacomb {
             self.windows.set_dirty();
             self.unstall();
         }
-    }
-
-    fn destroy_activation(
-        &mut self,
-        _token: XdgActivationToken,
-        _token_data: XdgActivationTokenData,
-        surface: WlSurface,
-    ) {
-        // Ensure urgency is cleared.
-        self.windows.set_urgent(&surface, false);
     }
 }
 delegate_xdg_activation!(Catacomb);
