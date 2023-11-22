@@ -31,7 +31,7 @@ use smithay::utils::{Logical, Rectangle, Serial, SERIAL_COUNTER};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor;
 use smithay::wayland::compositor::{CompositorClientState, CompositorHandler, CompositorState};
-use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportError};
+use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
 use smithay::wayland::fractional_scale::{
     self, FractionalScaleHandler, FractionalScaleManagerState,
 };
@@ -589,15 +589,22 @@ impl DmabufHandler for Catacomb {
         &mut self,
         _global: &DmabufGlobal,
         buffer: Dmabuf,
-    ) -> Result<(), ImportError> {
+        notifier: ImportNotifier,
+    ) {
         let renderer = match self.backend.renderer() {
             Some(renderer) => renderer,
-            None => return Err(ImportError::Failed),
+            None => return,
         };
 
-        renderer.import_dmabuf(&buffer, None).map_err(|_| ImportError::Failed)?;
-
-        Ok(())
+        match renderer.import_dmabuf(&buffer, None) {
+            Err(err) => {
+                notifier.failed();
+                error!("Buffer import failed: {err}");
+            },
+            Ok(_) => {
+                let _ = notifier.successful::<Self>();
+            },
+        }
     }
 }
 
