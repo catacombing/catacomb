@@ -7,7 +7,9 @@ use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Event, InputBackend, InputEvent, KeyState,
     KeyboardKeyEvent, MouseButton, PointerButtonEvent, TouchEvent as _, TouchSlot,
 };
-use smithay::input::keyboard::{keysyms, FilterResult, KeysymHandle, ModifiersState};
+use smithay::input::keyboard::{
+    keysyms, FilterResult, Keycode, KeysymHandle, ModifiersState, XkbContextHandler,
+};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
@@ -16,7 +18,7 @@ use smithay::wayland::seat::TouchHandle;
 use tracing::error;
 
 use crate::catacomb::Catacomb;
-use crate::config::GestureBinding;
+use crate::config::{GestureBinding, GestureBindingAction};
 use crate::daemon;
 use crate::drawing::CatacombSurfaceData;
 use crate::orientation::Orientation;
@@ -148,10 +150,7 @@ impl TouchState {
             let mut gestures = self.matching_gestures(canvas, app_id, start, end);
 
             if let Some(gesture) = gestures.next() {
-                return Some(TouchAction::UserGesture((
-                    gesture.program.clone(),
-                    gesture.arguments.clone(),
-                )));
+                return Some(TouchAction::UserGesture(gesture.action.clone()));
             }
         }
 
@@ -223,7 +222,7 @@ impl TouchStart {
 #[derive(Debug)]
 enum TouchAction {
     HandleGesture(HandleGesture),
-    UserGesture((String, Vec<String>)),
+    UserGesture(GestureBindingAction),
     Drag,
     Tap,
 }
@@ -347,7 +346,12 @@ impl Catacomb {
         self.reset_idle_timer();
 
         match event {
-            InputEvent::Keyboard { event, .. } => self.on_keyboard_input(&event),
+            InputEvent::Keyboard { event, .. } => {
+                let time = Event::time(&event) as u32;
+                let code = event.key_code();
+                let state = event.state();
+                self.on_keyboard_input(code, state, time);
+            },
             InputEvent::PointerButton { event } if event.button() == Some(MouseButton::Left) => {
                 let slot = TouchSlot::from(POINTER_TOUCH_SLOT);
                 let position = self.touch_state.position;
@@ -541,7 +545,7 @@ impl Catacomb {
                 }
             },
             Some(TouchAction::HandleGesture(gesture)) => self.on_handle_gesture(gesture),
-            Some(TouchAction::UserGesture((program, args))) => self.on_user_gesture(program, args),
+            Some(TouchAction::UserGesture(action)) => self.on_user_gesture(action),
             _ => (),
         }
 
@@ -563,10 +567,16 @@ impl Catacomb {
     }
 
     /// Dispatch user gestures.
-    fn on_user_gesture(&mut self, program: String, args: Vec<String>) {
-        // Execute subcommand.
-        if let Err(err) = daemon::spawn(&program, &args) {
-            error!("Failed gesture command {program} {args:?}: {err}");
+    fn on_user_gesture(&mut self, action: GestureBindingAction) {
+        match action {
+            // Execute subcommand.
+            GestureBindingAction::Cmd((program, args)) => {
+                if let Err(err) = daemon::spawn(&program, &args) {
+                    error!("Failed gesture command {program} {args:?}: {err}");
+                }
+            },
+            // Submit virtual key press.
+            GestureBindingAction::Key((key, mods)) => self.send_virtual_key(key, mods),
         }
 
         self.touch_state.cancel_velocity();
@@ -627,15 +637,12 @@ impl Catacomb {
     }
 
     /// Handle new keyboard input events.
-    fn on_keyboard_input<I: InputBackend>(&mut self, event: &impl KeyboardKeyEvent<I>) {
+    fn on_keyboard_input(&mut self, code: u32, state: KeyState, time: u32) {
         let keyboard = match self.seat.get_keyboard() {
             Some(keyboard) => keyboard,
             None => return,
         };
         let serial = SERIAL_COUNTER.next_serial();
-        let time = Event::time(event) as u32;
-        let code = event.key_code();
-        let state = event.state();
 
         // Get desired action for this key.
         let action = keyboard.input(self, code, state, serial, time, |catacomb, mods, keysym| {
@@ -663,6 +670,73 @@ impl Catacomb {
                 }
             },
             _ => (),
+        }
+    }
+
+    /// Send virtual keyboard input.
+    fn send_virtual_key(&mut self, keysym: u32, mods: Modifiers) {
+        let keyboard = match self.seat.get_keyboard() {
+            Some(keyboard) => keyboard,
+            None => return,
+        };
+
+        // Try to convert the keysym to a keycode.
+        let keycodes = self.keysym_to_keycode(keysym);
+        let keycode = match keycodes.first() {
+            Some(keycode) => keycode,
+            None => return,
+        };
+
+        // Get currently pressed modifier keys.
+        let old_mods = keyboard.with_pressed_keysyms(|keysyms| {
+            keysyms
+                .iter()
+                .filter(|keysym| {
+                    let keysym = keysym.modified_sym().raw();
+                    (!mods.shift && (keysym | 1 == keysyms::KEY_Shift_L))
+                        || (!mods.alt && (keysym | 1 == keysyms::KEY_Alt_L))
+                        || (!mods.logo && (keysym | 1 == keysyms::KEY_Super_L))
+                        || (!mods.control && (keysym | 1 == keysyms::KEY_Control_L))
+                })
+                .map(|keysym| keysym.raw_code().raw())
+                .collect::<Vec<_>>()
+        });
+
+        // Get keycodes for missing modifiers.
+        let mut new_mods = Vec::new();
+        let current_mods = keyboard.modifier_state();
+        if mods.shift && !current_mods.shift {
+            new_mods.push(42);
+        }
+        if mods.control && !current_mods.ctrl {
+            new_mods.push(29);
+        }
+        if mods.alt && !current_mods.alt {
+            new_mods.push(56);
+        }
+        if mods.logo && !current_mods.logo {
+            new_mods.push(125);
+        }
+
+        // Set desired modifiers.
+        for old_mod in &old_mods {
+            self.on_keyboard_input(*old_mod, KeyState::Released, 0);
+        }
+        for new_mod in &new_mods {
+            self.on_keyboard_input(*new_mod, KeyState::Pressed, 0);
+        }
+
+        // Send the key itself.
+        let raw_keycode = keycode.raw() - 8;
+        self.on_keyboard_input(raw_keycode, KeyState::Pressed, 0);
+        self.on_keyboard_input(raw_keycode, KeyState::Released, 0);
+
+        // Restore previous modifier state.
+        for new_mod in &new_mods {
+            self.on_keyboard_input(*new_mod, KeyState::Released, 0);
+        }
+        for old_mod in &old_mods {
+            self.on_keyboard_input(*old_mod, KeyState::Pressed, 0);
         }
     }
 
@@ -794,6 +868,33 @@ impl Catacomb {
         Self::handle_user_binding(catacomb, mods, keysyms::KEY_XF86PowerOff);
 
         TimeoutAction::Drop
+    }
+
+    /// Convert Keysym to Keycode.
+    fn keysym_to_keycode(&mut self, keysym: u32) -> Vec<Keycode> {
+        let keyboard = match self.seat.get_keyboard() {
+            Some(keyboard) => keyboard,
+            None => return Vec::new(),
+        };
+
+        let mut codes = Vec::new();
+
+        // Iterate over all keycodes with the current layout to check for matches.
+        keyboard.with_xkb_state(self, |context| {
+            let layout = context.active_layout();
+            context.keymap().key_for_each(|_keymap, keycode| {
+                let matches = context
+                    .raw_syms_for_key_in_layout(keycode, layout)
+                    .iter()
+                    .any(|sym| sym.raw() == keysym);
+
+                if matches {
+                    codes.push(keycode);
+                }
+            });
+        });
+
+        codes
     }
 }
 

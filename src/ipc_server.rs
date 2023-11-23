@@ -11,7 +11,7 @@ use smithay::reexports::calloop::LoopHandle;
 use tracing::warn;
 
 use crate::catacomb::Catacomb;
-use crate::config::{GestureBinding, KeyBinding};
+use crate::config::{GestureBinding, GestureBindingAction, KeyBinding};
 use crate::socket::SocketSource;
 
 /// Create an IPC socket.
@@ -97,7 +97,21 @@ fn handle_message(buffer: &mut String, stream: UnixStream, catacomb: &mut Cataco
                 },
             };
 
-            let gesture = GestureBinding { app_id, start, end, program, arguments };
+            let action = GestureBindingAction::Cmd((program, arguments));
+            let gesture = GestureBinding { app_id, start, end, action };
+            catacomb.touch_state.user_gestures.push(gesture);
+        },
+        IpcMessage::BindGestureKey { app_id, start, end, mods, key } => {
+            let app_id = match AppIdMatcher::try_from(app_id) {
+                Ok(app_id) => app_id,
+                Err(err) => {
+                    warn!("ignoring invalid ipc message: binding has invalid App ID regex: {err}");
+                    return;
+                },
+            };
+
+            let action = GestureBindingAction::Key((key.0, mods.unwrap_or_default()));
+            let gesture = GestureBinding { app_id, start, end, action };
             catacomb.touch_state.user_gestures.push(gesture);
         },
         IpcMessage::UnbindGesture { app_id, start, end } => {

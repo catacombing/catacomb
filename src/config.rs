@@ -8,8 +8,14 @@ pub struct GestureBinding {
     pub app_id: AppIdMatcher,
     pub start: GestureSector,
     pub end: GestureSector,
-    pub program: String,
-    pub arguments: Vec<String>,
+    pub action: GestureBindingAction,
+}
+
+/// Action variants for gesture bindings.
+#[derive(Clone, Debug)]
+pub enum GestureBindingAction {
+    Cmd((String, Vec<String>)),
+    Key((u32, Modifiers)),
 }
 
 /// User-defined key action.

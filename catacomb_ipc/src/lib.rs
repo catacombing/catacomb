@@ -70,11 +70,30 @@ pub enum IpcMessage {
         start: GestureSector,
         /// Termination sector of the gesture.
         end: GestureSector,
-        /// Programm this gesture should spawn.
+        /// Program or keybinding this gesture should spawn.
         program: String,
         /// Arguments for this gesture's program.
         #[cfg_attr(feature = "clap", clap(allow_hyphen_values = true, trailing_var_arg = true))]
         arguments: Vec<String>,
+    },
+    /// Add a gesture keybinding.
+    BindGestureKey {
+        /// App ID regex.
+        ///
+        /// The binding will be enabled when the focused window's App ID matches
+        /// the regex.
+        ///
+        /// Use `*` to bind the gesture globally.
+        app_id: String,
+        /// Starting sector of the gesture.
+        start: GestureSector,
+        /// Termination sector of the gesture.
+        end: GestureSector,
+        /// Desired modifiers.
+        #[cfg_attr(feature = "clap", clap(long, short))]
+        mods: Option<Modifiers>,
+        /// X11 keysym for this binding.
+        key: ClapKeysym,
     },
     /// Remove a gesture.
     UnbindGesture {
@@ -99,7 +118,7 @@ pub enum IpcMessage {
         mods: Option<Modifiers>,
         /// Base key for this binding.
         key: ClapKeysym,
-        /// Programm this gesture should spawn.
+        /// Program this gesture should spawn.
         program: String,
         /// Arguments for this gesture's program.
         #[cfg_attr(feature = "clap", clap(allow_hyphen_values = true, trailing_var_arg = true))]
@@ -323,10 +342,10 @@ pub enum AppIdMatcherVariant {
 /// Modifier state for a key press.
 #[derive(Deserialize, Serialize, PartialEq, Eq, Default, Copy, Clone, Debug)]
 pub struct Modifiers {
-    control: bool,
-    shift: bool,
-    logo: bool,
-    alt: bool,
+    pub control: bool,
+    pub shift: bool,
+    pub logo: bool,
+    pub alt: bool,
 }
 
 #[cfg(feature = "smithay")]
