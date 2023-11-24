@@ -21,7 +21,7 @@ use smithay::backend::renderer::element::RenderElementStates;
 use smithay::backend::renderer::gles::{ffi, Capability, GlesRenderbuffer, GlesRenderer};
 use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::{
-    self, utils, Bind, BufferType, Frame, ImportEgl, Offscreen, Renderer,
+    self, utils, Bind, BufferType, Frame, ImportDma, ImportEgl, Offscreen, Renderer,
 };
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SessionEvent, Session};
@@ -89,6 +89,8 @@ pub fn run() {
 
     // Setup hardware acceleration.
     let dmabuf_feedback = catacomb.backend.default_dmabuf_feedback().expect("dmabuf feedback");
+    // catacomb.dmabuf_state.create_global::<Catacomb>(&catacomb.display_handle,
+    // Vec::new());
     catacomb.dmabuf_state.create_global_with_default_feedback::<Catacomb>(
         &catacomb.display_handle,
         &dmabuf_feedback,
@@ -713,15 +715,23 @@ impl OutputDevice {
         let surface = self.drm_compositor.surface();
         let planes = surface.planes();
 
-        // Get supported plane formats.
-        let primary_formats = planes.primary.formats.iter().copied();
-        let overlay_planes = planes.overlay.iter();
-        let mut overlay_formats = overlay_planes.map(|plane| plane.formats.clone());
-        let all_overlay_planes = Self::format_intersection(&mut overlay_formats);
+        // Get primary plane formats supported by renderer.
+        let dmabuf_formats = self.gles.dmabuf_formats().collect::<HashSet<_>>();
+        let mut primary_formats = planes.primary.formats.clone();
+        Self::format_intersection(&mut primary_formats, [&dmabuf_formats]);
+
+        // Get formats supported by ANY overlay plane and the renderer.
+        let mut any_overlay_formats: HashSet<_> =
+            planes.overlay.iter().flat_map(|plane| &plane.formats).copied().collect();
+        Self::format_intersection(&mut any_overlay_formats, [&dmabuf_formats]);
+
+        // Get formats supported by ALL overlay planes and the renderer.
+        let mut all_overlay_formats = dmabuf_formats.clone();
+        let overlay_formats = planes.overlay.iter().map(|plane| &plane.formats);
+        Self::format_intersection(&mut all_overlay_formats, overlay_formats);
 
         // Setup feedback builder.
         let gbm_id = self.gbm.dev_id()?;
-        let dmabuf_formats = Bind::<Dmabuf>::supported_formats(&self.gles).unwrap();
         let feedback_builder = DmabufFeedbackBuilder::new(gbm_id, dmabuf_formats);
 
         // Create default feedback preference.
@@ -729,9 +739,9 @@ impl OutputDevice {
         let flags = Some(TrancheFlags::Scanout);
         let feedback = feedback_builder
             // Ideally pick a format which can be scanned out on ALL overlay planes.
-            .add_preference_tranche(surface_id, flags, all_overlay_planes)
+            .add_preference_tranche(surface_id, flags, all_overlay_formats)
             // Otherwise try formats which can be scanned out on ANY overlay plane.
-            .add_preference_tranche(surface_id, flags, overlay_formats.flatten())
+            .add_preference_tranche(surface_id, flags, any_overlay_formats)
             // Fallback to primary formats, still supporting direct scanout in fullscreen.
             .add_preference_tranche(surface_id, flags, primary_formats)
             .build()?;
@@ -740,26 +750,19 @@ impl OutputDevice {
     }
 
     /// Calculate the intersection of DRM formats between planes.
-    fn format_intersection<D>(drm_formats: &mut D) -> HashSet<Format>
+    fn format_intersection<'a, D>(drm_formats: &mut HashSet<Format>, filter: D)
     where
-        D: Iterator<Item = HashSet<Format>>,
+        D: IntoIterator<Item = &'a HashSet<Format>>,
     {
-        let mut intersection = match drm_formats.next() {
-            Some(format) => format,
-            None => return HashSet::new(),
-        };
-
         // Filter formats which aren't supported by all other planes.
-        for formats in drm_formats {
-            intersection.retain(|format| formats.contains(format));
+        for formats in filter {
+            drm_formats.retain(|format| formats.contains(format));
 
             // Abort early if no format intersects.
-            if intersection.is_empty() {
+            if drm_formats.is_empty() {
                 break;
             }
         }
-
-        intersection
     }
 }
 
