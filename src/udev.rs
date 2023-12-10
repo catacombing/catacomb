@@ -89,8 +89,6 @@ pub fn run() {
 
     // Setup hardware acceleration.
     let dmabuf_feedback = catacomb.backend.default_dmabuf_feedback().expect("dmabuf feedback");
-    // catacomb.dmabuf_state.create_global::<Catacomb>(&catacomb.display_handle,
-    // Vec::new());
     catacomb.dmabuf_state.create_global_with_default_feedback::<Catacomb>(
         &catacomb.display_handle,
         &dmabuf_feedback,
