@@ -12,7 +12,8 @@ edition = "2021"
 members = ["catacomb_ipc"]
 
 [dependencies.smithay]
-git = "https://github.com/smithay/smithay"
+# git = "https://github.com/smithay/smithay"
+path = "../../smithay/smithay"
 default-features = false
 features = [
     "use_system_lib",

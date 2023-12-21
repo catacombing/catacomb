@@ -475,7 +475,41 @@ impl Layouts {
 
     /// Add all visible windows' textures to the supplied buffer.
     pub fn textures(&self, textures: &mut Vec<CatacombElement>, scale: f64) {
-        let layout = self.active();
+        let active_index = self.active_layout.unwrap_or_default();
+        self.add_index_textures(textures, scale, active_index);
+    }
+
+    /// Add previous layout's windows' textures to the supplied buffer.
+    pub fn prev_textures(&self, textures: &mut Vec<CatacombElement>, scale: f64) {
+        // Get the index for the previous layout.
+        let layout_count = self.layouts.len();
+        let prev_index = match self.active_layout {
+            Some(active_layout) if layout_count > 1 => {
+                (active_layout + layout_count - 1) % layout_count
+            },
+            _ => return,
+        };
+
+        self.add_index_textures(textures, scale, prev_index);
+    }
+
+    /// Add next layout's windows' textures to the supplied buffer.
+    pub fn next_textures(&self, textures: &mut Vec<CatacombElement>, scale: f64) {
+        // Get the index for the previous layout.
+        let layout_count = self.layouts.len();
+        let next_index = match self.active_layout {
+            Some(active_layout) if layout_count > 1 => {
+                (active_layout + 1) % layout_count
+            },
+            _ => return,
+        };
+
+        self.add_index_textures(textures, scale, next_index);
+    }
+
+    /// Add the index's layout's windows' textures to the supplied buffer.
+    fn add_index_textures(&self, textures: &mut Vec<CatacombElement>, scale: f64, index: usize) {
+        let layout = self.layouts.get(index).unwrap_or(&DEFAULT_LAYOUT);
 
         if let Some(secondary) = layout.secondary().map(|window| window.borrow()) {
             secondary.textures(textures, scale, None, None);

@@ -261,7 +261,7 @@ impl RenderElement<GlesRenderer> for RenderTexture {
 /// Catacomb render element type.
 #[derive(Debug)]
 pub struct CatacombElement(
-    CropRenderElement<RelocateRenderElement<RescaleRenderElement<RenderTexture>>>,
+    pub CropRenderElement<RelocateRenderElement<RescaleRenderElement<RenderTexture>>>,
 );
 
 impl CatacombElement {

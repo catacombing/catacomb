@@ -78,6 +78,7 @@ pub struct Windows {
     activated: Option<ToplevelSurface>,
     transaction: Option<Transaction>,
     textures: Vec<CatacombElement>,
+    quickswitch_offset: f64,
     start_time: Instant,
     output: Output,
 
@@ -110,6 +111,7 @@ impl Windows {
             orientation_locked: true,
             dirty: true,
             unlocked_orientation: Default::default(),
+            quickswitch_offset: Default::default(),
             orphan_popups: Default::default(),
             window_scales: Default::default(),
             transaction: Default::default(),
@@ -361,7 +363,30 @@ impl Windows {
                     layer.textures(&mut self.textures, scale, None, None);
                 }
 
+                let xdg_offset = self.textures.len();
                 self.layouts.textures(&mut self.textures, scale);
+
+                // TODO
+                if self.quickswitch_offset != 0. {
+                    for texture in &mut self.textures[xdg_offset..] {
+                        texture.0.element.location.x += self.quickswitch_offset as i32;
+                        texture.0.crop_rect.loc.x += self.quickswitch_offset as i32;
+                    }
+
+                    let xxx = self.textures.len();
+                    let window_offset = if self.quickswitch_offset > 0. {
+                        self.layouts.prev_textures(&mut self.textures, scale);
+                        -self.canvas.physical_size().w
+                    } else {
+                        self.layouts.next_textures(&mut self.textures, scale);
+                        self.canvas.physical_size().w
+                    };
+
+                    for texture in &mut self.textures[xxx..] {
+                        texture.0.element.location.x += self.quickswitch_offset as i32 + window_offset;
+                        texture.0.crop_rect.loc.x += self.quickswitch_offset as i32 + window_offset;
+                    }
+                }
 
                 for layer in self.layers.background() {
                     layer.textures(&mut self.textures, scale, None, None);
@@ -971,6 +996,11 @@ impl Windows {
                 let overview = Overview::new(self.layouts.active_offset(), primary_percentage);
                 self.set_view(View::Overview(overview));
             },
+            // TODO
+            (HandleGesture::Horizontal(delta), View::Workspace) => {
+                self.quickswitch_offset = delta * 1.5; // TODO
+                self.dirty = true;
+            },
             (HandleGesture::Vertical(_) | HandleGesture::Horizontal(_), _) => (),
         }
     }
@@ -1026,6 +1056,9 @@ impl Windows {
                 } else if delta >= CYCLE_PERCENTAGE {
                     self.layouts.cycle_active(&self.output, -1);
                 }
+
+                // TODO
+                self.quickswitch_offset = 0.;
             },
             (HandleGesture::Vertical(_) | HandleGesture::Horizontal(_), _) => (),
         }
