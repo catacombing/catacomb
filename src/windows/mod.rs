@@ -44,9 +44,6 @@ const MAX_LOCKED_TRANSACTION_MILLIS: u64 = 100;
 /// Maximum time before a transaction is cancelled.
 const MAX_TRANSACTION_MILLIS: u64 = 1000;
 
-/// Horizantal screen percentage required to cycle through windows.
-const CYCLE_PERCENTAGE: f64 = 0.3;
-
 /// Global transaction timer in milliseconds.
 static TRANSACTION_START: AtomicU64 = AtomicU64::new(0);
 
@@ -833,7 +830,7 @@ impl Windows {
             View::Overview(overview) => overview,
             View::Workspace => {
                 // Clear focus on gesture handle tap.
-                if point.y >= (self.output.size().h - GESTURE_HANDLE_HEIGHT) as f64 {
+                if point.y >= (self.canvas.size().h - GESTURE_HANDLE_HEIGHT) as f64 {
                     self.set_focus(None, None, None);
                 }
                 return;
@@ -853,6 +850,26 @@ impl Windows {
         // If the click was outside of the focused window, we just close out of the
         // Overview and return to the previous primary/secondary windows.
         self.set_view(View::Workspace);
+    }
+
+    /// Hand quick double-touch input.
+    pub fn on_double_tap(&mut self, point: Point<f64, Logical>) {
+        // Ensure we're in workspace view.
+        if !matches!(self.view, View::Workspace) {
+            return;
+        }
+
+        // Ignore tap outside of gesture handle.
+        let canvas_size = self.canvas.size().to_f64();
+        if point.y < (canvas_size.h - GESTURE_HANDLE_HEIGHT as f64) {
+            return;
+        }
+
+        if point.x >= canvas_size.w / 1.5 {
+            self.layouts.cycle_active(&self.output, 1);
+        } else if point.x < canvas_size.w / 3. {
+            self.layouts.cycle_active(&self.output, -1);
+        }
     }
 
     /// Handle a touch drag.
@@ -1018,14 +1035,6 @@ impl Windows {
 
                 // Resize back to workspace size.
                 self.resize_visible();
-            },
-            (HandleGesture::Horizontal(delta), View::Workspace) => {
-                let delta_percentage = delta / self.output.size().w as f64;
-                if delta_percentage <= -CYCLE_PERCENTAGE {
-                    self.layouts.cycle_active(&self.output, 1);
-                } else if delta >= CYCLE_PERCENTAGE {
-                    self.layouts.cycle_active(&self.output, -1);
-                }
             },
             (HandleGesture::Vertical(_) | HandleGesture::Horizontal(_), _) => (),
         }

@@ -34,6 +34,9 @@ const RESUME_INHIBIT_DURATION: Duration = Duration::from_millis(500);
 /// Time before button press is considered a hold.
 const BUTTON_HOLD_DURATION: Duration = Duration::from_millis(500);
 
+/// Maximum time between taps to be considered a double-tap.
+const MAX_DOUBLE_TAP_DURATION: Duration = Duration::from_millis(300);
+
 /// Square of the maximum distance before touch input is considered a drag.
 const MAX_TAP_DISTANCE: f64 = 400.;
 
@@ -52,6 +55,7 @@ pub struct TouchState {
     pub user_gestures: Vec<GestureBinding>,
     pub position: Point<f64, Logical>,
 
+    pending_single_tap: Option<RegistrationToken>,
     event_loop: LoopHandle<'static, Catacomb>,
     velocity_timer: Option<RegistrationToken>,
     input_surface: Option<InputSurface>,
@@ -61,6 +65,7 @@ pub struct TouchState {
     slot: Option<TouchSlot>,
     touch: TouchHandle,
     start: TouchStart,
+    last_tap: Instant,
     is_drag: bool,
 }
 
@@ -69,6 +74,8 @@ impl TouchState {
         Self {
             event_loop,
             touch,
+            last_tap: Instant::now(),
+            pending_single_tap: Default::default(),
             velocity_timer: Default::default(),
             input_surface: Default::default(),
             user_gestures: Default::default(),
@@ -164,7 +171,11 @@ impl TouchState {
             return Some(TouchAction::Drag);
         }
 
-        (!touching).then_some(TouchAction::Tap)
+        if self.last_tap.elapsed() <= MAX_DOUBLE_TAP_DURATION {
+            (!touching).then_some(TouchAction::DoubleTap)
+        } else {
+            (!touching).then_some(TouchAction::Tap)
+        }
     }
 
     /// Find gestures matching an origin point.
@@ -225,6 +236,7 @@ enum TouchAction {
     UserGesture(GestureBindingAction),
     Drag,
     Tap,
+    DoubleTap,
 }
 
 impl From<HandleGesture> for TouchAction {
@@ -493,12 +505,19 @@ impl Catacomb {
 
         match self.touch_state.action(self.windows.canvas()) {
             Some(TouchAction::Tap) => {
-                // Clear focus when tapping outside of any window.
-                if self.touch_state.input_surface.is_none() {
-                    self.windows.set_focus(None, None, None);
+                let timer = Timer::from_duration(MAX_DOUBLE_TAP_DURATION);
+                let pending_single_tap =
+                    self.event_loop.insert_source(timer, Self::on_tap).unwrap();
+                self.touch_state.pending_single_tap = Some(pending_single_tap);
+                self.touch_state.last_tap = Instant::now();
+            },
+            Some(TouchAction::DoubleTap) => {
+                // Cancel single-tap.
+                if let Some(pending_single_tap) = self.touch_state.pending_single_tap.take() {
+                    self.event_loop.remove(pending_single_tap);
                 }
 
-                self.windows.on_tap(self.touch_state.position);
+                self.windows.on_double_tap(self.touch_state.position);
             },
             Some(
                 TouchAction::Drag | TouchAction::HandleGesture(_) | TouchAction::UserGesture(_),
@@ -583,6 +602,21 @@ impl Catacomb {
 
         // Notify client.
         self.touch_state.touch.cancel();
+    }
+
+    /// Single-tap handler.
+    fn on_tap(_time: Instant, _data: &mut (), catacomb: &mut Self) -> TimeoutAction {
+        // Clear focus when tapping outside of any window.
+        if catacomb.touch_state.input_surface.is_none() {
+            catacomb.windows.set_focus(None, None, None);
+        }
+
+        catacomb.windows.on_tap(catacomb.touch_state.position);
+
+        // Ensure updates are rendered.
+        catacomb.unstall();
+
+        TimeoutAction::Drop
     }
 
     /// Process a single velocity tick.
