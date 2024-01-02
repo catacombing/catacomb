@@ -804,16 +804,10 @@ impl Catacomb {
                     InputAction::None.into()
                 }
             },
-            (_, KeyState::Released) => {
-                // Get raw keysym.
-                let raw_keysym = keysym.raw_syms();
-                if raw_keysym.len() != 1 {
-                    FilterResult::Forward
-                } else {
-                    Self::handle_user_binding(catacomb, mods, raw_keysym[0].raw())
-                }
+            (_, state) => match keysym.raw_syms().first() {
+                Some(keysym) => Self::handle_user_binding(catacomb, mods, keysym.raw(), state),
+                None => FilterResult::Forward,
             },
-            _ => FilterResult::Forward,
         }
     }
 
@@ -822,6 +816,7 @@ impl Catacomb {
         catacomb: &mut Catacomb,
         mods: impl Into<Modifiers>,
         raw_keysym: u32,
+        state: KeyState,
     ) -> FilterResult<InputAction> {
         // Check if focused surface inhibits shortcuts.
         let inhibits_shortcuts = catacomb.last_focus().map_or(false, |surface| {
@@ -830,7 +825,6 @@ impl Catacomb {
                 data.map_or(false, |data| data.inhibits_shortcuts)
             })
         });
-
         if inhibits_shortcuts {
             return FilterResult::Forward;
         }
@@ -842,10 +836,12 @@ impl Catacomb {
 
         // Execute all matching keybindings.
         let mut filter_result = FilterResult::Forward;
+        let pressed = state == KeyState::Pressed;
         for key_binding in &catacomb.key_bindings {
             if key_binding.key == raw_keysym
                 && key_binding.mods == mods
                 && key_binding.app_id.matches(active_app.as_ref())
+                && key_binding.on_press == pressed
             {
                 // Execute subcommand.
                 let program = &key_binding.program;
@@ -899,7 +895,7 @@ impl Catacomb {
 
         // Execute user bindings for `XF86PowerOff`.
         let mods = Modifiers::default();
-        Self::handle_user_binding(catacomb, mods, keysyms::KEY_XF86PowerOff);
+        Self::handle_user_binding(catacomb, mods, keysyms::KEY_XF86PowerOff, KeyState::Released);
 
         TimeoutAction::Drop
     }

@@ -119,7 +119,7 @@ fn handle_message(buffer: &mut String, stream: UnixStream, catacomb: &mut Cataco
                 gesture.app_id.base() != app_id || gesture.start != start || gesture.end != end
             });
         },
-        IpcMessage::BindKey { app_id, mods, key, program, arguments } => {
+        IpcMessage::BindKey { app_id, mods, on_press, key, program, arguments } => {
             let app_id = match AppIdMatcher::try_from(app_id) {
                 Ok(app_id) => app_id,
                 Err(err) => {
@@ -129,6 +129,7 @@ fn handle_message(buffer: &mut String, stream: UnixStream, catacomb: &mut Cataco
             };
 
             let binding = KeyBinding {
+                on_press,
                 app_id,
                 program,
                 arguments,

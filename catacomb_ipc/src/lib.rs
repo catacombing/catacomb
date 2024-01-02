@@ -116,6 +116,9 @@ pub enum IpcMessage {
         /// Required modifiers.
         #[cfg_attr(feature = "clap", clap(long, short))]
         mods: Option<Modifiers>,
+        /// Execute command on key press, rather than release.
+        #[cfg_attr(feature = "clap", clap(long))]
+        on_press: bool,
         /// Base key for this binding.
         key: ClapKeysym,
         /// Program this gesture should spawn.

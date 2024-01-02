@@ -26,4 +26,5 @@ pub struct KeyBinding {
     pub key: u32,
     pub program: String,
     pub arguments: Vec<String>,
+    pub on_press: bool,
 }
