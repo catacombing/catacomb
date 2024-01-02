@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
-use catacomb_ipc::{self, AppIdMatcher, IpcMessage, WindowScale};
+use catacomb_ipc::{self, AppIdMatcher, DpmsState, IpcMessage, WindowScale};
 use smithay::reexports::calloop::LoopHandle;
 use tracing::warn;
 
@@ -146,5 +146,6 @@ fn handle_message(buffer: &mut String, stream: UnixStream, catacomb: &mut Cataco
                 binding.app_id.base() != app_id || binding.key != key || binding.mods != mods
             });
         },
+        IpcMessage::Dpms { state } => catacomb.backend.set_sleep(state == DpmsState::Off),
     }
 }

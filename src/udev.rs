@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::path::PathBuf;
 use std::time::Duration;
-use std::{env, mem, process, ptr};
+use std::{env, io, mem, process, ptr};
 
 use _linux_dmabuf::zv1::server::zwp_linux_dmabuf_feedback_v1::TrancheFlags;
 use libc::dev_t as DeviceId;
@@ -515,27 +515,37 @@ pub struct OutputDevice {
 
 impl OutputDevice {
     /// Get DRM property handle.
-    fn get_drm_property(&self, name: &str) -> Option<PropertyHandle> {
+    fn get_drm_property(&self, name: &str) -> Result<PropertyHandle, io::Error> {
         let crtc = self.drm_compositor.crtc();
 
         // Get all available properties.
-        let properties = self.drm.get_properties(crtc).ok()?;
+        let properties = self.drm.get_properties(crtc)?;
         let (property_handles, _) = properties.as_props_and_values();
 
         // Find property matching the requested name.
-        property_handles.iter().find_map(|handle| {
-            let property_info = self.drm.get_property(*handle).ok()?;
-            let property_name = property_info.name().to_str().ok()?;
+        for handle in property_handles {
+            let property_info = self.drm.get_property(*handle)?;
+            let property_name = property_info
+                .name()
+                .to_str()
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
 
-            (property_name == name).then_some(*handle)
-        })
+            if property_name == name {
+                return Ok(*handle);
+            }
+        }
+
+        Err(io::Error::new(io::ErrorKind::NotFound, "missing drm property"))
     }
 
     /// Set output DPMS state.
     fn set_enabled(&mut self, enabled: bool) {
         let property = match self.get_drm_property("ACTIVE") {
-            Some(property) => property,
-            None => return,
+            Ok(property) => property,
+            Err(err) => {
+                error!("Could not get DRM property `ACTIVE`: {err}");
+                return;
+            },
         };
 
         let crtc = self.drm_compositor.crtc();

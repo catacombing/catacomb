@@ -42,6 +42,11 @@ pub enum IpcMessage {
         #[cfg_attr(feature = "clap", clap(long))]
         unlock: bool,
     },
+    /// Output power management.
+    Dpms {
+        /// Desired power management state.
+        state: DpmsState,
+    },
     /// Update output scale factor.
     Scale {
         /// New scale factor.
@@ -181,6 +186,14 @@ impl Orientation {
             Self::InverseLandscape => Transform::_90,
         }
     }
+}
+
+/// Output power state.
+#[cfg_attr(feature = "clap", derive(ValueEnum))]
+#[derive(Deserialize, Serialize, PartialEq, Eq, Copy, Clone, Debug)]
+pub enum DpmsState {
+    On,
+    Off,
 }
 
 /// Gesture start/end sectors.
