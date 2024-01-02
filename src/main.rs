@@ -5,7 +5,7 @@ use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::{env, io, ptr};
 
-use catacomb_ipc::IpcMessage;
+use catacomb_ipc::{DpmsState, IpcMessage};
 use clap::{self, Parser, Subcommand};
 use tracing::error;
 use tracing_log::LogTracer;
@@ -26,7 +26,6 @@ mod overview;
 mod protocols;
 mod socket;
 mod udev;
-mod vibrate;
 mod windows;
 
 /// Command line arguments.
@@ -63,10 +62,11 @@ pub fn main() {
     let _ = tracing::subscriber::set_global_default(subscriber);
 
     match Options::parse().subcommands {
-        Some(Subcommands::Msg(msg)) => {
-            if let Err(err) = catacomb_ipc::send_message(&msg) {
-                eprintln!("\x1b[31merror\x1b[0m: {err}");
-            }
+        Some(Subcommands::Msg(msg)) => match catacomb_ipc::send_message(&msg) {
+            Err(err) => eprintln!("\x1b[31merror\x1b[0m: {err}"),
+            Ok(Some(IpcMessage::DpmsReply { state: DpmsState::On })) => println!("on"),
+            Ok(Some(IpcMessage::DpmsReply { state: DpmsState::Off })) => println!("off"),
+            Ok(_) => (),
         },
         None => udev::run(),
     }

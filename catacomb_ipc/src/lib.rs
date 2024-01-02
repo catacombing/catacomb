@@ -7,7 +7,8 @@
 
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
+use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 #[cfg(feature = "clap")]
@@ -41,11 +42,6 @@ pub enum IpcMessage {
         /// Clear screen rotation lock.
         #[cfg_attr(feature = "clap", clap(long))]
         unlock: bool,
-    },
-    /// Output power management.
-    Dpms {
-        /// Desired power management state.
-        state: DpmsState,
     },
     /// Update output scale factor.
     Scale {
@@ -142,6 +138,14 @@ pub enum IpcMessage {
         /// Base key for this binding.
         key: ClapKeysym,
     },
+    /// Output power management.
+    Dpms {
+        /// Desired power management state; leave empty to get current state.
+        state: Option<DpmsState>,
+    },
+    /// Reply for DPMS state request.
+    #[cfg_attr(feature = "clap", clap(skip))]
+    DpmsReply { state: DpmsState },
 }
 
 /// Device orientation.
@@ -420,7 +424,7 @@ impl FromStr for ClapKeysym {
 }
 
 /// Send a message to the Catacomb IPC socket.
-pub fn send_message(message: &IpcMessage) -> Result<(), Box<dyn Error>> {
+pub fn send_message(message: &IpcMessage) -> Result<Option<IpcMessage>, Box<dyn Error>> {
     // Ensure IPC message is legal.
     validate_message(message)?;
 
@@ -440,13 +444,45 @@ pub fn send_message(message: &IpcMessage) -> Result<(), Box<dyn Error>> {
         process::exit(102);
     }
 
-    let mut socket = UnixStream::connect(&socket_path)?;
+    let mut stream = UnixStream::connect(&socket_path)?;
 
-    let message = serde_json::to_string(&message)?;
-    socket.write_all(message[..].as_bytes())?;
-    socket.flush()?;
+    // Write message to socket.
+    let json = serde_json::to_string(&message)?;
+    stream.write_all(json[..].as_bytes())?;
+    stream.flush()?;
 
-    Ok(())
+    // Shutdown write, to allow reading.
+    stream.shutdown(Shutdown::Write)?;
+
+    listen_for_reply(&stream, message)
+}
+
+/// Await message replies.
+fn listen_for_reply(
+    stream: &UnixStream,
+    message: &IpcMessage,
+) -> Result<Option<IpcMessage>, Box<dyn Error>> {
+    // Read reply from buffer.
+    let mut buffer = String::new();
+    let mut reader = BufReader::new(stream);
+    if let Ok(0) | Err(_) = reader.read_line(&mut buffer) {
+        return Ok(None);
+    }
+
+    // Parse IPC reply.
+    let reply: IpcMessage = match serde_json::from_str(&buffer) {
+        Ok(reply) => reply,
+        Err(_) => return Ok(None),
+    };
+
+    match (message, &reply) {
+        (IpcMessage::Dpms { .. }, IpcMessage::DpmsReply { .. }) => Ok(Some(reply)),
+        (IpcMessage::Dpms { .. }, unexpected_reply) => {
+            eprintln!("Error: Invalid IPC reply\n  {unexpected_reply:?}");
+            Ok(None)
+        },
+        _ => Ok(None),
+    }
 }
 
 /// Path for the IPC socket file.

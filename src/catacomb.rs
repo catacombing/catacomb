@@ -11,10 +11,8 @@ use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::ImportDma;
 use smithay::input::keyboard::XkbConfig;
 use smithay::input::{Seat, SeatHandler, SeatState};
-use smithay::reexports::calloop::channel::Event as ChannelEvent;
 use smithay::reexports::calloop::generic::{Generic, NoIoDrop};
 use smithay::reexports::calloop::signals::{Signal, Signals};
-use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{
     Interest, LoopHandle, Mode as TriggerMode, PostAction, RegistrationToken,
 };
@@ -84,24 +82,17 @@ use tracing::{error, info};
 use zbus::zvariant::OwnedFd;
 
 use crate::config::KeyBinding;
-use crate::dbus::{self, DBusEvent};
 use crate::drawing::CatacombSurfaceData;
-use crate::input::{PhysicalButtonState, TouchState};
+use crate::input::TouchState;
 use crate::orientation::{Accelerometer, AccelerometerSource};
 use crate::output::Output;
+use crate::protocols::idle_notify::{IdleNotifierHandler, IdleNotifierState};
 use crate::protocols::screencopy::frame::Screencopy;
 use crate::protocols::screencopy::{ScreencopyHandler, ScreencopyManagerState};
 use crate::udev::Udev;
-use crate::vibrate::Vibrator;
 use crate::windows::surface::Surface;
 use crate::windows::Windows;
-use crate::{delegate_screencopy, ipc_server, trace_error};
-
-/// Duration until suspend after screen is turned off.
-const SUSPEND_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Idle duration before automatic sleep.
-const IDLE_TIMEOUT: Duration = Duration::from_secs(60 * 5);
+use crate::{dbus, delegate_idle_notify, delegate_screencopy, ipc_server, trace_error};
 
 /// Time before xdg_activation tokens are invalidated.
 const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -114,12 +105,10 @@ pub struct Catacomb {
     pub suspend_timer: Option<RegistrationToken>,
     pub idle_timer: Option<RegistrationToken>,
     pub event_loop: LoopHandle<'static, Self>,
-    pub button_state: PhysicalButtonState,
     pub display_handle: DisplayHandle,
     pub key_bindings: Vec<KeyBinding>,
     pub touch_state: TouchState,
     pub last_resume: Instant,
-    pub vibrator: Vibrator,
     pub seat_name: String,
     pub windows: Windows,
     pub seat: Seat<Self>,
@@ -128,6 +117,7 @@ pub struct Catacomb {
     pub backend: Udev,
 
     // Smithay state.
+    pub idle_notifier_state: IdleNotifierState<Self>,
     pub dmabuf_state: DmabufState,
     keyboard_shortcuts_inhibit_state: KeyboardShortcutsInhibitState,
     primary_selection_state: PrimarySelectionState,
@@ -232,6 +222,9 @@ impl Catacomb {
         // Initialize idle-inhibit protocol.
         IdleInhibitManagerState::new::<Self>(&display_handle);
 
+        // Initialize idle-notify protocol.
+        let idle_notifier_state = IdleNotifierState::new(&display_handle, event_loop.clone());
+
         // Initialize session-lock protocol.
         let lock_state = SessionLockManagerState::new::<Self, _>(&display_handle, |_| true);
 
@@ -274,9 +267,6 @@ impl Catacomb {
             catacomb.handle_orientation(orientation);
         });
 
-        // Setup rumble device.
-        let vibrator = Vibrator::new(event_loop.clone());
-
         // Start IPC socket listener.
         ipc_server::spawn_ipc_socket(&event_loop, &socket_name).expect("spawn IPC socket");
 
@@ -293,19 +283,6 @@ impl Catacomb {
             }
         }
 
-        // Handle DBus events.
-        match dbus::dbus_listen() {
-            Ok(dbus_rx) => {
-                event_loop
-                    .insert_source(dbus_rx, |event, _, catacomb| match event {
-                        ChannelEvent::Msg(DBusEvent::Unsuspend) => catacomb.resume(),
-                        ChannelEvent::Closed => (),
-                    })
-                    .expect("insert dbus source");
-            },
-            Err(err) => error!("DBus signal listener creation failed: {err}"),
-        }
-
         // Prevent shutdown on power button press.
         let power_inhibitor =
             match dbus::inhibit("handle-power-key", "Catacomb", "Managed by Catacomb", "block") {
@@ -316,11 +293,12 @@ impl Catacomb {
                 },
             };
 
-        let mut catacomb = Self {
+        Self {
             keyboard_shortcuts_inhibit_state,
             primary_selection_state,
             xdg_activation_state,
             kde_decoration_state,
+            idle_notifier_state,
             data_control_state,
             layer_shell_state,
             data_device_state,
@@ -334,7 +312,6 @@ impl Catacomb {
             seat_state,
             shm_state,
             seat_name,
-            vibrator,
             windows,
             backend,
             seat,
@@ -343,7 +320,6 @@ impl Catacomb {
             last_resume: Instant::now(),
             idle_inhibitors: Default::default(),
             suspend_timer: Default::default(),
-            button_state: Default::default(),
             key_bindings: Default::default(),
             last_focus: Default::default(),
             terminated: Default::default(),
@@ -351,12 +327,7 @@ impl Catacomb {
             sleeping: Default::default(),
             stalled: Default::default(),
             locker: Default::default(),
-        };
-
-        // Kick-off idle timer.
-        catacomb.reset_idle_timer();
-
-        catacomb
+        }
     }
 
     /// Handle Wayland event socket read readiness.
@@ -390,6 +361,11 @@ impl Catacomb {
             self.last_focus = focus.clone();
             self.focus(focus);
         }
+
+        // Update idle inhibition state.
+        let mut inhibitors = self.idle_inhibitors.iter();
+        let inhibited = inhibitors.any(|surface| self.windows.surface_visible(surface));
+        self.idle_notifier_state.set_is_inhibited(inhibited);
 
         // Redraw only when there is damage present.
         if self.windows.damaged() {
@@ -444,95 +420,6 @@ impl Catacomb {
         }
     }
 
-    /// Toggle sleep state.
-    pub fn toggle_sleep(&mut self) {
-        if !self.sleeping {
-            self.sleep();
-        } else {
-            self.resume();
-        }
-    }
-
-    /// Start active sleep.
-    pub fn sleep(&mut self) {
-        // Disable accelerometer timer while sleeping.
-        trace_error(self.event_loop.disable(&self.accelerometer_token));
-
-        self.backend.set_sleep(true);
-        self.sleeping = true;
-
-        // Remove existing suspend timer.
-        if let Some(suspend_timer) = self.suspend_timer.take() {
-            self.event_loop.remove(suspend_timer);
-        }
-
-        // Start timer for autosuspend.
-        let timer = Timer::from_duration(SUSPEND_TIMEOUT);
-        let suspend_timer = self
-            .event_loop
-            .insert_source(timer, |_, _, catacomb| {
-                catacomb.suspend();
-                TimeoutAction::Drop
-            })
-            .expect("insert suspend timer");
-        self.suspend_timer = Some(suspend_timer);
-    }
-
-    /// Resume after sleep.
-    pub fn resume(&mut self) {
-        // Update resume time to ignore buttons pressed during sleep.
-        self.last_resume = Instant::now();
-
-        trace_error(self.event_loop.enable(&self.accelerometer_token));
-
-        self.backend.set_sleep(false);
-        self.sleeping = false;
-
-        // Remove suspend timer on wakeup.
-        if let Some(suspend_timer) = self.suspend_timer.take() {
-            self.event_loop.remove(suspend_timer);
-        }
-
-        // Restart idle timer.
-        self.reset_idle_timer();
-
-        // Ensure content is up to date.
-        self.force_redraw(true);
-    }
-
-    /// Suspend to RAM.
-    pub fn suspend(&mut self) {
-        if let Err(err) = dbus::suspend() {
-            error!("Failed suspending to RAM: {err}");
-        }
-    }
-
-    /// Reset the idle sleep timer.
-    pub fn reset_idle_timer(&mut self) {
-        // Clear existing timer.
-        if let Some(idle_timer) = self.idle_timer.take() {
-            self.event_loop.remove(idle_timer);
-        }
-
-        // Stage new sleep timer.
-        let timer = Timer::from_duration(IDLE_TIMEOUT);
-        let idle_timer = self
-            .event_loop
-            .insert_source(timer, |_, _, catacomb| {
-                let mut idle_inhibitors = catacomb.idle_inhibitors.iter();
-                if idle_inhibitors.all(|surface| !catacomb.windows.surface_visible(surface)) {
-                    // Sleep if no inhibition surface is visible.
-                    catacomb.sleep();
-                    TimeoutAction::Drop
-                } else {
-                    // Reset timer if a surface is inhibiting sleep.
-                    TimeoutAction::ToDuration(IDLE_TIMEOUT)
-                }
-            })
-            .expect("insert idle timer");
-        self.idle_timer = Some(idle_timer);
-    }
-
     /// Completely redraw the screen, ignoring damage.
     ///
     /// The `ignore_unstalled` flag controls whether an immediate redraw should
@@ -546,6 +433,20 @@ impl Catacomb {
         } else {
             self.unstall();
         }
+    }
+
+    /// Set output power mode.
+    pub fn set_sleep(&mut self, sleep: bool) {
+        self.sleeping = sleep;
+
+        // Pause accelerometer checks during sleep.
+        if sleep {
+            trace_error(self.event_loop.disable(&self.accelerometer_token));
+        } else {
+            trace_error(self.event_loop.enable(&self.accelerometer_token));
+        }
+
+        self.backend.set_sleep(sleep);
     }
 }
 
@@ -795,6 +696,13 @@ impl IdleInhibitHandler for Catacomb {
     }
 }
 delegate_idle_inhibit!(Catacomb);
+
+impl IdleNotifierHandler for Catacomb {
+    fn idle_notifier_state(&mut self) -> &mut IdleNotifierState<Self> {
+        &mut self.idle_notifier_state
+    }
+}
+delegate_idle_notify!(Catacomb);
 
 impl FractionalScaleHandler for Catacomb {
     fn new_fractional_scale(&mut self, surface: WlSurface) {

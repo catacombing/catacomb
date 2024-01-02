@@ -193,11 +193,6 @@ impl Windows {
         self.start_transaction().view = Some(View::Workspace);
     }
 
-    /// Check if the session lock is active.
-    pub fn locked(&self) -> bool {
-        matches!(self.view, View::Lock(_))
-    }
-
     /// Find the XDG shell window responsible for a specific surface.
     pub fn find_xdg(&mut self, wl_surface: &WlSurface) -> Option<RefMut<Window>> {
         // Get root surface.

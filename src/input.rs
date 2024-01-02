@@ -28,12 +28,6 @@ use crate::windows::surface::{InputSurface, InputSurfaceKind};
 /// Time before a tap is considered a hold.
 pub const HOLD_DURATION: Duration = Duration::from_secs(1);
 
-/// Duration after resume for which power button presses will be ignored.
-const RESUME_INHIBIT_DURATION: Duration = Duration::from_millis(500);
-
-/// Time before button press is considered a hold.
-const BUTTON_HOLD_DURATION: Duration = Duration::from_millis(500);
-
 /// Maximum time between taps to be considered a double-tap.
 const MAX_DOUBLE_TAP_DURATION: Duration = Duration::from_millis(300);
 
@@ -326,20 +320,6 @@ enum TouchEventType {
     Motion,
 }
 
-/// Hardware button state.
-#[derive(Default)]
-pub struct PhysicalButtonState {
-    power: Option<usize>,
-    next_id: usize,
-}
-
-impl PhysicalButtonState {
-    fn next_id(&mut self) -> usize {
-        self.next_id += 1;
-        self.next_id
-    }
-}
-
 impl Catacomb {
     /// Process device orientation changes.
     pub fn handle_orientation(&mut self, orientation: Orientation) {
@@ -355,7 +335,7 @@ impl Catacomb {
         }
 
         // Reset idle sleep timer.
-        self.reset_idle_timer();
+        self.idle_notifier_state.notify_activity();
 
         match event {
             InputEvent::Keyboard { event, .. } => {
@@ -687,23 +667,8 @@ impl Catacomb {
         //
         // This needs to be handled separately since a lock is held across the
         // `keyboard.input` closure blocking `KeyboardHandle::set_focus`.
-        match action {
-            Some(InputAction::ChangeVt(vt)) => self.backend.change_vt(vt),
-            Some(InputAction::ToggleSleep) => self.toggle_sleep(),
-            Some(InputAction::PowerDown(id)) => {
-                self.button_state.power = Some(id);
-
-                // Open drawer if button is held after timeout while the screen is on.
-                if !self.sleeping {
-                    let timer = Timer::from_duration(BUTTON_HOLD_DURATION);
-                    self.event_loop
-                        .insert_source(timer, move |_, _, catacomb| {
-                            Self::handle_power_hold(catacomb, id)
-                        })
-                        .expect("insert power button timer");
-                }
-            },
-            _ => (),
+        if let Some(InputAction::ChangeVt(vt)) = action {
+            self.backend.change_vt(vt);
         }
     }
 
@@ -786,24 +751,6 @@ impl Catacomb {
                 let vt = (keysym - keysyms::KEY_XF86Switch_VT_1 + 1) as i32;
                 InputAction::ChangeVt(vt).into()
             },
-            // Filter power buttons pressed during suspend.
-            (keysyms::KEY_XF86PowerOff, _)
-                if catacomb.last_resume.elapsed() <= RESUME_INHIBIT_DURATION =>
-            {
-                InputAction::None.into()
-            },
-            (keysyms::KEY_XF86PowerOff, KeyState::Pressed) => {
-                let id = catacomb.button_state.next_id();
-                InputAction::PowerDown(id).into()
-            },
-            (keysyms::KEY_XF86PowerOff, KeyState::Released) => {
-                // Toggle screen DPMS status on short press.
-                if catacomb.button_state.power.take().is_some() {
-                    InputAction::ToggleSleep.into()
-                } else {
-                    InputAction::None.into()
-                }
-            },
             (_, state) => match keysym.raw_syms().first() {
                 Some(keysym) => Self::handle_user_binding(catacomb, mods, keysym.raw(), state),
                 None => FilterResult::Forward,
@@ -880,26 +827,6 @@ impl Catacomb {
         (x, y).into()
     }
 
-    /// Handle long-press of power button.
-    fn handle_power_hold(catacomb: &mut Catacomb, button_id: usize) -> TimeoutAction {
-        // Ignore timer if button was released or session lock is active.
-        if catacomb.button_state.power != Some(button_id) || catacomb.windows.locked() {
-            return TimeoutAction::Drop;
-        }
-
-        // Reset button state.
-        catacomb.button_state.power = None;
-
-        // Always press rumble, to prevent accidental shutdown.
-        catacomb.vibrator.vibrate(100, 0, 1);
-
-        // Execute user bindings for `XF86PowerOff`.
-        let mods = Modifiers::default();
-        Self::handle_user_binding(catacomb, mods, keysyms::KEY_XF86PowerOff, KeyState::Released);
-
-        TimeoutAction::Drop
-    }
-
     /// Convert Keysym to Keycode.
     fn keysym_to_keycode(&mut self, keysym: u32) -> Vec<Keycode> {
         let keyboard = match self.seat.get_keyboard() {
@@ -930,9 +857,7 @@ impl Catacomb {
 
 /// Actions to be taken on keyboard input.
 enum InputAction {
-    PowerDown(usize),
     ChangeVt(i32),
-    ToggleSleep,
     None,
 }
 

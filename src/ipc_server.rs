@@ -2,13 +2,13 @@
 
 use std::error::Error;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
 use catacomb_ipc::{self, AppIdMatcher, DpmsState, IpcMessage, WindowScale};
 use smithay::reexports::calloop::LoopHandle;
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::catacomb::Catacomb;
 use crate::config::{GestureBinding, GestureBindingAction, KeyBinding};
@@ -40,12 +40,12 @@ pub fn spawn_ipc_socket(
 }
 
 /// Handle IPC socket messages.
-fn handle_message(buffer: &mut String, stream: UnixStream, catacomb: &mut Catacomb) {
+fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Catacomb) {
     buffer.clear();
 
     // Read new content to buffer.
-    let mut stream = BufReader::new(stream);
-    if let Ok(0) | Err(_) = stream.read_line(buffer) {
+    let mut reader = BufReader::new(&stream);
+    if let Ok(0) | Err(_) = reader.read_line(buffer) {
         return;
     }
 
@@ -146,6 +146,30 @@ fn handle_message(buffer: &mut String, stream: UnixStream, catacomb: &mut Cataco
                 binding.app_id.base() != app_id || binding.key != key || binding.mods != mods
             });
         },
-        IpcMessage::Dpms { state } => catacomb.backend.set_sleep(state == DpmsState::Off),
+        IpcMessage::Dpms { state: Some(state) } => catacomb.set_sleep(state == DpmsState::Off),
+        IpcMessage::Dpms { state: None } => {
+            let state = if catacomb.sleeping { DpmsState::Off } else { DpmsState::On };
+            send_reply(&mut stream, &IpcMessage::DpmsReply { state });
+        },
+        // Ignore IPC replies.
+        IpcMessage::DpmsReply { .. } => (),
     }
+}
+
+/// Send IPC message reply.
+fn send_reply(stream: &mut UnixStream, message: &IpcMessage) {
+    if let Err(err) = send_reply_fallible(stream, message) {
+        error!("Could not send IPC reply: {err}");
+    }
+}
+
+/// Send IPC message reply, returning possible errors.
+fn send_reply_fallible(
+    stream: &mut UnixStream,
+    message: &IpcMessage,
+) -> Result<(), Box<dyn Error>> {
+    let json = serde_json::to_string(&message)?;
+    stream.write_all(json[..].as_bytes())?;
+    stream.flush()?;
+    Ok(())
 }
