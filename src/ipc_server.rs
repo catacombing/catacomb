@@ -57,14 +57,8 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
 
     // Handle IPC events.
     match message {
-        IpcMessage::Orientation { unlock: true, .. } => {
-            catacomb.windows.unlock_orientation();
-            catacomb.unstall();
-        },
-        IpcMessage::Orientation { lock: orientation, .. } => {
-            catacomb.windows.lock_orientation(orientation);
-            catacomb.unstall();
-        },
+        IpcMessage::Orientation { unlock: true, .. } => catacomb.unlock_orientation(),
+        IpcMessage::Orientation { lock: orientation, .. } => catacomb.lock_orientation(orientation),
         IpcMessage::Scale { scale, app_id: Some(app_id) } => {
             let app_id = match AppIdMatcher::try_from(app_id) {
                 Ok(app_id) => app_id,

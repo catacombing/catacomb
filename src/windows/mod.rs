@@ -782,6 +782,11 @@ impl Windows {
         self.update_orientation(self.unlocked_orientation);
     }
 
+    /// Get orientation lock state.
+    pub fn orientation_locked(&self) -> bool {
+        self.orientation_locked
+    }
+
     /// Check if any window was damaged since the last redraw.
     pub fn damaged(&mut self) -> bool {
         if self.dirty {

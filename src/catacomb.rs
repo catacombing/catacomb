@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use _server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as ManagerMode;
+use catacomb_ipc::Orientation;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::ImportDma;
 use smithay::input::keyboard::XkbConfig;
@@ -262,16 +263,21 @@ impl Catacomb {
         let touch = seat.add_touch();
         let touch_state = TouchState::new(event_loop.clone(), touch);
 
-        // Subscribe to device orientation changes.
-        let accel_token = Accelerometer::new().subscribe(&event_loop, |orientation, catacomb| {
-            catacomb.handle_orientation(orientation);
-        });
-
         // Start IPC socket listener.
         ipc_server::spawn_ipc_socket(&event_loop, &socket_name).expect("spawn IPC socket");
 
         // Create window manager.
         let windows = Windows::new(&display_handle, event_loop.clone());
+
+        // Subscribe to device orientation changes.
+        let accel_token = Accelerometer::new().subscribe(&event_loop, |orientation, catacomb| {
+            catacomb.handle_orientation(orientation);
+        });
+
+        // Disable accelerometer polling if orientation starts locked.
+        if windows.orientation_locked() {
+            trace_error(event_loop.disable(&accel_token));
+        }
 
         // Run user startup script.
         if let Some(mut script_path) = dirs::config_dir() {
@@ -447,6 +453,20 @@ impl Catacomb {
         }
 
         self.backend.set_sleep(sleep);
+    }
+
+    /// Lock the output's orientation.
+    pub fn lock_orientation(&mut self, orientation: Option<Orientation>) {
+        trace_error(self.event_loop.disable(&self.accelerometer_token));
+        self.windows.lock_orientation(orientation);
+        self.unstall();
+    }
+
+    /// Unlock the output's orientation.
+    pub fn unlock_orientation(&mut self) {
+        trace_error(self.event_loop.enable(&self.accelerometer_token));
+        self.windows.unlock_orientation();
+        self.unstall();
     }
 }
 
