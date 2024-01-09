@@ -162,7 +162,6 @@ impl AccelerometerSource for SensorAccelerometer {
     {
         loop_handle
             .insert_source(Timer::immediate(), move |_, _, catacomb| {
-                println!("POLLING ACCELEROMETER");
                 let fallback = self.last.unwrap_or(Orientation::Portrait);
                 let orientation = self.orientation().unwrap_or(fallback);
                 if Some(orientation) != self.last {

@@ -448,7 +448,7 @@ impl Catacomb {
         // Pause accelerometer checks during sleep.
         if sleep {
             trace_error(self.event_loop.disable(&self.accelerometer_token));
-        } else {
+        } else if !self.windows.orientation_locked() {
             trace_error(self.event_loop.enable(&self.accelerometer_token));
         }
 
