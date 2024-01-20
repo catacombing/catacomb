@@ -57,7 +57,7 @@ use crate::trace_error;
 use crate::windows::Windows;
 
 /// Default background color.
-const CLEAR_COLOR: [f32; 4] = [1., 0., 1., 1.];
+const CLEAR_COLOR: [f32; 4] = [0., 0., 0., 1.];
 
 /// Time before a VBlank reserved for rendering compositor updates.
 const RENDER_TIME_OFFSET: Duration = Duration::from_millis(10);
