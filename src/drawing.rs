@@ -11,6 +11,7 @@ use smithay::backend::renderer::element::{Element, Id, RenderElement, Underlying
 use smithay::backend::renderer::gles::{ffi, GlesFrame, GlesRenderer, GlesTexture};
 use smithay::backend::renderer::utils::{Buffer, CommitCounter, DamageBag, DamageSnapshot};
 use smithay::backend::renderer::{self, Renderer, Texture as _};
+use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{
     Buffer as BufferSpace, Logical, Physical, Point, Rectangle, Scale, Size, Transform,
@@ -22,6 +23,7 @@ use smithay::wayland::viewporter::{self, ViewportCachedState};
 
 use crate::geometry::SubtractRectFast;
 use crate::output::{Canvas, GESTURE_HANDLE_HEIGHT};
+use crate::protocols::single_pixel_buffer;
 
 /// Color of the hovered overview tiling location highlight.
 const ACTIVE_DROP_TARGET_RGBA: [u8; 4] = [64, 64, 64, 128];
@@ -129,37 +131,7 @@ impl Texture {
         height: i32,
         opaque: bool,
     ) -> Self {
-        assert!(buffer.len() as i32 >= width * height * 4);
-
-        let format = ffi::RGBA;
-        let texture_id = renderer
-            .with_context(|gl| unsafe {
-                let mut tex = 0;
-                gl.GenTextures(1, &mut tex);
-                gl.BindTexture(ffi::TEXTURE_2D, tex);
-                gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_WRAP_S, ffi::CLAMP_TO_EDGE as i32);
-                gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_WRAP_T, ffi::CLAMP_TO_EDGE as i32);
-                gl.TexImage2D(
-                    ffi::TEXTURE_2D,
-                    0,
-                    format as i32,
-                    width,
-                    height,
-                    0,
-                    format,
-                    ffi::UNSIGNED_BYTE,
-                    buffer.as_ptr().cast(),
-                );
-                gl.BindTexture(ffi::TEXTURE_2D, 0);
-
-                tex
-            })
-            .expect("create texture");
-
-        let size = (width, height).into();
-        let texture =
-            unsafe { GlesTexture::from_raw(renderer, Some(format), opaque, texture_id, size) };
-
+        let texture = create_texture(renderer, buffer, width, height, opaque);
         let logical_size =
             Size::<i32, Physical>::from((width, height)).to_f64().to_logical(scale).to_i32_round();
         Texture::new(texture, logical_size, scale, opaque)
@@ -453,9 +425,7 @@ impl CatacombSurfaceData {
                 let old_size = self.buffer_size;
                 self.scale = attributes.buffer_scale;
                 self.transform = attributes.buffer_transform.into();
-                self.buffer_size = renderer::buffer_dimensions(&buffer)
-                    .unwrap_or_default()
-                    .to_logical(self.scale, self.transform);
+                self.buffer_size = buffer_dimensions(&buffer, self.scale, self.transform);
                 self.buffer = Some(Buffer::from(buffer));
                 self.texture = None;
 
@@ -507,6 +477,18 @@ impl CatacombSurfaceData {
     }
 }
 
+/// Get WlBuffer dimensions.
+///
+/// NOTE: This can be removed once the single-pixel buffer protocol is supported
+/// upstream.
+fn buffer_dimensions(buffer: &WlBuffer, scale: i32, transform: Transform) -> Size<i32, Logical> {
+    match single_pixel_buffer::get_single_pixel_buffer(buffer) {
+        Ok(_) => Size::from((1, 1)),
+        Err(_) => renderer::buffer_dimensions(buffer).unwrap_or_default(),
+    }
+    .to_logical(scale, transform)
+}
+
 /// Pending buffer damage.
 #[derive(Default)]
 pub struct Damage {
@@ -524,4 +506,43 @@ impl Damage {
     pub fn clear(&mut self) {
         self.buffer.clear();
     }
+}
+
+/// Create a new OpenGL texture.
+pub fn create_texture(
+    renderer: &mut GlesRenderer,
+    buffer: &[u8],
+    width: i32,
+    height: i32,
+    opaque: bool,
+) -> GlesTexture {
+    assert!(buffer.len() as i32 >= width * height * 4);
+
+    let format = ffi::RGBA;
+    let texture_id = renderer
+        .with_context(|gl| unsafe {
+            let mut tex = 0;
+            gl.GenTextures(1, &mut tex);
+            gl.BindTexture(ffi::TEXTURE_2D, tex);
+            gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_WRAP_S, ffi::CLAMP_TO_EDGE as i32);
+            gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_WRAP_T, ffi::CLAMP_TO_EDGE as i32);
+            gl.TexImage2D(
+                ffi::TEXTURE_2D,
+                0,
+                format as i32,
+                width,
+                height,
+                0,
+                format,
+                ffi::UNSIGNED_BYTE,
+                buffer.as_ptr().cast(),
+            );
+            gl.BindTexture(ffi::TEXTURE_2D, 0);
+
+            tex
+        })
+        .expect("create texture");
+
+    let size = (width, height).into();
+    unsafe { GlesTexture::from_raw(renderer, Some(format), opaque, texture_id, size) }
 }

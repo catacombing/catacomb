@@ -90,10 +90,14 @@ use crate::output::Output;
 use crate::protocols::idle_notify::{IdleNotifierHandler, IdleNotifierState};
 use crate::protocols::screencopy::frame::Screencopy;
 use crate::protocols::screencopy::{ScreencopyHandler, ScreencopyManagerState};
+use crate::protocols::single_pixel_buffer::SinglePixelBufferState;
 use crate::udev::Udev;
 use crate::windows::surface::Surface;
 use crate::windows::Windows;
-use crate::{dbus, delegate_idle_notify, delegate_screencopy, ipc_server, trace_error};
+use crate::{
+    dbus, delegate_idle_notify, delegate_screencopy, delegate_single_pixel_buffer, ipc_server,
+    trace_error,
+};
 
 /// Time before xdg_activation tokens are invalidated.
 const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -219,6 +223,8 @@ impl Catacomb {
         // Initialize wp_presentation protocol.
         let clock_id = libc::CLOCK_MONOTONIC as u32;
         PresentationState::new::<Self>(&display_handle, clock_id);
+
+        SinglePixelBufferState::new::<Self>(&display_handle);
 
         // Initialize idle-inhibit protocol.
         IdleInhibitManagerState::new::<Self>(&display_handle);
@@ -850,3 +856,5 @@ impl ClientData for ClientState {
 
     fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
 }
+
+delegate_single_pixel_buffer!(Catacomb);

@@ -35,9 +35,10 @@ use smithay::wayland::shell::xdg::{
 };
 use tracing::error;
 
-use crate::drawing::{CatacombElement, CatacombSurfaceData, RenderTexture, Texture};
+use crate::drawing::{self, CatacombElement, CatacombSurfaceData, RenderTexture, Texture};
 use crate::geometry::Vector;
 use crate::output::{ExclusiveSpace, Output};
+use crate::protocols::single_pixel_buffer;
 use crate::windows;
 use crate::windows::surface::{CatacombLayerSurface, InputSurface, Surface};
 
@@ -291,35 +292,43 @@ impl<S: Surface + 'static> Window<S> {
                 // Retrieve buffer damage.
                 let damage = data.damage.buffer();
 
-                // Import and cache the buffer.
-                let action = match renderer.import_buffer(buffer, Some(surface_data), damage) {
-                    Some(Ok(texture)) => {
-                        // Release SHM buffers after import.
-                        if let Some(BufferType::Shm) = renderer::buffer_type(buffer) {
-                            data.buffer = None;
-                        }
-
-                        // Update and cache the texture.
-                        let texture =
-                            Texture::from_surface(texture, self.scale, location, &data, surface);
-                        let render_texture = RenderTexture::new(texture);
-                        self.texture_cache.push(render_texture.clone(), location);
-                        data.texture = Some(render_texture);
-
-                        TraversalAction::DoChildren(location)
+                let texture = match single_pixel_buffer::get_single_pixel_buffer(buffer) {
+                    // Handle single-pixel buffer protocol.
+                    Ok(buffer) => {
+                        // Create 1x1 OpenGL texture.
+                        let opaque = !buffer.has_alpha();
+                        let rgba = buffer.rgba8888();
+                        drawing::create_texture(renderer, &rgba, 1, 1, opaque)
                     },
-                    _ => {
-                        error!("unable to import buffer");
-                        data.buffer = None;
+                    // Import and cache the buffer.
+                    Err(_) => match renderer.import_buffer(buffer, Some(surface_data), damage) {
+                        Some(Ok(texture)) => {
+                            // Release SHM buffers after import.
+                            if let Some(BufferType::Shm) = renderer::buffer_type(buffer) {
+                                data.buffer = None;
+                            }
 
-                        TraversalAction::SkipChildren
+                            texture
+                        },
+                        _ => {
+                            error!("unable to import buffer");
+                            data.buffer = None;
+
+                            return TraversalAction::SkipChildren;
+                        },
                     },
                 };
+
+                // Update and cache the texture.
+                let texture = Texture::from_surface(texture, self.scale, location, &data, surface);
+                let render_texture = RenderTexture::new(texture);
+                self.texture_cache.push(render_texture.clone(), location);
+                data.texture = Some(render_texture);
 
                 // Clear buffer damage after successful import.
                 data.damage.clear();
 
-                action
+                TraversalAction::DoChildren(location)
             },
             |_, _, _| (),
             |_, _, _| true,
