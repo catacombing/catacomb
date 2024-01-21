@@ -18,7 +18,7 @@ use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_positioner::{
 };
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
-use smithay::utils::{Logical, Physical, Point, Rectangle, Size};
+use smithay::utils::{Logical, Physical, Point, Rectangle, Size, Transform};
 use smithay::wayland::compositor::{
     self, SubsurfaceCachedState, SurfaceAttributes, SurfaceData, TraversalAction,
 };
@@ -97,6 +97,7 @@ impl<S: Surface + 'static> Window<S> {
         window_scales: &[(AppIdMatcher, WindowScale)],
         surface: S,
         output_scale: f64,
+        surface_transform: Transform,
         app_id: Option<String>,
     ) -> Self {
         let mut window = Window {
@@ -119,6 +120,8 @@ impl<S: Surface + 'static> Window<S> {
 
         // Ensure preferred integer scale and per-window layer shell scale are set.
         window.update_scale(window_scales, output_scale);
+
+        window.update_transform(surface_transform);
 
         window
     }
@@ -518,6 +521,19 @@ impl<S: Surface + 'static> Window<S> {
         // Try to update window scale when App ID changes.
         if app_id_changed {
             self.update_scale(window_scales, output_scale);
+        }
+    }
+
+    /// Update the window's surface transforms.
+    pub fn update_transform(&self, surface_transform: Transform) {
+        // Update popup scale.
+        for popup in &self.popups {
+            popup.update_transform(surface_transform);
+        }
+
+        let surface = self.surface.surface();
+        if surface.version() >= 6 {
+            surface.preferred_buffer_transform(surface_transform.into());
         }
     }
 

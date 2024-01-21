@@ -187,7 +187,7 @@ impl Catacomb {
             .expect("register display");
 
         // Create the compositor and register a surface commit handler.
-        let compositor_state = CompositorState::new::<Self>(&display_handle);
+        let compositor_state = CompositorState::new_v6::<Self>(&display_handle);
 
         // Setup XDG Shell.
         let xdg_shell_state = XdgShellState::new_with_capabilities::<Self>(&display_handle, [

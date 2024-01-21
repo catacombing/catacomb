@@ -61,6 +61,40 @@ pub fn start_transaction() {
     TRANSACTION_START.store(now, Ordering::Relaxed);
 }
 
+/// Perform operation for every known window.
+macro_rules! with_all_windows {
+    ($windows:expr, |$window:tt| $fn:expr) => {{
+        match $windows.pending_view() {
+            View::Lock(Some($window)) => $fn,
+            _ => (),
+        }
+
+        for $window in $windows.layouts.windows() {
+            $fn
+        }
+        for $window in $windows.layers.iter() {
+            $fn
+        }
+    }};
+}
+
+/// Perform mutable operation for every known window.
+macro_rules! with_all_windows_mut {
+    ($windows:expr, |$window:tt| $fn:expr) => {{
+        match $windows.pending_view_mut() {
+            View::Lock(Some($window)) => $fn,
+            _ => (),
+        }
+
+        for mut $window in $windows.layouts.windows_mut() {
+            $fn
+        }
+        for $window in $windows.layers.iter_mut() {
+            $fn
+        }
+    }};
+}
+
 /// Container tracking all known clients.
 #[derive(Debug)]
 pub struct Windows {
@@ -139,22 +173,32 @@ impl Windows {
             state.states.set(State::Activated);
         });
 
-        let window = Rc::new(RefCell::new(Window::new(&[], surface, self.output.scale(), None)));
+        let transform = self.output.orientation().surface_transform();
+        let scale = self.output.scale();
+
+        let window = Rc::new(RefCell::new(Window::new(&[], surface, scale, transform, None)));
         self.layouts.create(&self.output, window);
     }
 
     /// Add a new layer shell window.
     pub fn add_layer(&mut self, layer: Layer, surface: LayerSurface, namespace: String) {
+        let transform = self.output.orientation().surface_transform();
+        let scale = self.output.scale();
+
         let surface = CatacombLayerSurface::new(layer, surface);
         let mut window =
-            Window::new(&self.window_scales, surface, self.output.scale(), Some(namespace));
+            Window::new(&self.window_scales, surface, scale, transform, Some(namespace));
+
         window.enter(&self.output);
         self.layers.add(window);
     }
 
     /// Add a new popup window.
     pub fn add_popup(&mut self, popup: PopupSurface) {
-        self.orphan_popups.push(Window::new(&[], popup, self.output.scale(), None));
+        let transform = self.output.orientation().surface_transform();
+        let scale = self.output.scale();
+
+        self.orphan_popups.push(Window::new(&[], popup, scale, transform, None));
     }
 
     /// Move popup location.
@@ -167,6 +211,7 @@ impl Windows {
 
     /// Update the session lock surface.
     pub fn set_lock_surface(&mut self, surface: LockSurface) {
+        let surface_transform = self.output.orientation().surface_transform();
         let output_scale = self.output.scale();
         let output_size = self.output.size();
 
@@ -176,7 +221,7 @@ impl Windows {
         };
 
         // Set lock surface size.
-        let mut window = Window::new(&[], surface, output_scale, None);
+        let mut window = Window::new(&[], surface, output_scale, surface_transform, None);
         window.set_dimensions(output_scale, Rectangle::from_loc_and_size((0, 0), output_size));
 
         // Update lockscreen.
@@ -684,14 +729,23 @@ impl Windows {
 
     /// Resize all windows to their expected size.
     pub fn resize_all(&mut self) {
-        // Resize fullscreen XDG client.
-        let fullscreen_window = match self.pending_view() {
+        let available_fullscreen = self.output.available_fullscreen();
+        let output_size = self.output.size();
+        let scale = self.output.scale();
+
+        // Handle fullscreen/lock surfaces.
+        let fullscreen_window = match self.pending_view_mut() {
             View::Fullscreen(window) => {
                 let mut window = window.borrow_mut();
-                let available_fullscreen = self.output.available_fullscreen();
-                window.set_dimensions(self.output.scale(), available_fullscreen);
+                window.set_dimensions(scale, available_fullscreen);
 
                 Some(window.surface().clone())
+            },
+            View::Lock(Some(window)) => {
+                let rect = Rectangle::from_loc_and_size((0, 0), output_size);
+                window.set_dimensions(scale, rect);
+
+                None
             },
             _ => None,
         };
@@ -717,17 +771,24 @@ impl Windows {
 
     /// Resize visible windows to their expected size.
     pub fn resize_visible(&mut self) {
-        match self.pending_view() {
+        let available_fullscreen = self.output.available_fullscreen();
+        let output_scale = self.output.scale();
+        let output_size = self.output.size();
+
+        match self.pending_view_mut() {
             // Resize fullscreen and overlay surfaces in fullscreen view.
             View::Fullscreen(window) => {
                 // Resize fullscreen XDG client.
-                let available_fullscreen = self.output.available_fullscreen();
-                window.borrow_mut().set_dimensions(self.output.scale(), available_fullscreen);
+                window.borrow_mut().set_dimensions(output_scale, available_fullscreen);
 
                 // Resize overlay layer clients.
                 for window in self.layers.overlay_mut() {
                     window.update_dimensions(&mut self.output, true);
                 }
+            },
+            View::Lock(Some(window)) => {
+                let rect = Rectangle::from_loc_and_size((0, 0), output_size);
+                window.set_dimensions(output_scale, rect);
             },
             // Resize active XDG layout and layer shell in any other view.
             _ => {
@@ -749,6 +810,10 @@ impl Windows {
 
         // Update output orientation.
         self.output.set_orientation(orientation);
+
+        // Update window transform.
+        let transform = orientation.surface_transform();
+        with_all_windows!(self, |window| window.update_transform(transform));
 
         // Resize all windows to new output size.
         self.resize_all();
@@ -1115,18 +1180,22 @@ impl Windows {
         }
 
         // Update existing window scales.
-        for mut window in self.layouts.windows_mut() {
-            window.update_scale(&self.window_scales, self.output.scale());
-        }
-        for window in self.layers.iter_mut() {
-            window.update_scale(&self.window_scales, self.output.scale());
-        }
+        let window_scales = mem::take(&mut self.window_scales);
+        let output_scale = self.output.scale();
+        with_all_windows_mut!(self, |window| window.update_scale(&window_scales, output_scale));
+        self.window_scales = window_scales;
     }
 
     /// Check if a surface is currently visible.
     pub fn surface_visible(&self, surface: &WlSurface) -> bool {
+        match self.pending_view() {
+            View::Lock(Some(window)) if window.owns_surface(surface) => return true,
+            _ => (),
+        }
+
         let mut visible_xdg = false;
         self.layouts.with_visible(|window| visible_xdg |= window.owns_surface(surface));
+
         visible_xdg || self.layers.iter().any(|layer| layer.owns_surface(surface))
     }
 
@@ -1195,12 +1264,7 @@ impl Windows {
         self.output.set_scale(scale);
 
         // Update surface's preferred fractional and buffer scale.
-        for window in self.layouts.windows() {
-            window.set_preferred_scale(scale);
-        }
-        for window in self.layers.iter() {
-            window.set_preferred_scale(scale);
-        }
+        with_all_windows!(self, |window| window.set_preferred_scale(scale));
 
         self.resize_all();
     }
@@ -1226,19 +1290,11 @@ impl Windows {
 
     /// Get parent geometry of the window owning a surface.
     pub fn parent_geometry(&self, surface: &WlSurface) -> Rectangle<i32, Logical> {
-        // Check XDG windows.
-        for window in self.layouts.windows() {
+        with_all_windows!(self, |window| {
             if window.owns_surface(surface) {
                 return window.bounds(self.output().scale());
             }
-        }
-
-        // Check layer-shell windows.
-        for window in self.layers.iter() {
-            if window.owns_surface(surface) {
-                return window.bounds(self.output().scale());
-            }
-        }
+        });
 
         // Default to full output size.
         Rectangle::from_loc_and_size((0, 0), self.output().size())
