@@ -53,6 +53,7 @@ pub struct TouchState {
     event_loop: LoopHandle<'static, Catacomb>,
     velocity_timer: Option<RegistrationToken>,
     input_surface: Option<InputSurface>,
+    tap_surface: Option<InputSurface>,
     active_app_id: Option<String>,
     velocity: Point<f64, Logical>,
     events: Vec<TouchEvent>,
@@ -74,6 +75,7 @@ impl TouchState {
             input_surface: Default::default(),
             user_gestures: Default::default(),
             active_app_id: Default::default(),
+            tap_surface: Default::default(),
             position: Default::default(),
             velocity: Default::default(),
             is_drag: Default::default(),
@@ -405,7 +407,7 @@ impl Catacomb {
 
     /// Handle new touch input start.
     fn on_touch_down(&mut self, event: TouchEvent) {
-        let TouchEvent { time, slot, position, .. } = event;
+        let TouchEvent { slot, position, .. } = event;
 
         // Initialize the touch state.
         self.touch_state.start(self.windows.canvas(), slot, position);
@@ -416,6 +418,7 @@ impl Catacomb {
         // Notify client.
         self.touch_state.input_surface = None;
         self.touch_state.active_app_id = None;
+        self.touch_state.tap_surface = None;
         if let Some(mut input_surface) = surface {
             // Get surface's App ID.
             let app_id = input_surface.toplevel.as_mut().and_then(InputSurfaceKind::take_app_id);
@@ -440,28 +443,11 @@ impl Catacomb {
             self.touch_state.active_app_id = app_id;
 
             if !gesture_active {
-                // Update window focus.
-                match input_surface.toplevel.take() {
-                    Some(InputSurfaceKind::Layout((window, _))) => {
-                        self.windows.set_focus(Some(window), None, None);
-                    },
-                    Some(InputSurfaceKind::Layer((layer, app_id))) => {
-                        self.windows.set_focus(None, Some(layer), app_id);
-                    },
-                    // For surfaces denying focus, we send events but inhibit focus.
-                    None => (),
-                }
-
-                // Calculate surface-local touch position.
-                let scale = self.windows.canvas().scale();
-                let position = input_surface.local_position(scale, event.position);
-
-                // Send touch event to the client.
-                let serial = SERIAL_COUNTER.next_serial();
-                let surface = &input_surface.surface;
-                self.touch_state.touch.down(serial, time, surface, position, slot);
+                self.on_surface_down(event, &mut input_surface);
 
                 self.touch_state.input_surface = Some(input_surface);
+            } else {
+                self.touch_state.tap_surface = Some(input_surface);
             }
         }
 
@@ -474,8 +460,10 @@ impl Catacomb {
     /// Handle touch input release.
     fn on_touch_up(&mut self, event: TouchEvent) {
         // Notify client.
-        let serial = SERIAL_COUNTER.next_serial();
-        self.touch_state.touch.up(serial, event.time, event.slot);
+        if self.touch_state.input_surface.is_some() {
+            let serial = SERIAL_COUNTER.next_serial();
+            self.touch_state.touch.up(serial, event.time, event.slot);
+        }
 
         // Check if slot is the active one.
         if self.touch_state.slot != Some(event.slot) {
@@ -485,9 +473,12 @@ impl Catacomb {
 
         match self.touch_state.action(self.windows.canvas()) {
             Some(TouchAction::Tap) => {
+                self.replay_ignored_tap(event);
+
+                // Stage single-tap to trigger on double-tap timeout.
                 let timer = Timer::from_duration(MAX_DOUBLE_TAP_DURATION);
                 let pending_single_tap =
-                    self.event_loop.insert_source(timer, Self::on_tap).unwrap();
+                    self.event_loop.insert_source(timer, Self::on_single_tap).unwrap();
                 self.touch_state.pending_single_tap = Some(pending_single_tap);
                 self.touch_state.last_tap = Instant::now();
             },
@@ -497,7 +488,9 @@ impl Catacomb {
                     self.event_loop.remove(pending_single_tap);
                 }
 
-                self.windows.on_double_tap(self.touch_state.position);
+                self.replay_ignored_tap(event);
+
+                self.on_double_tap();
             },
             Some(
                 TouchAction::Drag | TouchAction::HandleGesture(_) | TouchAction::UserGesture(_),
@@ -526,6 +519,32 @@ impl Catacomb {
 
         self.touch_state.velocity = event.position - self.touch_state.position;
         self.update_position(event.position);
+    }
+
+    /// Handle touch-down on a surface.
+    fn on_surface_down(&mut self, event: TouchEvent, input_surface: &mut InputSurface) {
+        let TouchEvent { time, slot, position, .. } = event;
+
+        // Update window focus.
+        match input_surface.toplevel.take() {
+            Some(InputSurfaceKind::Layout((window, _))) => {
+                self.windows.set_focus(Some(window), None, None);
+            },
+            Some(InputSurfaceKind::Layer((layer, app_id))) => {
+                self.windows.set_focus(None, Some(layer), app_id);
+            },
+            // For surfaces denying focus, we send events but inhibit focus.
+            None => (),
+        }
+
+        // Calculate surface-local touch position.
+        let scale = self.windows.canvas().scale();
+        let position = input_surface.local_position(scale, position);
+
+        // Send touch event to the client.
+        let serial = SERIAL_COUNTER.next_serial();
+        let surface = &input_surface.surface;
+        self.touch_state.touch.down(serial, time, surface, position, slot);
     }
 
     /// Update the touch position.
@@ -584,8 +603,24 @@ impl Catacomb {
         self.touch_state.touch.cancel();
     }
 
+    /// Replay touch tap event which were ignored due to gesture recognition.
+    fn replay_ignored_tap(&mut self, event: TouchEvent) {
+        let mut input_surface = match self.touch_state.tap_surface.take() {
+            Some(input_surface) => input_surface,
+            None => return,
+        };
+
+        self.on_surface_down(event, &mut input_surface);
+
+        let serial = SERIAL_COUNTER.next_serial();
+        self.touch_state.touch.up(serial, event.time + 1, event.slot);
+
+        // Reset tap surface for potential double-tap.
+        self.touch_state.tap_surface = Some(input_surface);
+    }
+
     /// Single-tap handler.
-    fn on_tap(_time: Instant, _data: &mut (), catacomb: &mut Self) -> TimeoutAction {
+    fn on_single_tap(_: Instant, _: &mut (), catacomb: &mut Self) -> TimeoutAction {
         // Clear focus when tapping outside of any window.
         if catacomb.touch_state.input_surface.is_none() {
             catacomb.windows.set_focus(None, None, None);
@@ -597,6 +632,19 @@ impl Catacomb {
         catacomb.unstall();
 
         TimeoutAction::Drop
+    }
+
+    /// Double-tap handler.
+    fn on_double_tap(&mut self) {
+        // Clear focus when tapping outside of any window.
+        if self.touch_state.input_surface.is_none() {
+            self.windows.set_focus(None, None, None);
+        }
+
+        self.windows.on_double_tap(self.touch_state.position);
+
+        // Ensure updates are rendered.
+        self.unstall();
     }
 
     /// Process a single velocity tick.
