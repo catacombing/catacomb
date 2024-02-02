@@ -13,7 +13,7 @@ use smithay::backend::allocator::gbm::{GbmAllocator, GbmBuffer, GbmBufferFlags, 
 use smithay::backend::allocator::{Format, Fourcc};
 use smithay::backend::drm::compositor::{DrmCompositor as SmithayDrmCompositor, RenderFrameResult};
 use smithay::backend::drm::gbm::GbmFramebuffer;
-use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent};
+use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent, DrmSurface};
 use smithay::backend::egl::context::EGLContext;
 use smithay::backend::egl::display::EGLDisplay;
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
@@ -33,11 +33,11 @@ use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{
     Dispatcher, EventLoop, Interest, LoopHandle, Mode as TriggerMode, PostAction, RegistrationToken,
 };
-use smithay::reexports::drm::control::connector::State as ConnectorState;
+use smithay::reexports::drm::control::connector::{Info as ConnectorInfo, State as ConnectorState};
 use smithay::reexports::drm::control::property::{
     Handle as PropertyHandle, Value as PropertyValue,
 };
-use smithay::reexports::drm::control::Device;
+use smithay::reexports::drm::control::{Device, Mode as DrmMode, ResourceHandles};
 use smithay::reexports::input::Libinput;
 use smithay::reexports::rustix::fs::OFlags;
 use smithay::reexports::wayland_protocols::wp::linux_dmabuf as _linux_dmabuf;
@@ -172,7 +172,7 @@ impl Udev {
                 SessionEvent::PauseSession => {
                     context.suspend();
 
-                    if let Some(output_device) = &catacomb.backend.output_device {
+                    if let Some(output_device) = &mut catacomb.backend.output_device {
                         output_device.drm.pause();
                     }
                 },
@@ -317,10 +317,10 @@ impl Udev {
         let fd = self.session.open(&path, open_flags)?;
         let device_fd = DrmDeviceFd::new(DeviceFd::from(fd));
 
-        let (drm, drm_notifier) = DrmDevice::new(device_fd.clone(), true)?;
+        let (mut drm, drm_notifier) = DrmDevice::new(device_fd.clone(), true)?;
         let gbm = GbmDevice::new(device_fd)?;
 
-        let display = EGLDisplay::new(gbm.clone())?;
+        let display = unsafe { EGLDisplay::new(gbm.clone())? };
         let context = EGLContext::new(&display)?;
 
         let mut gles = unsafe {
@@ -339,7 +339,7 @@ impl Udev {
 
         // Create the DRM compositor.
         let drm_compositor = self
-            .create_drm_compositor(display_handle, windows, &gles, &drm, &gbm)
+            .create_drm_compositor(display_handle, windows, &gles, &mut drm, &gbm)
             .ok_or("drm compositor")?;
 
         // Listen for VBlanks.
@@ -426,7 +426,7 @@ impl Udev {
         display: &DisplayHandle,
         windows: &mut Windows,
         gles: &GlesRenderer,
-        drm: &DrmDevice,
+        drm: &mut DrmDevice,
         gbm: &GbmDevice<DrmDeviceFd>,
     ) -> Option<DrmCompositor> {
         let formats = Bind::<Dmabuf>::supported_formats(gles)?;
@@ -440,25 +440,8 @@ impl Udev {
         })?;
         let connector_mode = *connector.modes().first()?;
 
-        let surface = connector
-            // Get all available encoders.
-            .encoders()
-            .iter()
-            .flat_map(|handle| drm.get_encoder(*handle))
-            // Find the ideal CRTC.
-            .flat_map(|encoder| {
-                // Get all CRTCs compatible with the encoder.
-                let mut crtcs = resources.filter_crtcs(encoder.possible_crtcs());
-
-                // Sort by maximum number of overlay planes.
-                crtcs.sort_by_cached_key(|crtc| {
-                    drm.planes(crtc).map_or(0, |planes| -(planes.overlay.len() as isize))
-                });
-
-                crtcs
-            })
-            // Try to create a DRM surface.
-            .find_map(|crtc| drm.create_surface(crtc, connector_mode, &[connector.handle()]).ok())?;
+        // Create DRM surface.
+        let surface = Self::create_surface(drm, resources, &connector, connector_mode)?;
 
         // Create GBM allocator.
         let gbm_flags = GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT;
@@ -496,6 +479,38 @@ impl Udev {
             None,
         )
         .ok()
+    }
+
+    /// Create DRM surface on the ideal CRTC.
+    fn create_surface(
+        drm: &mut DrmDevice,
+        resources: ResourceHandles,
+        connector: &ConnectorInfo,
+        mode: DrmMode,
+    ) -> Option<DrmSurface> {
+        for encoder in connector.encoders() {
+            let encoder = match drm.get_encoder(*encoder) {
+                Ok(encoder) => encoder,
+                Err(_) => continue,
+            };
+
+            // Get all CRTCs compatible with the encoder.
+            let mut crtcs = resources.filter_crtcs(encoder.possible_crtcs());
+
+            // Sort CRTCs by maximum number of overlay planes.
+            crtcs.sort_by_cached_key(|crtc| {
+                drm.planes(crtc).map_or(0, |planes| -(planes.overlay.len() as isize))
+            });
+
+            // Get first CRTC allowing for successful surface creation.
+            for crtc in crtcs {
+                if let Ok(drm_surface) = drm.create_surface(crtc, mode, &[connector.handle()]) {
+                    return Some(drm_surface);
+                }
+            }
+        }
+
+        None
     }
 }
 
@@ -568,12 +583,9 @@ impl OutputDevice {
         self.drm_compositor.set_output_mode_source(windows.canvas().into());
 
         let textures = windows.textures(&mut self.gles, &mut self.graphics);
-        let mut frame_result = self.drm_compositor.render_frame::<_, _, GlesRenderbuffer>(
-            &mut self.gles,
-            textures,
-            CLEAR_COLOR,
-        )?;
-        let rendered = frame_result.damage.is_some();
+        let mut frame_result =
+            self.drm_compositor.render_frame(&mut self.gles, textures, CLEAR_COLOR)?;
+        let rendered = !frame_result.is_empty;
 
         // Update last render states.
         self.last_render_states = mem::take(&mut frame_result.states);

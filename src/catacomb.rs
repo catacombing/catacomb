@@ -41,7 +41,7 @@ use smithay::wayland::input_method::{
 use smithay::wayland::keyboard_shortcuts_inhibit::{
     KeyboardShortcutsInhibitHandler, KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitor,
 };
-use smithay::wayland::output::OutputManagerState;
+use smithay::wayland::output::{OutputHandler, OutputManagerState};
 use smithay::wayland::presentation::PresentationState;
 use smithay::wayland::selection::data_device::{
     self, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
@@ -668,6 +668,8 @@ impl InputMethodHandler for Catacomb {
 delegate_virtual_keyboard_manager!(Catacomb);
 delegate_input_method_manager!(Catacomb);
 delegate_text_input_manager!(Catacomb);
+
+impl OutputHandler for Catacomb {}
 
 delegate_output!(Catacomb);
 
