@@ -37,7 +37,7 @@ use smithay::reexports::drm::control::connector::{Info as ConnectorInfo, State a
 use smithay::reexports::drm::control::property::{
     Handle as PropertyHandle, Value as PropertyValue,
 };
-use smithay::reexports::drm::control::{Device, Mode as DrmMode, ResourceHandles};
+use smithay::reexports::drm::control::{Device, Mode as DrmMode, ModeTypeFlags, ResourceHandles};
 use smithay::reexports::input::Libinput;
 use smithay::reexports::rustix::fs::OFlags;
 use smithay::reexports::wayland_protocols::wp::linux_dmabuf as _linux_dmabuf;
@@ -437,10 +437,14 @@ impl Udev {
                 .ok()
                 .filter(|conn| conn.state() == ConnectorState::Connected)
         })?;
-        let connector_mode = *connector.modes().first()?;
+        let modes = connector.modes();
+        let connector_mode = modes
+            .iter()
+            .find(|mode| mode.mode_type().contains(ModeTypeFlags::PREFERRED))
+            .unwrap_or(modes.first()?);
 
         // Create DRM surface.
-        let surface = Self::create_surface(drm, resources, &connector, connector_mode)?;
+        let surface = Self::create_surface(drm, resources, &connector, *connector_mode)?;
 
         // Create GBM allocator.
         let gbm_flags = GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT;
