@@ -184,8 +184,7 @@ impl Udev {
                     // Reset DRM state.
                     if let Some(output_device) = &mut catacomb.backend.output_device {
                         // NOTE: Ideally we'd just reset the DRM+Compositor here, but this is
-                        // currently not possible due to a bug in Smithay or
-                        // the driver.
+                        // currently not possible due to a bug in Smithay or the driver.
                         let device_id = output_device.id;
                         let result = catacomb.backend.change_device(
                             &catacomb.display_handle,

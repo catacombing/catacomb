@@ -124,6 +124,9 @@ pub struct Windows {
     unlocked_orientation: Orientation,
     orientation_locked: bool,
 
+    /// IME force enable/disable state.
+    ime_override: Option<bool>,
+
     /// Client-independent damage.
     dirty: bool,
 }
@@ -143,6 +146,7 @@ impl Windows {
             unlocked_orientation: Default::default(),
             orphan_popups: Default::default(),
             window_scales: Default::default(),
+            ime_override: Default::default(),
             transaction: Default::default(),
             activated: Default::default(),
             textures: Default::default(),
@@ -372,7 +376,7 @@ impl Windows {
         // Draw gesture handle when not in fullscreen/lock view.
         if !matches!(self.view, View::Fullscreen(_) | View::Lock(_)) {
             // Get texture for gesture handle.
-            let gesture_handle = graphics.gesture_handle(renderer, &self.canvas);
+            let gesture_handle = graphics.gesture_handle(renderer, &self.canvas, self.ime_override);
 
             // Calculate gesture handle bounds.
             let mut bounds = gesture_handle.geometry(scale.into());
@@ -890,14 +894,13 @@ impl Windows {
     }
 
     /// Hand quick touch input.
-    pub fn on_tap(&mut self, point: Point<f64, Logical>) {
+    pub fn on_tap(&mut self, point: Point<f64, Logical>, toggle_ime: &mut bool) {
         let overview = match &mut self.view {
             View::Overview(overview) => overview,
+            // Handle IME override toggle on gesture handle tap.
             View::Workspace => {
-                // Clear focus on gesture handle tap.
-                if point.y >= (self.canvas.size().h - GESTURE_HANDLE_HEIGHT) as f64 {
-                    self.set_focus(None, None, None);
-                }
+                *toggle_ime = point.y >= (self.canvas.size().h - GESTURE_HANDLE_HEIGHT) as f64
+                    && self.focus().is_none();
                 return;
             },
             View::DragAndDrop(_) | View::Fullscreen(_) | View::Lock(_) => return,
@@ -1298,6 +1301,15 @@ impl Windows {
 
         // Default to full output size.
         Rectangle::from_loc_and_size((0, 0), self.output().size())
+    }
+
+    /// IME force enable/disable status.
+    ///
+    /// This is only responsible for determining the gesture handle color, must
+    /// only be used through [`Catacomb::toggle_ime_override`].
+    pub fn set_ime_override(&mut self, ime_override: Option<bool>) {
+        self.ime_override = ime_override;
+        self.dirty = true;
     }
 }
 

@@ -621,12 +621,21 @@ impl Catacomb {
 
     /// Single-tap handler.
     fn on_single_tap(_: Instant, _: &mut (), catacomb: &mut Self) -> TimeoutAction {
+        let mut toggle_ime = false;
+        catacomb.windows.on_tap(catacomb.touch_state.position, &mut toggle_ime);
+
+        // Update IME force enable/disable state.
+        if toggle_ime {
+            catacomb.toggle_ime_override();
+        }
+
         // Clear focus when tapping outside of any window.
+        //
+        // This must happen after `on_tap` so we can detect gesture handle taps without
+        // focused windows.
         if catacomb.touch_state.input_surface.is_none() {
             catacomb.windows.set_focus(None, None, None);
         }
-
-        catacomb.windows.on_tap(catacomb.touch_state.position);
 
         // Ensure updates are rendered.
         catacomb.unstall();

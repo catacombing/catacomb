@@ -36,7 +36,7 @@ use smithay::wayland::fractional_scale::{
 };
 use smithay::wayland::idle_inhibit::{IdleInhibitHandler, IdleInhibitManagerState};
 use smithay::wayland::input_method::{
-    InputMethodHandler, InputMethodManagerState, PopupSurface as ImeSurface,
+    InputMethodHandler, InputMethodManagerState, InputMethodSeat, PopupSurface as ImeSurface,
 };
 use smithay::wayland::keyboard_shortcuts_inhibit::{
     KeyboardShortcutsInhibitHandler, KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitor,
@@ -142,6 +142,7 @@ pub struct Catacomb {
     last_focus: Option<WlSurface>,
     locker: Option<SessionLocker>,
     _power_inhibitor: Option<OwnedFd>,
+    ime_override: Option<bool>,
 
     // Indicates if rendering was intentionally stalled.
     //
@@ -333,6 +334,7 @@ impl Catacomb {
             idle_inhibitors: Default::default(),
             suspend_timer: Default::default(),
             key_bindings: Default::default(),
+            ime_override: Default::default(),
             last_focus: Default::default(),
             terminated: Default::default(),
             idle_timer: Default::default(),
@@ -473,6 +475,22 @@ impl Catacomb {
         trace_error(self.event_loop.enable(&self.accelerometer_token));
         self.windows.unlock_orientation();
         self.unstall();
+    }
+
+    /// Toggle IME force enable/disable.
+    pub fn toggle_ime_override(&mut self) {
+        self.ime_override = match self.ime_override {
+            None => Some(false),
+            Some(false) => Some(true),
+            Some(true) => None,
+        };
+
+        // Ensure gesture handle is updated.
+        self.windows.set_ime_override(self.ime_override);
+
+        // Update IME state.
+        let cseat = self.seat.clone();
+        cseat.input_method().set_active(self, None, self.ime_override);
     }
 }
 

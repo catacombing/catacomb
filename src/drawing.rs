@@ -37,6 +37,15 @@ const DROP_TARGET_RGBA: [u8; 4] = [32, 32, 32, 64];
 /// Relative size of gesture notch to the handle's whole width/height.
 const GESTURE_NOTCH_PERCENTAGE: f64 = 0.2;
 
+/// Gesture handle color with automatic IME control.
+const GESTURE_HANDLE_DEFAULT_RGBA: [u8; 3] = [255; 3];
+
+/// Gesture handle color with IME force-enabled.
+const GESTURE_HANDLE_LOCKED_RGBA: [u8; 3] = [42, 117, 42];
+
+/// Gesture handle color with IME force-disabled.
+const GESTURE_HANDLE_BLOCKED_RGBA: [u8; 3] = [117, 42, 42];
+
 /// Cached texture.
 ///
 /// Includes all information necessary to render a surface's texture even after
@@ -310,10 +319,13 @@ impl RenderElement<GlesRenderer> for CatacombElement {
 /// Grahpics texture cache.
 #[derive(Debug)]
 pub struct Graphics {
-    pub gesture_handle: Option<RenderTexture>,
     pub active_drop_target: RenderTexture,
     pub urgency_icon: RenderTexture,
     pub drop_target: RenderTexture,
+
+    gesture_handle_default: Option<RenderTexture>,
+    gesture_handle_blocked: Option<RenderTexture>,
+    gesture_handle_locked: Option<RenderTexture>,
 }
 
 impl Graphics {
@@ -328,7 +340,9 @@ impl Graphics {
             active_drop_target: RenderTexture::new(active_drop_target),
             urgency_icon: RenderTexture::new(urgency_icon),
             drop_target: RenderTexture::new(drop_target),
-            gesture_handle: None,
+            gesture_handle_default: None,
+            gesture_handle_blocked: None,
+            gesture_handle_locked: None,
         }
     }
 
@@ -337,41 +351,48 @@ impl Graphics {
         &mut self,
         renderer: &mut GlesRenderer,
         canvas: &Canvas,
+        ime_override: Option<bool>,
     ) -> RenderTexture {
+        let (handle, color) = match ime_override {
+            None => (&mut self.gesture_handle_default, GESTURE_HANDLE_DEFAULT_RGBA),
+            Some(true) => (&mut self.gesture_handle_locked, GESTURE_HANDLE_LOCKED_RGBA),
+            Some(false) => (&mut self.gesture_handle_blocked, GESTURE_HANDLE_BLOCKED_RGBA),
+        };
+
         // Initialize texture or replace it after scale change.
         let scale = canvas.scale();
         let width = canvas.physical_size().w;
         let height = (GESTURE_HANDLE_HEIGHT as f64 * scale).round() as i32;
-        if self.gesture_handle.as_ref().map_or(true, |handle| {
+        if handle.as_ref().map_or(true, |handle| {
             handle.texture.width() != width as u32 || handle.texture.height() != height as u32
         }) {
-            // Initialize a white buffer with the correct size.
-            let mut buffer = vec![255; (height * width * 4) as usize];
+            // Initialize a black buffer with the correct size.
+            let mut buffer = vec![0; (height * width * 4) as usize];
 
             // Calculate notch size.
             let notch_height = (height as f64 * GESTURE_NOTCH_PERCENTAGE) as i32;
             let notch_width = (width as f64 * GESTURE_NOTCH_PERCENTAGE) as i32;
 
-            // Fill everything other than the handle's notch with black pixels.
+            // Fill handle's notch with the correct color.
             for x in 0..width {
                 for y in 0..height {
-                    if y < (height - notch_height) / 2
-                        || y >= (height + notch_height) / 2
-                        || x < (width - notch_width) / 2
-                        || x >= (width + notch_width) / 2
+                    if y >= (height - notch_height) / 2
+                        && y < (height + notch_height) / 2
+                        && x >= (width - notch_width) / 2
+                        && x < (width + notch_width) / 2
                     {
                         let offset = (y * width + x) as usize * 4;
-                        buffer[offset..offset + 3].copy_from_slice(&[0, 0, 0]);
+                        buffer[offset..offset + 3].copy_from_slice(&color);
                     }
                 }
             }
 
             let texture = Texture::from_buffer(renderer, scale, &buffer, width, height, true);
-            self.gesture_handle = Some(RenderTexture(Rc::new(texture)));
+            *handle = Some(RenderTexture(Rc::new(texture)));
         }
 
         // SAFETY: The code above ensures the `Option` is `Some`.
-        unsafe { self.gesture_handle.clone().unwrap_unchecked() }
+        unsafe { handle.clone().unwrap_unchecked() }
     }
 }
 
