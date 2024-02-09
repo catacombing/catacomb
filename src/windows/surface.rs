@@ -30,9 +30,6 @@ pub trait Surface {
     /// Check if the window has been closed.
     fn alive(&self) -> bool;
 
-    /// Request application shutdown.
-    fn send_close(&self);
-
     /// Send the initial configure.
     fn initial_configure(&self);
 
@@ -65,10 +62,6 @@ impl Surface for ToplevelSurface {
 
     fn alive(&self) -> bool {
         self.alive()
-    }
-
-    fn send_close(&self) {
-        self.send_close();
     }
 
     fn initial_configure(&self) {
@@ -122,8 +115,6 @@ impl Surface for PopupSurface {
     fn alive(&self) -> bool {
         self.alive()
     }
-
-    fn send_close(&self) {}
 
     fn initial_configure(&self) {
         if self.initial_configure_sent() {
@@ -183,10 +174,6 @@ impl Surface for CatacombLayerSurface {
 
     fn alive(&self) -> bool {
         self.surface.alive()
-    }
-
-    fn send_close(&self) {
-        self.surface.send_close();
     }
 
     fn initial_configure(&self) {
@@ -253,10 +240,6 @@ impl Surface for LockSurface {
 
     fn alive(&self) -> bool {
         self.alive()
-    }
-
-    fn send_close(&self) {
-        unreachable!("attempted to kill lock surface");
     }
 
     fn initial_configure(&self) {

@@ -10,7 +10,7 @@ edition = "2021"
 
 [dependencies.smithay]
 git = "https://github.com/chrisduerr/smithay"
-rev = "48d7a8cff7c17758e5435ac94ce3f954a10cb39a"
+rev = "805038526f4d300c1389fda7a860126b7fd94470"
 default-features = false
 features = [
     "use_system_lib",

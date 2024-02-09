@@ -35,6 +35,7 @@ use smithay::wayland::fractional_scale::{
     self, FractionalScaleHandler, FractionalScaleManagerState,
 };
 use smithay::wayland::idle_inhibit::{IdleInhibitHandler, IdleInhibitManagerState};
+use smithay::wayland::idle_notify::{IdleNotifierHandler, IdleNotifierState};
 use smithay::wayland::input_method::{
     InputMethodHandler, InputMethodManagerState, InputMethodSeat, PopupSurface as ImeSurface,
 };
@@ -72,12 +73,12 @@ use smithay::wayland::xdg_activation::{
 };
 use smithay::{
     delegate_compositor, delegate_data_control, delegate_data_device, delegate_dmabuf,
-    delegate_fractional_scale, delegate_idle_inhibit, delegate_input_method_manager,
-    delegate_kde_decoration, delegate_keyboard_shortcuts_inhibit, delegate_layer_shell,
-    delegate_output, delegate_presentation, delegate_primary_selection, delegate_seat,
-    delegate_session_lock, delegate_shm, delegate_text_input_manager, delegate_viewporter,
-    delegate_virtual_keyboard_manager, delegate_xdg_activation, delegate_xdg_decoration,
-    delegate_xdg_shell,
+    delegate_fractional_scale, delegate_idle_inhibit, delegate_idle_notify,
+    delegate_input_method_manager, delegate_kde_decoration, delegate_keyboard_shortcuts_inhibit,
+    delegate_layer_shell, delegate_output, delegate_presentation, delegate_primary_selection,
+    delegate_seat, delegate_session_lock, delegate_shm, delegate_text_input_manager,
+    delegate_viewporter, delegate_virtual_keyboard_manager, delegate_xdg_activation,
+    delegate_xdg_decoration, delegate_xdg_shell,
 };
 use tracing::{error, info};
 use zbus::zvariant::OwnedFd;
@@ -87,17 +88,13 @@ use crate::drawing::CatacombSurfaceData;
 use crate::input::TouchState;
 use crate::orientation::{Accelerometer, AccelerometerSource};
 use crate::output::Output;
-use crate::protocols::idle_notify::{IdleNotifierHandler, IdleNotifierState};
 use crate::protocols::screencopy::frame::Screencopy;
 use crate::protocols::screencopy::{ScreencopyHandler, ScreencopyManagerState};
 use crate::protocols::single_pixel_buffer::SinglePixelBufferState;
 use crate::udev::Udev;
 use crate::windows::surface::Surface;
 use crate::windows::Windows;
-use crate::{
-    dbus, delegate_idle_notify, delegate_screencopy, delegate_single_pixel_buffer, ipc_server,
-    trace_error,
-};
+use crate::{dbus, delegate_screencopy, delegate_single_pixel_buffer, ipc_server, trace_error};
 
 /// Time before xdg_activation tokens are invalidated.
 const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(10);

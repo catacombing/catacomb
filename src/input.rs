@@ -337,7 +337,7 @@ impl Catacomb {
         }
 
         // Reset idle sleep timer.
-        self.idle_notifier_state.notify_activity();
+        self.idle_notifier_state.notify_activity(&self.seat);
 
         match event {
             InputEvent::Keyboard { event, .. } => {
