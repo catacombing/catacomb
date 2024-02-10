@@ -1,5 +1,6 @@
 //! Drawing utilities.
 
+use std::cell::Cell;
 use std::ops::Deref;
 use std::rc::Rc;
 
@@ -54,7 +55,7 @@ const GESTURE_HANDLE_BLOCKED_RGBA: [u8; 3] = [117, 42, 42];
 pub struct Texture {
     opaque_regions: Vec<Rectangle<i32, Logical>>,
     tracker: DamageSnapshot<i32, Logical>,
-    location: Point<i32, Logical>,
+    location: Cell<Point<i32, Logical>>,
     src_rect: Rectangle<f64, Logical>,
     dst_size: Size<i32, Logical>,
     buffer_size: Size<i32, Logical>,
@@ -118,10 +119,10 @@ impl Texture {
         Self {
             opaque_regions,
             window_scale,
-            location,
             texture,
             tracker: buffer.damage.tracker.snapshot(),
             buffer_size: buffer.buffer_size,
+            location: Cell::new(location),
             buffer: buffer.buffer.clone(),
             transform: buffer.transform,
             scale: buffer.scale as f64,
@@ -144,6 +145,11 @@ impl Texture {
         let logical_size =
             Size::<i32, Physical>::from((width, height)).to_f64().to_logical(scale).to_i32_round();
         Texture::new(texture, logical_size, scale, opaque)
+    }
+
+    /// Move texture to a different location.
+    pub fn set_location(&self, location: Point<i32, Logical>) {
+        self.location.replace(location);
     }
 
     /// Target size after rendering.
@@ -185,7 +191,8 @@ impl Element for RenderTexture {
 
     fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
         let scale = self.window_scale.map_or(scale.x, |window_scale| window_scale.scale(scale.x));
-        Rectangle::from_loc_and_size(self.location, self.dst_size).to_physical_precise_round(scale)
+        Rectangle::from_loc_and_size(self.location.get(), self.dst_size)
+            .to_physical_precise_round(scale)
     }
 
     fn damage_since(

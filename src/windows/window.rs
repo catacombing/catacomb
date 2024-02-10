@@ -275,7 +275,11 @@ impl<S: Surface + 'static> Window<S> {
 
                 // Skip surface if buffer was already imported.
                 if let Some(texture) = &data.texture {
+                    // Ensure texture's location is up to date.
+                    texture.set_location(location);
+
                     self.texture_cache.push(texture.clone(), location);
+
                     return TraversalAction::DoChildren(location);
                 }
 
