@@ -8,6 +8,8 @@ use std::{env, io, mem, process, ptr};
 
 use _linux_dmabuf::zv1::server::zwp_linux_dmabuf_feedback_v1::TrancheFlags;
 use libc::dev_t as DeviceId;
+#[cfg(feature = "profiling")]
+use profiling::puffin::GlobalProfiler;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBuffer, GbmBufferFlags, GbmDevice};
 use smithay::backend::allocator::{Format, Fourcc};
@@ -355,6 +357,10 @@ impl Udev {
                         // Mark the last frame as submitted.
                         trace_error(output_device.drm_compositor.frame_submitted());
 
+                        // Signal new frame to profiler.
+                        #[cfg(feature = "profiling")]
+                        GlobalProfiler::lock().new_frame();
+
                         // Send presentation time feedback.
                         catacomb
                             .windows
@@ -575,6 +581,7 @@ impl OutputDevice {
     /// Render a frame.
     ///
     /// Will return `true` if something was rendered.
+    #[cfg_attr(feature = "profiling", profiling::function)]
     fn render(
         &mut self,
         event_loop: &LoopHandle<'static, Catacomb>,
@@ -637,6 +644,7 @@ impl OutputDevice {
     }
 
     /// Copy a region of the framebuffer to a DMA buffer.
+    #[cfg_attr(feature = "profiling", profiling::function)]
     fn copy_framebuffer_dma(
         gles: &mut GlesRenderer,
         scale: f64,
@@ -662,6 +670,7 @@ impl OutputDevice {
     }
 
     /// Copy a region of the framebuffer to an SHM buffer.
+    #[cfg_attr(feature = "profiling", profiling::function)]
     fn copy_framebuffer_shm(
         &mut self,
         windows: &mut Windows,

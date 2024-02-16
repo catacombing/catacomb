@@ -344,6 +344,7 @@ impl Windows {
     }
 
     /// Import pending buffers for all windows.
+    #[cfg_attr(feature = "profiling", profiling::function)]
     pub fn import_buffers(&mut self, renderer: &mut GlesRenderer) {
         // Import XDG windows/popups.
         for mut window in self.layouts.windows_mut() {
@@ -362,6 +363,7 @@ impl Windows {
     }
 
     /// Get all textures for rendering.
+    #[cfg_attr(feature = "profiling", profiling::function)]
     pub fn textures(
         &mut self,
         renderer: &mut GlesRenderer,

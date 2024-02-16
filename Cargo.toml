@@ -11,6 +11,10 @@ edition = "2021"
 [workspace]
 members = ["catacomb_ipc"]
 
+[features]
+default = []
+profiling = ["dep:profiling", "dep:puffin_http"]
+
 [dependencies.smithay]
 git = "https://github.com/chrisduerr/smithay"
 rev = "805038526f4d300c1389fda7a860126b7fd94470"
@@ -40,3 +44,5 @@ tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 udev = "0.8.0"
 zbus = { version = "3.11.0", default-features = false, features = ["tokio"] }
 tracing-log = "0.2.0"
+puffin_http = { version = "0.16.0", optional = true }
+profiling = { version = "1.0.14", optional = true, features = ["profile-with-puffin"] }

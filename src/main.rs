@@ -7,6 +7,10 @@ use std::{env, io, ptr};
 
 use catacomb_ipc::{DpmsState, IpcMessage};
 use clap::{self, Parser, Subcommand};
+#[cfg(feature = "profiling")]
+use profiling::puffin;
+#[cfg(feature = "profiling")]
+use puffin_http::Server;
 use tracing::error;
 use tracing_log::LogTracer;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
@@ -44,6 +48,12 @@ pub enum Subcommands {
 }
 
 pub fn main() {
+    #[cfg(feature = "profiling")]
+    let _server = {
+        puffin::set_scopes_on(true);
+        Server::new(&format!("0.0.0.0:{}", puffin_http::DEFAULT_PORT)).unwrap()
+    };
+
     // Try to initialize log-compatibility shim.
     let _ = LogTracer::init();
 

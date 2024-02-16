@@ -350,6 +350,7 @@ impl Catacomb {
     }
 
     /// Handle everything necessary to draw a single frame.
+    #[cfg_attr(feature = "profiling", profiling::function)]
     pub fn create_frame(&mut self) {
         // Skip rendering while the screen is off.
         if self.sleeping {

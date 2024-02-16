@@ -104,6 +104,7 @@ impl Vector for Vector3D<f32> {
     }
 }
 
+#[allow(unused)]
 pub trait Vector: Sized {
     /// Scale the size by a scaling factor.
     fn scale(&self, scale: f64) -> Self;
