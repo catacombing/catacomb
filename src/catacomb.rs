@@ -1,9 +1,9 @@
 //! Catacomb compositor state.
 
 use std::cell::RefCell;
-use std::env;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::{cmp, env};
 
 use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use _server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as ManagerMode;
@@ -102,6 +102,12 @@ const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(10);
 /// The script to run after compositor start.
 const POST_START_SCRIPT: &str = "post_start.sh";
 
+/// Number of frames considered for best-case rendering times.
+const RECENT_FRAME_COUNT: usize = 16;
+
+/// Padding added to render time predictions.
+const PREDICTION_PADDING: Duration = Duration::from_millis(8);
+
 /// Shared compositor state.
 pub struct Catacomb {
     pub suspend_timer: Option<RegistrationToken>,
@@ -110,6 +116,7 @@ pub struct Catacomb {
     pub display_handle: DisplayHandle,
     pub key_bindings: Vec<KeyBinding>,
     pub touch_state: TouchState,
+    pub frame_pacer: FramePacer,
     pub last_resume: Instant,
     pub seat_name: String,
     pub windows: Windows,
@@ -332,6 +339,7 @@ impl Catacomb {
             suspend_timer: Default::default(),
             key_bindings: Default::default(),
             ime_override: Default::default(),
+            frame_pacer: Default::default(),
             last_focus: Default::default(),
             terminated: Default::default(),
             idle_timer: Default::default(),
@@ -357,6 +365,8 @@ impl Catacomb {
             self.stalled = true;
             return;
         }
+
+        let frame_start = Instant::now();
 
         // Clear rendering stall status.
         self.stalled = false;
@@ -388,6 +398,10 @@ impl Catacomb {
 
             // Draw all visible clients.
             let rendered = self.backend.render(&mut self.windows);
+
+            // Update render time prediction.
+            let frame_interval = self.output().frame_interval();
+            self.frame_pacer.add_frame(frame_start.elapsed(), frame_interval);
 
             // Create artificial VBlank if renderer didn't draw.
             //
@@ -876,3 +890,45 @@ impl ClientData for ClientState {
 }
 
 delegate_single_pixel_buffer!(Catacomb);
+
+/// Compositor rendering time prediction.
+#[derive(Default)]
+pub struct FramePacer {
+    recent_frames: [u64; RECENT_FRAME_COUNT],
+    frame_count: u64,
+    total_ns: u64,
+}
+
+impl FramePacer {
+    /// Add a new frame to the tracker.
+    fn add_frame(&mut self, render_time: Duration, frame_interval: Duration) {
+        // Limit worst-case to refresh rate, to reduce impact of statistical outliers.
+        let ns = cmp::min(render_time, frame_interval).as_nanos() as u64;
+
+        self.recent_frames.rotate_right(1);
+        self.recent_frames[0] = ns;
+
+        self.total_ns += ns;
+
+        self.frame_count += 1;
+    }
+
+    /// Predict time required for next frame.
+    pub fn predict(&self) -> Option<Duration> {
+        if self.frame_count == 0 {
+            return None;
+        }
+
+        // Use total average as the minimum render time.
+        let min_time_ns = self.total_ns / self.frame_count;
+
+        // Use longest recent frame as baseline.
+        let recent_frames = self.recent_frames.iter().copied().take(self.frame_count as usize);
+        let recent_worst_ns = recent_frames.max().unwrap_or_default();
+
+        let prediction = Duration::from_nanos(recent_worst_ns.max(min_time_ns));
+
+        // Add buffer to account for measuring tolerances.
+        Some(prediction + PREDICTION_PADDING)
+    }
+}

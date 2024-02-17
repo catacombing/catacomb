@@ -61,9 +61,6 @@ use crate::windows::Windows;
 /// Default background color.
 const CLEAR_COLOR: [f32; 4] = [0., 0., 0., 1.];
 
-/// Time before a VBlank reserved for rendering compositor updates.
-const RENDER_TIME_OFFSET: Duration = Duration::from_millis(10);
-
 /// Supported DRM color formats.
 ///
 /// These are formats supported by most devices which have at least 8 bits per
@@ -138,7 +135,7 @@ fn add_device(catacomb: &mut Catacomb, path: PathBuf) {
 pub struct Udev {
     scheduled_redraws: Vec<RegistrationToken>,
     event_loop: LoopHandle<'static, Catacomb>,
-    pub output_device: Option<OutputDevice>,
+    output_device: Option<OutputDevice>,
     session: LibSeatSession,
     gpu: Option<PathBuf>,
 }
@@ -368,8 +365,13 @@ impl Udev {
 
                         // Request redraw before the next VBlank.
                         let frame_interval = catacomb.windows.output().frame_interval();
-                        let duration = frame_interval - RENDER_TIME_OFFSET;
-                        catacomb.backend.schedule_redraw(duration);
+                        let prediction = catacomb.frame_pacer.predict();
+                        match prediction.filter(|prediction| prediction < &frame_interval) {
+                            Some(prediction) => {
+                                catacomb.backend.schedule_redraw(frame_interval - prediction);
+                            },
+                            None => catacomb.create_frame(),
+                        }
                     },
                     DrmEvent::Error(error) => error!("DRM error: {error}"),
                 };
