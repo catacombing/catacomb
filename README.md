@@ -20,3 +20,5 @@ Catacomb is configured through IPC using `catacomb msg`.
 For persistent configuration or to launch applications on startup, Catacomb
 automatically loads `$XDG_CONFIG_HOME/catacomb/post_start.sh` (or
 `~/.config/catacomb/post_start.sh` if `XDG_CONFIG_HOME` is not defined).
+
+You can find an example configuration [here](./post_start.sh).
