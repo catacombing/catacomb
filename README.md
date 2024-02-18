@@ -20,25 +20,3 @@ Catacomb is configured through IPC using `catacomb msg`.
 For persistent configuration or to launch applications on startup, Catacomb
 automatically loads `$XDG_CONFIG_HOME/catacomb/post_start.sh` (or
 `~/.config/catacomb/post_start.sh` if `XDG_CONFIG_HOME` is not defined).
-
-## Polkit
-
-Catacomb uses logind's DBus API to automatically suspend the system when the
-power button is pressed. To allow users of the group `wheel` to suspend the
-system, the following polkit rule can be added:
-
-> /etc/polkit-1/rules.d/20-logind.rules
-
-```
-polkit.addRule(function(action, subject) {
-    // Allow wheel users to suspend.
-    if (action.id == "org.freedesktop.login1.suspend" && subject.isInGroup("wheel")) {
-        return "yes";
-    }
-
-    // Allow wheel users to block power button handling.
-    if (action.id == "org.freedesktop.login1.inhibit-handle-power-key" && subject.isInGroup("wheel")) {
-        return "yes";
-    }
-});
-```

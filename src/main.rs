@@ -18,7 +18,6 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 mod catacomb;
 mod config;
 mod daemon;
-mod dbus;
 mod drawing;
 mod geometry;
 mod input;

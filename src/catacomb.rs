@@ -81,7 +81,6 @@ use smithay::{
     delegate_xdg_decoration, delegate_xdg_shell,
 };
 use tracing::{error, info};
-use zbus::zvariant::OwnedFd;
 
 use crate::config::KeyBinding;
 use crate::drawing::CatacombSurfaceData;
@@ -94,7 +93,7 @@ use crate::protocols::single_pixel_buffer::SinglePixelBufferState;
 use crate::udev::Udev;
 use crate::windows::surface::Surface;
 use crate::windows::Windows;
-use crate::{dbus, delegate_screencopy, delegate_single_pixel_buffer, ipc_server, trace_error};
+use crate::{delegate_screencopy, delegate_single_pixel_buffer, ipc_server, trace_error};
 
 /// Time before xdg_activation tokens are invalidated.
 const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -145,7 +144,6 @@ pub struct Catacomb {
     idle_inhibitors: Vec<WlSurface>,
     last_focus: Option<WlSurface>,
     locker: Option<SessionLocker>,
-    _power_inhibitor: Option<OwnedFd>,
     ime_override: Option<bool>,
 
     // Indicates if rendering was intentionally stalled.
@@ -300,16 +298,6 @@ impl Catacomb {
             }
         }
 
-        // Prevent shutdown on power button press.
-        let power_inhibitor =
-            match dbus::inhibit("handle-power-key", "Catacomb", "Managed by Catacomb", "block") {
-                Ok(power_inhibitor) => Some(power_inhibitor),
-                Err(err) => {
-                    error!("Could not block power button: {err}");
-                    None
-                },
-            };
-
         Self {
             keyboard_shortcuts_inhibit_state,
             primary_selection_state,
@@ -332,7 +320,6 @@ impl Catacomb {
             windows,
             backend,
             seat,
-            _power_inhibitor: power_inhibitor,
             accelerometer_token: accel_token,
             last_resume: Instant::now(),
             idle_inhibitors: Default::default(),
