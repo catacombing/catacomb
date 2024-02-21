@@ -17,7 +17,7 @@ profiling = ["dep:profiling", "dep:puffin_http"]
 
 [dependencies.smithay]
 git = "https://github.com/chrisduerr/smithay"
-rev = "805038526f4d300c1389fda7a860126b7fd94470"
+rev = "614232b063402af7127af7efd95d3eeca6761aca"
 default-features = false
 features = [
     "use_system_lib",
