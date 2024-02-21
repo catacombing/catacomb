@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use std::{env, io, ptr};
 
 use catacomb_ipc::{DpmsState, IpcMessage};
-use clap::{self, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 #[cfg(feature = "profiling")]
 use profiling::puffin;
 #[cfg(feature = "profiling")]

@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
-use catacomb_ipc::{self, AppIdMatcher, DpmsState, IpcMessage, WindowScale};
+use catacomb_ipc::{AppIdMatcher, DpmsState, IpcMessage, WindowScale};
 use smithay::reexports::calloop::LoopHandle;
 use tracing::{error, warn};
 
