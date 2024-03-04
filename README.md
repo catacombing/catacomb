@@ -17,6 +17,9 @@ responsive window management without cutting down on useful features.
 
 Catacomb is configured through IPC using `catacomb msg`.
 
+Documentation for available configuration options is available under `catacomb
+msg -h`.
+
 For persistent configuration or to launch applications on startup, Catacomb
 automatically loads `$XDG_CONFIG_HOME/catacomb/post_start.sh` (or
 `~/.config/catacomb/post_start.sh` if `XDG_CONFIG_HOME` is not defined).
