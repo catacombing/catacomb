@@ -704,7 +704,7 @@ impl<S: Surface + 'static> Window<S> {
     ) -> Option<Window<PopupSurface>> {
         if self.surface.surface() == parent {
             // Inherit parent properties.
-            popup.app_id = self.app_id.clone();
+            popup.app_id.clone_from(&self.app_id);
             popup.visible = self.visible;
             popup.scale = self.scale;
 

@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
-use catacomb_ipc::{AppIdMatcher, DpmsState, IpcMessage, WindowScale};
+use catacomb_ipc::{AppIdMatcher, DpmsState, IpcMessage, Keysym, WindowScale};
 use smithay::reexports::calloop::LoopHandle;
 use tracing::{error, warn};
 
@@ -104,7 +104,16 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
                 },
             };
 
-            let action = GestureBindingAction::Key((key.0, mods.unwrap_or_default()));
+            // Ignore custom keysyms like virtual keyboard enable/disable.
+            let key = match key {
+                Keysym::Xkb(key) => key,
+                _ => {
+                    warn!("ignoring invalid ipc message: gestures must be bound to real keysyms");
+                    return;
+                },
+            };
+
+            let action = GestureBindingAction::Key((key, mods.unwrap_or_default()));
             let gesture = GestureBinding { app_id, start, end, action };
             catacomb.touch_state.user_gestures.push(gesture);
         },
@@ -127,14 +136,13 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
                 app_id,
                 program,
                 arguments,
+                key,
                 mods: mods.unwrap_or_default(),
-                key: key.0,
             };
             catacomb.key_bindings.push(binding);
         },
         IpcMessage::UnbindKey { app_id, mods, key } => {
             let mods = mods.unwrap_or_default();
-            let key = key.0;
 
             catacomb.key_bindings.retain(|binding| {
                 binding.app_id.base() != app_id || binding.key != key || binding.mods != mods

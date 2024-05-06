@@ -94,7 +94,7 @@ pub enum IpcMessage {
         #[cfg_attr(feature = "clap", clap(long, short))]
         mods: Option<Modifiers>,
         /// X11 keysym for this binding.
-        key: ClapKeysym,
+        key: Keysym,
     },
     /// Remove a gesture.
     UnbindGesture {
@@ -121,7 +121,7 @@ pub enum IpcMessage {
         #[cfg_attr(feature = "clap", clap(long))]
         on_press: bool,
         /// Base key for this binding.
-        key: ClapKeysym,
+        key: Keysym,
         /// Program this gesture should spawn.
         program: String,
         /// Arguments for this gesture's program.
@@ -136,7 +136,7 @@ pub enum IpcMessage {
         #[cfg_attr(feature = "clap", clap(long, short))]
         mods: Option<Modifiers>,
         /// Base key for this binding.
-        key: ClapKeysym,
+        key: Keysym,
     },
     /// Output power management.
     Dpms {
@@ -406,19 +406,31 @@ impl FromStr for Modifiers {
 }
 
 /// Clap wrapper for XKB keysym.
-#[derive(Deserialize, Serialize, Copy, Clone, Debug)]
-pub struct ClapKeysym(pub u32);
+#[derive(Deserialize, Serialize, PartialEq, Eq, Copy, Clone, Debug)]
+pub enum Keysym {
+    EnableVirtualKeyboard,
+    DisableVirtualKeyboard,
+    AutoVirtualKeyboard,
+    Xkb(u32),
+}
 
 #[cfg(feature = "clap")]
-impl FromStr for ClapKeysym {
+impl FromStr for Keysym {
     type Err = ClapError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "enablevirtualkeyboard" => return Ok(Self::EnableVirtualKeyboard),
+            "disablevirtualkeyboard" => return Ok(Self::DisableVirtualKeyboard),
+            "autovirtualkeyboard" => return Ok(Self::AutoVirtualKeyboard),
+            _ => (),
+        }
+
         match xkb::keysym_from_name(s, xkb::KEYSYM_NO_FLAGS).raw() {
             keysyms::KEY_NoSymbol => {
                 Err(ClapError::raw(ClapErrorKind::InvalidValue, format!("invalid keysym {s:?}")))
             },
-            keysym => Ok(Self(keysym)),
+            keysym => Ok(Self::Xkb(keysym)),
         }
     }
 }

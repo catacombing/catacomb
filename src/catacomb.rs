@@ -7,7 +7,7 @@ use std::{cmp, env};
 
 use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use _server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as ManagerMode;
-use catacomb_ipc::Orientation;
+use catacomb_ipc::{Keysym, Orientation};
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::ImportDma;
 use smithay::input::keyboard::XkbConfig;
@@ -37,7 +37,7 @@ use smithay::wayland::fractional_scale::{
 use smithay::wayland::idle_inhibit::{IdleInhibitHandler, IdleInhibitManagerState};
 use smithay::wayland::idle_notify::{IdleNotifierHandler, IdleNotifierState};
 use smithay::wayland::input_method::{
-    InputMethodHandler, InputMethodManagerState, InputMethodSeat, PopupSurface as ImeSurface,
+    InputMethodHandler, InputMethodManagerState, PopupSurface as ImeSurface,
 };
 use smithay::wayland::keyboard_shortcuts_inhibit::{
     KeyboardShortcutsInhibitHandler, KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitor,
@@ -93,7 +93,7 @@ use crate::protocols::single_pixel_buffer::SinglePixelBufferState;
 use crate::udev::Udev;
 use crate::windows::surface::Surface;
 use crate::windows::Windows;
-use crate::{delegate_screencopy, delegate_single_pixel_buffer, ipc_server, trace_error};
+use crate::{daemon, delegate_screencopy, delegate_single_pixel_buffer, ipc_server, trace_error};
 
 /// Time before xdg_activation tokens are invalidated.
 const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -361,7 +361,7 @@ impl Catacomb {
         // Update surface focus.
         let focus = self.windows.focus().map(|(surface, _)| surface);
         if focus != self.last_focus {
-            self.last_focus = focus.clone();
+            self.last_focus.clone_from(&focus);
             self.focus(focus);
         }
 
@@ -472,18 +472,52 @@ impl Catacomb {
 
     /// Toggle IME force enable/disable.
     pub fn toggle_ime_override(&mut self) {
-        self.ime_override = match self.ime_override {
-            None => Some(false),
-            Some(false) => Some(true),
-            Some(true) => None,
+        // Find next state and corresponding action.
+        //
+        // If one state doesn't have an action, it is skipped. If two states don't have
+        // an action, we don't do anything.
+        let VkActions { enable, disable, auto } = self.vk_actions();
+        let (new_override, (program, args)) = match (self.ime_override, enable, disable, auto) {
+            (None, _, Some(disable), _) | (Some(true), _, Some(disable), None) => {
+                (Some(false), disable)
+            },
+            (None, Some(enable), ..) | (Some(false), Some(enable), ..) => (Some(true), enable),
+            (Some(false), _, _, Some(auto)) | (Some(true), _, _, Some(auto)) => (None, auto),
+            // Ignore toggle if there are less than two states to toggle between.
+            _ => return,
         };
+
+        // Execute binding to toggle virtual keyboard override.
+        if let Err(err) = daemon::spawn(program, args) {
+            error!("Failed to update virtual keyboard state ({program} {args:?}): {err}");
+        }
+
+        self.ime_override = new_override;
 
         // Ensure gesture handle is updated.
         self.windows.set_ime_override(self.ime_override);
+    }
 
-        // Update IME state.
-        let cseat = self.seat.clone();
-        cseat.input_method().set_active(self, None, self.ime_override);
+    /// Get actions for setting virtual keyboard state to enabled/disabled/auto.
+    fn vk_actions(&self) -> VkActions<'_> {
+        let mut actions = VkActions::default();
+
+        for binding in &self.key_bindings {
+            let action = (&binding.program, &binding.arguments);
+            match binding.key {
+                Keysym::EnableVirtualKeyboard => actions.enable = Some(action),
+                Keysym::DisableVirtualKeyboard => actions.disable = Some(action),
+                Keysym::AutoVirtualKeyboard => actions.auto = Some(action),
+                _ => (),
+            }
+
+            // Stop once all actions were found.
+            if actions.enable.is_some() && actions.disable.is_some() && actions.auto.is_some() {
+                break;
+            }
+        }
+
+        actions
     }
 }
 
@@ -912,4 +946,12 @@ impl FramePacer {
         // Add buffer to account for measuring tolerances.
         Some(prediction + PREDICTION_PADDING)
     }
+}
+
+/// Programs for controlling virtual keyboard state.
+#[derive(Default)]
+struct VkActions<'a> {
+    enable: Option<(&'a String, &'a Vec<String>)>,
+    disable: Option<(&'a String, &'a Vec<String>)>,
+    auto: Option<(&'a String, &'a Vec<String>)>,
 }

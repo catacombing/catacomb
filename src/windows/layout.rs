@@ -65,18 +65,18 @@ impl Layouts {
                 Transaction::Primary(position) => {
                     if let Some(new_layout) = self.layouts.get(position.index) {
                         if position.secondary {
-                            layout.primary = new_layout.secondary.clone();
+                            layout.primary.clone_from(&new_layout.secondary);
                         } else {
-                            layout.primary = new_layout.primary.clone();
+                            layout.primary.clone_from(&new_layout.primary);
                         }
                     }
                 },
                 Transaction::Secondary(position) => {
                     if let Some(new_layout) = self.layouts.get(position.index) {
                         if position.secondary {
-                            layout.secondary = new_layout.secondary.clone();
+                            layout.secondary.clone_from(&new_layout.secondary);
                         } else {
-                            layout.secondary = new_layout.primary.clone();
+                            layout.secondary.clone_from(&new_layout.primary);
                         }
                     }
                 },

@@ -25,13 +25,9 @@ const DEADZONE: f32 = 5.;
 
 pub trait AccelerometerSource {
     /// Subscribe to orientation change events.
-    fn subscribe<'a, F: 'a>(
-        self,
-        loop_handle: &LoopHandle<'a, Catacomb>,
-        fun: F,
-    ) -> RegistrationToken
+    fn subscribe<'a, F>(self, loop_handle: &LoopHandle<'a, Catacomb>, fun: F) -> RegistrationToken
     where
-        F: FnMut(Orientation, &mut Catacomb);
+        F: FnMut(Orientation, &mut Catacomb) + 'a;
 }
 
 /// Platform-independent accelerometer implementation.
@@ -49,13 +45,9 @@ impl Accelerometer {
 }
 
 impl AccelerometerSource for Accelerometer {
-    fn subscribe<'a, F: 'a>(
-        self,
-        loop_handle: &LoopHandle<'a, Catacomb>,
-        fun: F,
-    ) -> RegistrationToken
+    fn subscribe<'a, F>(self, loop_handle: &LoopHandle<'a, Catacomb>, fun: F) -> RegistrationToken
     where
-        F: FnMut(Orientation, &mut Catacomb),
+        F: FnMut(Orientation, &mut Catacomb) + 'a,
     {
         match self {
             Accelerometer::Sensor(accelerometer) => accelerometer.subscribe(loop_handle, fun),
@@ -152,13 +144,13 @@ impl SensorAccelerometer {
 }
 
 impl AccelerometerSource for SensorAccelerometer {
-    fn subscribe<'a, F: 'a>(
+    fn subscribe<'a, F>(
         mut self,
         loop_handle: &LoopHandle<'a, Catacomb>,
         mut fun: F,
     ) -> RegistrationToken
     where
-        F: FnMut(Orientation, &mut Catacomb),
+        F: FnMut(Orientation, &mut Catacomb) + 'a,
     {
         loop_handle
             .insert_source(Timer::immediate(), move |_, _, catacomb| {
@@ -182,13 +174,13 @@ impl AccelerometerSource for SensorAccelerometer {
 pub struct DummyAccelerometer;
 
 impl AccelerometerSource for DummyAccelerometer {
-    fn subscribe<'a, F: 'a>(
+    fn subscribe<'a, F>(
         self,
         loop_handle: &LoopHandle<'a, Catacomb>,
         mut fun: F,
     ) -> RegistrationToken
     where
-        F: FnMut(Orientation, &mut Catacomb),
+        F: FnMut(Orientation, &mut Catacomb) + 'a,
     {
         loop_handle
             .insert_source(Timer::immediate(), move |_, _, catacomb| {

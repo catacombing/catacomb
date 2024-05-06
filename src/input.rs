@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use catacomb_ipc::{GestureSector, Modifiers};
+use catacomb_ipc::{GestureSector, Keysym, Modifiers};
 use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Event, InputBackend, InputEvent, KeyState,
     KeyboardKeyEvent, MouseButton, PointerButtonEvent, TouchEvent as _, TouchSlot,
@@ -841,7 +841,7 @@ impl Catacomb {
         let mut filter_result = FilterResult::Forward;
         let pressed = state == KeyState::Pressed;
         for key_binding in &catacomb.key_bindings {
-            if key_binding.key == raw_keysym
+            if key_binding.key == Keysym::Xkb(raw_keysym)
                 && key_binding.mods == mods
                 && key_binding.app_id.matches(active_app.as_ref())
                 && key_binding.on_press == pressed
