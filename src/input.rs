@@ -126,8 +126,7 @@ impl TouchState {
             // Continue gesture if direction is locked in already.
             match self.start.handle_direction {
                 Some(HandleDirection::Horizontal) => {
-                    let delta = self.position.x - self.start.position.x;
-                    return Some(HandleGesture::Horizontal(delta).into());
+                    return Some(HandleGesture::Horizontal.into());
                 },
                 Some(HandleDirection::Vertical) => {
                     return Some(HandleGesture::Vertical(self.position.y).into());
@@ -247,7 +246,7 @@ pub enum HandleGesture {
     /// Vertical position of the current touch point.
     Vertical(f64),
     /// Horizontal distance traveled as delta.
-    Horizontal(f64),
+    Horizontal,
 }
 
 impl HandleGesture {
@@ -269,7 +268,7 @@ impl HandleGesture {
         if delta.y.abs() >= delta.x.abs() {
             Some(HandleGesture::Vertical(end.y))
         } else if Self::is_start(canvas, end) {
-            Some(HandleGesture::Horizontal(delta.x))
+            Some(HandleGesture::Horizontal)
         } else {
             None
         }
@@ -293,7 +292,7 @@ enum HandleDirection {
 impl From<&HandleGesture> for HandleDirection {
     fn from(gesture: &HandleGesture) -> Self {
         match gesture {
-            HandleGesture::Horizontal(_) => Self::Horizontal,
+            HandleGesture::Horizontal => Self::Horizontal,
             HandleGesture::Vertical(_) => Self::Vertical,
         }
     }

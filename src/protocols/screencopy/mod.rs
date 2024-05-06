@@ -101,8 +101,8 @@ where
         };
 
         // Create the frame.
-        let overlay_cursor = overlay_cursor != 0;
-        let frame = data_init.init(frame, ScreencopyFrameState { overlay_cursor, rect });
+        let _overlay_cursor = overlay_cursor != 0;
+        let frame = data_init.init(frame, ScreencopyFrameState { _overlay_cursor, rect });
 
         // Send desired SHM buffer parameters.
         frame.buffer(

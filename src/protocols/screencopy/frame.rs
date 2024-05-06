@@ -13,7 +13,7 @@ use crate::protocols::screencopy::{ScreencopyHandler, ScreencopyManagerState};
 
 pub struct ScreencopyFrameState {
     pub rect: Rectangle<i32, Physical>,
-    pub overlay_cursor: bool,
+    pub _overlay_cursor: bool,
 }
 
 impl<D> Dispatch<ZwlrScreencopyFrameV1, ScreencopyFrameState, D> for ScreencopyManagerState

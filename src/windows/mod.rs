@@ -1058,7 +1058,7 @@ impl Windows {
                 let overview = Overview::new(self.layouts.active_offset(), primary_percentage);
                 self.set_view(View::Overview(overview));
             },
-            (HandleGesture::Vertical(_) | HandleGesture::Horizontal(_), _) => (),
+            (HandleGesture::Vertical(_) | HandleGesture::Horizontal, _) => (),
         }
     }
 
@@ -1106,7 +1106,7 @@ impl Windows {
                 // Resize back to workspace size.
                 self.resize_visible();
             },
-            (HandleGesture::Vertical(_) | HandleGesture::Horizontal(_), _) => (),
+            (HandleGesture::Vertical(_) | HandleGesture::Horizontal, _) => (),
         }
     }
 
