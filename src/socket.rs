@@ -7,7 +7,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{
-    EventSource, Interest, Mode, Poll, PostAction, Readiness, Token, TokenFactory,
+    self, EventSource, Interest, Mode, Poll, PostAction, Readiness, Token, TokenFactory,
 };
 
 /// Unix domain socket source.

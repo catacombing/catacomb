@@ -10,7 +10,9 @@ use smithay::backend::renderer::element::utils::{
 };
 use smithay::backend::renderer::element::{Element, Id, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{ffi, GlesFrame, GlesRenderer, GlesTexture};
-use smithay::backend::renderer::utils::{Buffer, CommitCounter, DamageBag, DamageSnapshot};
+use smithay::backend::renderer::utils::{
+    Buffer, CommitCounter, DamageBag, DamageSet, DamageSnapshot,
+};
 use smithay::backend::renderer::{self, Renderer, Texture as _};
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -199,11 +201,14 @@ impl Element for RenderTexture {
         &self,
         scale: Scale<f64>,
         commit: Option<CommitCounter>,
-    ) -> Vec<Rectangle<i32, Physical>> {
-        let mut damage = match self.tracker.damage_since(commit) {
+    ) -> DamageSet<i32, Physical> {
+        let damage = match self.tracker.damage_since(commit) {
             Some(damage) => damage,
             // Fallback to fully damage.
-            None => return vec![Rectangle::from_loc_and_size((0, 0), self.geometry(scale).size)],
+            None => {
+                let size = self.geometry(scale).size;
+                return DamageSet::from_slice(&[Rectangle::from_loc_and_size((0, 0), size)]);
+            },
         };
 
         // Transform output to window-specific scale.
@@ -211,7 +216,7 @@ impl Element for RenderTexture {
 
         // Apply viewporter transforms to damage.
         let viewporter_scale = self.dst_size.to_f64() / self.src_rect.size;
-        let damage = damage.drain(..).flat_map(|damage| {
+        DamageSet::from_iter(damage.into_iter().flat_map(|damage| {
             // Limit damage to element's source rect.
             let mut damage = damage.to_f64().intersection(self.src_rect)?;
 
@@ -220,8 +225,7 @@ impl Element for RenderTexture {
 
             // Convert damage to physical coordinates.
             Some(damage.to_physical_precise_up(scale))
-        });
-        damage.collect()
+        }))
     }
 
     fn opaque_regions(&self, scale: Scale<f64>) -> Vec<Rectangle<i32, Physical>> {
@@ -298,7 +302,7 @@ impl Element for CatacombElement {
         &self,
         scale: Scale<f64>,
         commit: Option<CommitCounter>,
-    ) -> Vec<Rectangle<i32, Physical>> {
+    ) -> DamageSet<i32, Physical> {
         self.0.damage_since(scale, commit)
     }
 

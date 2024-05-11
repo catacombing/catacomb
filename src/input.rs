@@ -10,11 +10,11 @@ use smithay::backend::input::{
 use smithay::input::keyboard::{
     keysyms, FilterResult, Keycode, KeysymHandle, ModifiersState, XkbContextHandler,
 };
+use smithay::input::touch::{DownEvent, MotionEvent, UpEvent};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
 use smithay::wayland::compositor;
-use smithay::wayland::seat::TouchHandle;
 use tracing::error;
 
 use crate::catacomb::Catacomb;
@@ -58,17 +58,15 @@ pub struct TouchState {
     velocity: Point<f64, Logical>,
     events: Vec<TouchEvent>,
     slot: Option<TouchSlot>,
-    touch: TouchHandle,
     start: TouchStart,
     last_tap: Instant,
     is_drag: bool,
 }
 
 impl TouchState {
-    pub fn new(event_loop: LoopHandle<'static, Catacomb>, touch: TouchHandle) -> Self {
+    pub fn new(event_loop: LoopHandle<'static, Catacomb>) -> Self {
         Self {
             event_loop,
-            touch,
             last_tap: Instant::now(),
             pending_single_tap: Default::default(),
             velocity_timer: Default::default(),
@@ -391,6 +389,7 @@ impl Catacomb {
                         TouchEventType::Motion => self.on_touch_motion(event),
                     }
                 }
+                self.seat.get_touch().unwrap().frame(self);
                 self.touch_state.events.clear();
             },
             // Handle gesture touch cancel for nested compositors.
@@ -461,7 +460,11 @@ impl Catacomb {
         // Notify client.
         if self.touch_state.input_surface.is_some() {
             let serial = SERIAL_COUNTER.next_serial();
-            self.touch_state.touch.up(serial, event.time, event.slot);
+            self.seat.get_touch().unwrap().up(self, &UpEvent {
+                serial,
+                slot: event.slot,
+                time: event.time,
+            });
         }
 
         // Check if slot is the active one.
@@ -505,9 +508,15 @@ impl Catacomb {
     fn on_touch_motion(&mut self, event: TouchEvent) {
         // Handle client input.
         if let Some(input_surface) = &self.touch_state.input_surface {
+            // Convert position to pre-window scaling.
             let scale = self.windows.canvas().scale();
-            let position = input_surface.local_position(scale, event.position);
-            self.touch_state.touch.motion(event.time, event.slot, position);
+            let window_scale_position = event.position.upscale(scale / input_surface.surface_scale);
+
+            self.seat.get_touch().unwrap().motion(self, None, &MotionEvent {
+                location: window_scale_position,
+                time: event.time,
+                slot: event.slot,
+            });
             return;
         }
 
@@ -536,14 +545,22 @@ impl Catacomb {
             None => (),
         }
 
-        // Calculate surface-local touch position.
+        // Convert positions to pre-window scaling.
         let scale = self.windows.canvas().scale();
-        let position = input_surface.local_position(scale, position);
+        let window_scale_position = position.upscale(scale / input_surface.surface_scale);
+        let surface_position_x = input_surface.surface_offset.x.round() as i32;
+        let surface_position_y = input_surface.surface_offset.y.round() as i32;
+        let surface_position = Point::from((surface_position_x, surface_position_y));
 
         // Send touch event to the client.
         let serial = SERIAL_COUNTER.next_serial();
-        let surface = &input_surface.surface;
-        self.touch_state.touch.down(serial, time, surface, position, slot);
+        let focus = Some((input_surface.surface.clone(), surface_position));
+        self.seat.get_touch().unwrap().down(self, focus, &DownEvent {
+            serial,
+            slot,
+            time,
+            location: window_scale_position,
+        });
     }
 
     /// Update the touch position.
@@ -580,7 +597,7 @@ impl Catacomb {
         }
 
         // Notify client.
-        self.touch_state.touch.cancel();
+        self.seat.get_touch().unwrap().cancel(self);
     }
 
     /// Dispatch user gestures.
@@ -599,7 +616,7 @@ impl Catacomb {
         self.touch_state.cancel_velocity();
 
         // Notify client.
-        self.touch_state.touch.cancel();
+        self.seat.get_touch().unwrap().cancel(self);
     }
 
     /// Replay touch tap event which were ignored due to gesture recognition.
@@ -612,7 +629,12 @@ impl Catacomb {
         self.on_surface_down(event, &mut input_surface);
 
         let serial = SERIAL_COUNTER.next_serial();
-        self.touch_state.touch.up(serial, event.time + 1, event.slot);
+        self.seat.get_touch().unwrap().up(self, &UpEvent {
+            serial,
+            time: event.time + 1,
+            slot: event.slot,
+        });
+        self.seat.get_touch().unwrap().frame(self);
 
         // Reset tap surface for potential double-tap.
         self.touch_state.tap_surface = Some(input_surface);

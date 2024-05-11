@@ -9,8 +9,7 @@ license = "GPL-3.0"
 edition = "2021"
 
 [dependencies.smithay]
-git = "https://github.com/chrisduerr/smithay"
-rev = "614232b063402af7127af7efd95d3eeca6761aca"
+git = "https://github.com/smithay/smithay"
 default-features = false
 features = [
     "use_system_lib",

@@ -266,8 +266,8 @@ impl Catacomb {
         );
 
         // Initialize touch state.
-        let touch = seat.add_touch();
-        let touch_state = TouchState::new(event_loop.clone(), touch);
+        seat.add_touch();
+        let touch_state = TouchState::new(event_loop.clone());
 
         // Start IPC socket listener.
         ipc_server::spawn_ipc_socket(&event_loop, &socket_name).expect("spawn IPC socket");
@@ -684,6 +684,7 @@ delegate_session_lock!(Catacomb);
 impl SeatHandler for Catacomb {
     type KeyboardFocus = WlSurface;
     type PointerFocus = WlSurface;
+    type TouchFocus = WlSurface;
 
     fn seat_state(&mut self) -> &mut SeatState<Self> {
         &mut self.seat_state
@@ -704,6 +705,8 @@ impl InputMethodHandler for Catacomb {
     fn new_popup(&mut self, _surface: ImeSurface) {}
 
     fn dismiss_popup(&mut self, _surface: ImeSurface) {}
+
+    fn popup_repositioned(&mut self, _surface: ImeSurface) {}
 
     fn parent_geometry(&self, parent: &WlSurface) -> Rectangle<i32, Logical> {
         self.windows.parent_geometry(parent)
