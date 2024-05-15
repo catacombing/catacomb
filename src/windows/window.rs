@@ -268,8 +268,7 @@ impl<S: Surface + 'static> Window<S> {
                 // Use the subsurface's location as the origin for its children.
                 let mut location = *location;
                 if surface_data.role == Some("subsurface") {
-                    // NOTE: Use current after smithay/smithay#883 is fixed.
-                    let subsurface = surface_data.cached_state.pending::<SubsurfaceCachedState>();
+                    let subsurface = surface_data.cached_state.current::<SubsurfaceCachedState>();
                     location += subsurface.location;
                 }
 
@@ -650,8 +649,7 @@ impl<S: Surface + 'static> Window<S> {
             |wl_surface, surface_data, location| {
                 let mut location = *location;
                 if surface_data.role == Some("subsurface") {
-                    // NOTE: Use current after smithay/smithay#883 is fixed.
-                    let current = surface_data.cached_state.pending::<SubsurfaceCachedState>();
+                    let current = surface_data.cached_state.current::<SubsurfaceCachedState>();
                     location += current.location.to_f64();
                 }
 
