@@ -420,6 +420,9 @@ pub struct CatacombSurfaceData {
     pub transform: Transform,
     pub damage: Damage,
     pub scale: i32,
+
+    // Location cache to avoid recalculation when iterating surfaces.
+    pub location: Point<i32, Logical>,
 }
 
 impl Default for CatacombSurfaceData {
@@ -433,6 +436,7 @@ impl Default for CatacombSurfaceData {
             transform: Default::default(),
             src_rect: Default::default(),
             dst_size: Default::default(),
+            location: Default::default(),
             texture: Default::default(),
             buffer: Default::default(),
             damage: Default::default(),

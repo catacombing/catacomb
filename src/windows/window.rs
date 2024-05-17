@@ -258,12 +258,11 @@ impl<S: Surface + 'static> Window<S> {
         compositor::with_surface_tree_upward(
             self.surface.surface(),
             Point::from((0, 0)) - geometry.unwrap_or_default().loc,
-            |surface, surface_data, location| {
-                let data = match surface_data.data_map.get::<RefCell<CatacombSurfaceData>>() {
-                    Some(data) => data,
+            |_, surface_data, location| {
+                let mut data = match surface_data.data_map.get::<RefCell<CatacombSurfaceData>>() {
+                    Some(data) => data.borrow_mut(),
                     None => return TraversalAction::SkipChildren,
                 };
-                let mut data = data.borrow_mut();
 
                 // Use the subsurface's location as the origin for its children.
                 let mut location = *location;
@@ -272,19 +271,30 @@ impl<S: Surface + 'static> Window<S> {
                     location += subsurface.location;
                 }
 
+                // Update surface data location so we don't need to recompute for processing.
+                data.location = location;
+
+                TraversalAction::DoChildren(location)
+            },
+            |surface, surface_data, _| {
+                let mut data = match surface_data.data_map.get::<RefCell<CatacombSurfaceData>>() {
+                    Some(data) => data.borrow_mut(),
+                    None => return,
+                };
+
                 // Skip surface if buffer was already imported.
                 if let Some(texture) = &data.texture {
                     // Ensure texture's location is up to date.
-                    texture.set_location(location);
+                    texture.set_location(data.location);
 
-                    self.texture_cache.push(texture.clone(), location);
+                    self.texture_cache.push(texture.clone(), data.location);
 
-                    return TraversalAction::DoChildren(location);
+                    return;
                 }
 
                 let buffer = match &data.buffer {
                     Some(buffer) => buffer,
-                    None => return TraversalAction::SkipChildren,
+                    None => return,
                 };
 
                 // Stage presentation callbacks for submission.
@@ -319,24 +329,21 @@ impl<S: Surface + 'static> Window<S> {
                         _ => {
                             error!("unable to import buffer");
                             data.buffer = None;
-
-                            return TraversalAction::SkipChildren;
+                            return;
                         },
                     },
                 };
 
                 // Update and cache the texture.
-                let texture = Texture::from_surface(texture, self.scale, location, &data, surface);
+                let texture =
+                    Texture::from_surface(texture, self.scale, data.location, &data, surface);
                 let render_texture = RenderTexture::new(texture);
-                self.texture_cache.push(render_texture.clone(), location);
+                self.texture_cache.push(render_texture.clone(), data.location);
                 data.texture = Some(render_texture);
 
                 // Clear buffer damage after successful import.
                 data.damage.clear();
-
-                TraversalAction::DoChildren(location)
             },
-            |_, _, _| (),
             |_, _, _| true,
         );
     }
@@ -646,7 +653,18 @@ impl<S: Surface + 'static> Window<S> {
         compositor::with_surface_tree_downward(
             self.surface.surface(),
             bounds_loc,
+            |_, surface_data, location| {
+                // Calculate subsurface offset for child processing.
+                let mut location = *location;
+                if surface_data.role == Some("subsurface") {
+                    let current = surface_data.cached_state.current::<SubsurfaceCachedState>();
+                    location += current.location.to_f64();
+                }
+
+                TraversalAction::DoChildren(location)
+            },
             |wl_surface, surface_data, location| {
+                // Recalculate subsurface offset for surface processing.
                 let mut location = *location;
                 if surface_data.role == Some("subsurface") {
                     let current = surface_data.cached_state.current::<SubsurfaceCachedState>();
@@ -675,10 +693,7 @@ impl<S: Surface + 'static> Window<S> {
                     let surface = InputSurface::new(wl_surface.clone(), surface_loc, window_scale);
                     *result.borrow_mut() = Some(surface);
                 }
-
-                TraversalAction::DoChildren(location)
             },
-            |_, _, _| {},
             |_, _, _| result.borrow().is_none(),
         );
         result.into_inner()
