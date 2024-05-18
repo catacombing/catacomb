@@ -654,6 +654,11 @@ impl<S: Surface + 'static> Window<S> {
             self.surface.surface(),
             bounds_loc,
             |_, surface_data, location| {
+                // Skip processing if surface was already found.
+                if result.borrow().is_some() {
+                    return TraversalAction::SkipChildren;
+                }
+
                 // Calculate subsurface offset for child processing.
                 let mut location = *location;
                 if surface_data.role == Some("subsurface") {
@@ -664,6 +669,11 @@ impl<S: Surface + 'static> Window<S> {
                 TraversalAction::DoChildren(location)
             },
             |wl_surface, surface_data, location| {
+                // Skip processing if surface was already found.
+                if result.borrow().is_some() {
+                    return;
+                }
+
                 // Recalculate subsurface offset for surface processing.
                 let mut location = *location;
                 if surface_data.role == Some("subsurface") {
