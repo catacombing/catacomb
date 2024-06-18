@@ -12,7 +12,6 @@ use profiling::puffin;
 #[cfg(feature = "profiling")]
 use puffin_http::Server;
 use tracing::error;
-use tracing_log::LogTracer;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 mod catacomb;
@@ -53,15 +52,10 @@ pub fn main() {
         Server::new(&format!("0.0.0.0:{}", puffin_http::DEFAULT_PORT)).unwrap()
     };
 
-    // Try to initialize log-compatibility shim.
-    let _ = LogTracer::init();
-
     // Setup logging.
     let directives = env::var("RUST_LOG").unwrap_or("warn,catacomb=info".into());
     let env_filter = EnvFilter::builder().parse_lossy(directives);
-    let subscriber =
-        FmtSubscriber::builder().with_env_filter(env_filter).with_line_number(true).finish();
-    let _ = tracing::subscriber::set_global_default(subscriber);
+    FmtSubscriber::builder().with_env_filter(env_filter).with_line_number(true).init();
 
     match Options::parse().subcommands {
         Some(Subcommands::Msg(msg)) => match catacomb_ipc::send_message(&msg) {

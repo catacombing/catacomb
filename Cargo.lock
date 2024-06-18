@@ -158,7 +158,6 @@ dependencies = [
  "serde_json",
  "smithay",
  "tracing",
- "tracing-log",
  "tracing-subscriber",
  "udev",
 ]
