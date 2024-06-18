@@ -59,7 +59,9 @@ pub fn main() {
     // Setup logging.
     let directives = env::var("RUST_LOG").unwrap_or("warn,catacomb=info".into());
     let env_filter = EnvFilter::builder().parse_lossy(directives);
-    FmtSubscriber::builder().with_env_filter(env_filter).with_line_number(true).init();
+    let subscriber =
+        FmtSubscriber::builder().with_env_filter(env_filter).with_line_number(true).finish();
+    let _ = tracing::subscriber::set_global_default(subscriber);
 
     match Options::parse().subcommands {
         Some(Subcommands::Msg(msg)) => match catacomb_ipc::send_message(&msg) {
