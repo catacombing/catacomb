@@ -56,19 +56,10 @@ pub fn main() {
     // Try to initialize log-compatibility shim.
     let _ = LogTracer::init();
 
-    // Set default level to WARN with Catacomb itself at INFO.
-    let mut directives = String::from("warn,catacomb=info");
-
-    // Override with `RUST_LOG` env variable.
-    if let Ok(env_directives) = env::var("RUST_LOG") {
-        directives = env_directives;
-    }
-
-    // Setup tracing.
+    // Setup logging.
+    let directives = env::var("RUST_LOG").unwrap_or("warn,catacomb=info".into());
     let env_filter = EnvFilter::builder().parse_lossy(directives);
-    let subscriber =
-        FmtSubscriber::builder().with_env_filter(env_filter).with_line_number(true).finish();
-    let _ = tracing::subscriber::set_global_default(subscriber);
+    FmtSubscriber::builder().with_env_filter(env_filter).with_line_number(true).init();
 
     match Options::parse().subcommands {
         Some(Subcommands::Msg(msg)) => match catacomb_ipc::send_message(&msg) {
