@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::{env, io, mem, process, ptr};
 
@@ -26,7 +26,7 @@ use smithay::backend::renderer::{
     self, utils, Bind, BufferType, Frame, ImportDma, ImportEgl, Offscreen, Renderer,
 };
 use smithay::backend::session::libseat::LibSeatSession;
-use smithay::backend::session::{Event as SessionEvent, Session};
+use smithay::backend::session::{AsErrno, Event as SessionEvent, Session};
 use smithay::backend::udev;
 use smithay::backend::udev::{UdevBackend, UdevEvent};
 use smithay::output::{Mode, OutputModeSource, PhysicalProperties, Subpixel};
@@ -60,6 +60,9 @@ use crate::windows::Windows;
 
 /// Default background color.
 const CLEAR_COLOR: [f32; 4] = [0., 0., 0., 1.];
+
+/// Retry delay after a WouldBlock when trying to add a DRM device.
+const DRM_RETRY_DELAY: Duration = Duration::from_millis(250);
 
 /// Supported DRM color formats.
 ///
@@ -122,7 +125,8 @@ pub fn run() {
 /// Add udev device, automatically kicking off rendering for it.
 fn add_device(catacomb: &mut Catacomb, path: PathBuf) {
     // Try to create the device.
-    let result = catacomb.backend.add_device(&catacomb.display_handle, &mut catacomb.windows, path);
+    let result =
+        catacomb.backend.add_device(&catacomb.display_handle, &mut catacomb.windows, &path, true);
 
     // Kick-off rendering if the device creation was successful.
     match result {
@@ -309,11 +313,34 @@ impl Udev {
         &mut self,
         display_handle: &DisplayHandle,
         windows: &mut Windows,
-        path: PathBuf,
+        path: &Path,
+        retry_on_error: bool,
     ) -> Result<(), Box<dyn Error>> {
         let open_flags = OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK;
-        let fd = self.session.open(&path, open_flags)?;
-        let device_fd = DrmDeviceFd::new(DeviceFd::from(fd));
+        let device_fd = match self.session.open(path, open_flags) {
+            Ok(fd) => DrmDeviceFd::new(DeviceFd::from(fd)),
+            Err(err) => {
+                // Retry device on WouldBlock error.
+                if retry_on_error && err.as_errno() == Some(11) {
+                    let timer = Timer::from_duration(DRM_RETRY_DELAY);
+                    let retry_path = path.to_path_buf();
+                    self.event_loop
+                        .insert_source(timer, move |_, _, catacomb| {
+                            trace_error!(catacomb.backend.add_device(
+                                &catacomb.display_handle,
+                                &mut catacomb.windows,
+                                &retry_path,
+                                false,
+                            ));
+
+                            TimeoutAction::Drop
+                        })
+                        .expect("drm retry");
+                }
+
+                return Err(err.into());
+            },
+        };
 
         let (mut drm, drm_notifier) = DrmDevice::new(device_fd.clone(), true)?;
         let gbm = GbmDevice::new(device_fd)?;
@@ -331,7 +358,7 @@ impl Udev {
         };
 
         // Initialize GPU for EGL rendering.
-        if Some(path) == self.gpu {
+        if Some(path) == self.gpu.as_deref() {
             trace_error!(gles.bind_wl_display(display_handle));
         }
 
@@ -421,7 +448,7 @@ impl Udev {
         let path = device.and_then(|device| device.gbm.dev_path());
         if let Some(path) = path {
             self.remove_device(device_id);
-            self.add_device(display_handle, windows, path)?;
+            self.add_device(display_handle, windows, &path, true)?;
         }
 
         Ok(())
