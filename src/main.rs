@@ -1,5 +1,4 @@
 use std::ffi::OsStr;
-use std::fmt::Display;
 use std::mem::MaybeUninit;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
@@ -11,7 +10,6 @@ use clap::{Parser, Subcommand};
 use profiling::puffin;
 #[cfg(feature = "profiling")]
 use puffin_http::Server;
-use tracing::error;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 mod catacomb;
@@ -111,8 +109,13 @@ where
 }
 
 /// Log an error, ignoring success.
-pub fn trace_error<T, E: Display>(result: Result<T, E>) {
-    if let Err(err) = &result {
-        error!("{err}");
-    }
+///
+/// This is a macro to preserve log message line numbers.
+#[macro_export]
+macro_rules! trace_error {
+    ($result:expr) => {{
+        if let Err(err) = &$result {
+            tracing::error!("{err}");
+        }
+    }};
 }

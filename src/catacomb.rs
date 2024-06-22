@@ -168,9 +168,8 @@ impl Catacomb {
         let socket_name = socket_source.socket_name().to_string_lossy().into_owned();
         event_loop
             .insert_source(socket_source, move |stream, _, catacomb| {
-                trace_error(
-                    catacomb.display_handle.insert_client(stream, Arc::new(ClientState::default())),
-                );
+                let state = Arc::new(ClientState::default());
+                trace_error!(catacomb.display_handle.insert_client(stream, state));
             })
             .expect("register Wayland socket source");
 
@@ -282,7 +281,7 @@ impl Catacomb {
 
         // Disable accelerometer polling if orientation starts locked.
         if windows.orientation_locked() {
-            trace_error(event_loop.disable(&accel_token));
+            trace_error!(event_loop.disable(&accel_token));
         }
 
         // Run user startup script.
@@ -448,9 +447,9 @@ impl Catacomb {
 
         // Pause accelerometer checks during sleep.
         if sleep {
-            trace_error(self.event_loop.disable(&self.accelerometer_token));
+            trace_error!(self.event_loop.disable(&self.accelerometer_token));
         } else if !self.windows.orientation_locked() {
-            trace_error(self.event_loop.enable(&self.accelerometer_token));
+            trace_error!(self.event_loop.enable(&self.accelerometer_token));
         }
 
         self.backend.set_sleep(sleep);
@@ -458,14 +457,14 @@ impl Catacomb {
 
     /// Lock the output's orientation.
     pub fn lock_orientation(&mut self, orientation: Option<Orientation>) {
-        trace_error(self.event_loop.disable(&self.accelerometer_token));
+        trace_error!(self.event_loop.disable(&self.accelerometer_token));
         self.windows.lock_orientation(orientation);
         self.unstall();
     }
 
     /// Unlock the output's orientation.
     pub fn unlock_orientation(&mut self) {
-        trace_error(self.event_loop.enable(&self.accelerometer_token));
+        trace_error!(self.event_loop.enable(&self.accelerometer_token));
         self.windows.unlock_orientation();
         self.unstall();
     }

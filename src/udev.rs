@@ -96,10 +96,10 @@ pub fn run() {
     // Handle device events.
     event_loop
         .handle()
-        .insert_source(backend, move |event, _, catacomb| match event {
+        .insert_source(backend, move |event, _, catacomb| match dbg!(event) {
             UdevEvent::Added { path, .. } => add_device(catacomb, path),
             UdevEvent::Changed { device_id } => {
-                trace_error(catacomb.backend.change_device(
+                trace_error!(catacomb.backend.change_device(
                     &catacomb.display_handle,
                     &mut catacomb.windows,
                     device_id,
@@ -167,7 +167,7 @@ impl Udev {
 
         // Register notifier for handling session events.
         event_loop
-            .insert_source(notifier, move |event, _, catacomb| match event {
+            .insert_source(notifier, move |event, _, catacomb| match dbg!(event) {
                 SessionEvent::PauseSession => {
                     context.suspend();
 
@@ -219,7 +219,7 @@ impl Udev {
 
     /// Change Unix TTY.
     pub fn change_vt(&mut self, vt: i32) {
-        trace_error(self.session.change_vt(vt));
+        trace_error!(self.session.change_vt(vt));
     }
 
     /// Set power saving state.
@@ -332,7 +332,7 @@ impl Udev {
 
         // Initialize GPU for EGL rendering.
         if Some(path) == self.gpu {
-            trace_error(gles.bind_wl_display(display_handle));
+            trace_error!(gles.bind_wl_display(display_handle));
         }
 
         // Create the DRM compositor.
@@ -352,7 +352,7 @@ impl Udev {
                         };
 
                         // Mark the last frame as submitted.
-                        trace_error(output_device.drm_compositor.frame_submitted());
+                        trace_error!(output_device.drm_compositor.frame_submitted());
 
                         // Signal new frame to profiler.
                         #[cfg(feature = "profiling")]
@@ -577,7 +577,7 @@ impl OutputDevice {
         let crtc = self.drm_compositor.crtc();
 
         let value = PropertyValue::Boolean(enabled);
-        trace_error(self.drm.set_property(crtc, property, value.into()));
+        trace_error!(self.drm.set_property(crtc, property, value.into()));
     }
 
     /// Render a frame.
