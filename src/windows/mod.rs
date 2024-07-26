@@ -695,7 +695,7 @@ impl Windows {
         }
 
         // Apply layout/liveliness changes.
-        self.layouts.apply_transaction(&self.output);
+        self.dirty |= self.layouts.apply_transaction(&self.output);
 
         // Update layer shell windows.
         self.layers.apply_transaction();

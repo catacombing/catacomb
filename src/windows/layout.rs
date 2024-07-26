@@ -275,8 +275,11 @@ impl Layouts {
     }
 
     /// Apply all pending transaction updates.
-    pub fn apply_transaction(&mut self, output: &Output) {
+    ///
+    /// Returns whether a change to the active layout was performed.
+    pub fn apply_transaction(&mut self, output: &Output) -> bool {
         // Apply transactional layout changes.
+        let applied_transaction = !self.transactions.is_empty();
         for i in 0..self.transactions.len() {
             match self.transactions[i] {
                 Transaction::Active(layout) => {
@@ -347,6 +350,8 @@ impl Layouts {
                 self.parent_layouts.clear();
             }
         }
+
+        applied_transaction || clear_active
     }
 
     /// Apply a layout switch transaction.
