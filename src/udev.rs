@@ -99,7 +99,7 @@ pub fn run() {
     // Handle device events.
     event_loop
         .handle()
-        .insert_source(backend, move |event, _, catacomb| match dbg!(event) {
+        .insert_source(backend, move |event, _, catacomb| match event {
             UdevEvent::Added { path, .. } => add_device(catacomb, path),
             UdevEvent::Changed { device_id } => {
                 trace_error!(catacomb.backend.change_device(
@@ -171,7 +171,7 @@ impl Udev {
 
         // Register notifier for handling session events.
         event_loop
-            .insert_source(notifier, move |event, _, catacomb| match dbg!(event) {
+            .insert_source(notifier, move |event, _, catacomb| match event {
                 SessionEvent::PauseSession => {
                     context.suspend();
 
