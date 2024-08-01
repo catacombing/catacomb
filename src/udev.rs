@@ -15,7 +15,7 @@ use smithay::backend::allocator::gbm::{GbmAllocator, GbmBuffer, GbmBufferFlags, 
 use smithay::backend::allocator::{Format, Fourcc};
 use smithay::backend::drm::compositor::{DrmCompositor as SmithayDrmCompositor, RenderFrameResult};
 use smithay::backend::drm::gbm::GbmFramebuffer;
-use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent, DrmSurface};
+use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent, DrmNode, DrmSurface};
 use smithay::backend::egl::context::EGLContext;
 use smithay::backend::egl::display::EGLDisplay;
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
@@ -90,7 +90,8 @@ pub fn run() {
     }
 
     // Setup hardware acceleration.
-    let dmabuf_feedback = catacomb.backend.default_dmabuf_feedback().expect("dmabuf feedback");
+    let dmabuf_feedback =
+        catacomb.backend.default_dmabuf_feedback(&backend).expect("dmabuf feedback");
     catacomb.dmabuf_state.create_global_with_default_feedback::<Catacomb>(
         &catacomb.display_handle,
         &dmabuf_feedback,
@@ -302,9 +303,12 @@ impl Udev {
     }
 
     /// Default dma surface feedback.
-    fn default_dmabuf_feedback(&self) -> Result<DmabufFeedback, Box<dyn Error>> {
+    fn default_dmabuf_feedback(
+        &self,
+        backend: &UdevBackend,
+    ) -> Result<DmabufFeedback, Box<dyn Error>> {
         match &self.output_device {
-            Some(output_device) => output_device.default_dmabuf_feedback(),
+            Some(output_device) => output_device.default_dmabuf_feedback(backend),
             None => Err("missing output device".into()),
         }
     }
@@ -771,7 +775,10 @@ impl OutputDevice {
     }
 
     /// Default dma surface feedback.
-    fn default_dmabuf_feedback(&self) -> Result<DmabufFeedback, Box<dyn Error>> {
+    fn default_dmabuf_feedback(
+        &self,
+        backend: &UdevBackend,
+    ) -> Result<DmabufFeedback, Box<dyn Error>> {
         // Get planes for the DRM surface.
         let surface = self.drm_compositor.surface();
         let planes = surface.planes();
@@ -791,8 +798,26 @@ impl OutputDevice {
         let overlay_formats = planes.overlay.iter().map(|plane| &plane.formats);
         Self::format_intersection(&mut all_overlay_formats, overlay_formats);
 
+        // The dmabuf feedback DRM device is expected to have a render node, so if this
+        // device doesn't have one, we fall back to the first one that does.
+        let mut gbm_id = self.gbm.dev_id()?;
+        if !DrmNode::from_dev_id(gbm_id)?.has_render() {
+            let drm_node = backend
+                .device_list()
+                .filter_map(|(_, path)| DrmNode::from_path(path).ok())
+                .find(DrmNode::has_render)
+                .ok_or("no drm device with render node")?;
+
+            debug!(
+                "{:?} has no render node, using {:?} for dmabuf feedback",
+                self.gbm.dev_path().unwrap_or_default(),
+                drm_node.dev_path().unwrap_or_default(),
+            );
+
+            gbm_id = drm_node.dev_id();
+        }
+
         // Setup feedback builder.
-        let gbm_id = self.gbm.dev_id()?;
         let feedback_builder = DmabufFeedbackBuilder::new(gbm_id, dmabuf_formats);
 
         // Create default feedback preference.
