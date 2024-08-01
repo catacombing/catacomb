@@ -32,6 +32,6 @@ You can find an example configuration [here](./post_start.sh).
 | ------------------------------------------- | -------------------------------- | -------------------------- |
 | ![open overview](./docs/enter_overview.gif) | ![minimize](./docs/minimize.gif) | ![close](./docs/close.gif) |
 
-| Double-tap to cycle        | Tiling                       |
-| -------------------------- | ---------------------------- |
-| ![cycle](./docs/cycle.gif) | <video src ="./docs/tiling.gif"/>) |
+| Double-tap to cycle        | Tiling                           |
+| -------------------------- | -------------------------------- |
+| ![cycle](./docs/cycle.gif) | ![tiling](./docs/tiling.gif)     |
