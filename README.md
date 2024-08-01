@@ -34,4 +34,4 @@ You can find an example configuration [here](./post_start.sh).
 
 | Double-tap to cycle        | Tiling                       |
 | -------------------------- | ---------------------------- |
-| ![cycle](./docs/cycle.mp4) | ![tiling](./docs/tiling.mp4) |
+| ![cycle](./docs/cycle.mp4) | <video src ="./docs/tiling.mp4"/>) |
