@@ -30,8 +30,8 @@ You can find an example configuration [here](./post_start.sh).
 
 | Open application overview                   | Minimize everything              | Close applications         |
 | ------------------------------------------- | -------------------------------- | -------------------------- |
-| ![open overview](./docs/enter_overview.gif) | ![minimize](./docs/minimize.gif) | ![close](./docs/close.gif) |
+| ![open overview](./docs/img/enter_overview.gif) | ![minimize](./docs/img/minimize.gif) | ![close](./docs/img/close.gif) |
 
-| Double-tap to cycle                                             | Tiling                                                           |
-| --------------------------------------------------------------- | ---------------------------------------------------------------- |
-| <p align="center"><img src="./docs/cycle.gif" width="66%"/></p> | <p align="center"><img src="./docs/tiling.gif" width="66%"/></p> |
+| Double-tap to cycle                                                 | Tiling                                                               |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| <p align="center"><img src="./docs/img/cycle.gif" width="66%"/></p> | <p align="center"><img src="./docs/img/tiling.gif" width="66%"/></p> |
