@@ -57,7 +57,7 @@ pub struct TouchState {
     active_app_id: Option<String>,
     velocity: Point<f64, Logical>,
     events: Vec<TouchEvent>,
-    slot: Option<TouchSlot>,
+    pub slot: Option<TouchSlot>,
     start: TouchStart,
     last_tap: Instant,
     is_drag: bool,

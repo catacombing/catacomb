@@ -323,6 +323,7 @@ pub struct Graphics {
     pub active_drop_target: RenderTexture,
     pub urgency_icon: RenderTexture,
     pub drop_target: RenderTexture,
+    pub touch: RenderTexture,
 
     gesture_handle_default: Option<RenderTexture>,
     gesture_handle_blocked: Option<RenderTexture>,
@@ -337,10 +338,13 @@ impl Graphics {
 
         let urgency_icon = Texture::from_buffer(renderer, 1., &URGENCY_ICON_RGBA, 1, 1, true);
 
+        let touch = Texture::from_buffer(renderer, 1., &[150, 150, 150, 255], 1, 1, true);
+
         Self {
             active_drop_target: RenderTexture::new(active_drop_target),
             urgency_icon: RenderTexture::new(urgency_icon),
             drop_target: RenderTexture::new(drop_target),
+            touch: RenderTexture::new(touch),
             gesture_handle_default: None,
             gesture_handle_blocked: None,
             gesture_handle_locked: None,

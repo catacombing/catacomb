@@ -368,12 +368,27 @@ impl Windows {
         &mut self,
         renderer: &mut GlesRenderer,
         graphics: &mut Graphics,
+        touch: &TouchState,
     ) -> &[CatacombElement] {
         // Clear global damage.
         self.dirty = false;
 
         let scale = self.output.scale();
         self.textures.clear();
+
+        if touch.slot.is_some() {
+            let mut touch_location = touch.position.to_physical(scale).to_i32_round();
+            touch_location.y -= 15;
+            let touch_bounds = Rectangle::from_loc_and_size(touch_location, (20, 20));
+            CatacombElement::add_element(
+                &mut self.textures,
+                graphics.touch.clone(),
+                touch_location,
+                touch_bounds,
+                10.,
+                scale,
+            );
+        }
 
         // Draw gesture handle when not in fullscreen/lock view.
         if !matches!(self.view, View::Fullscreen(_) | View::Lock(_)) {

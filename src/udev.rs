@@ -53,6 +53,7 @@ use tracing::{debug, error};
 
 use crate::catacomb::Catacomb;
 use crate::drawing::{CatacombElement, Graphics};
+use crate::input::TouchState;
 use crate::output::Output;
 use crate::protocols::screencopy::frame::Screencopy;
 use crate::trace_error;
@@ -245,13 +246,13 @@ impl Udev {
     /// Render a frame.
     ///
     /// Will return `true` if something was rendered.
-    pub fn render(&mut self, windows: &mut Windows) -> bool {
+    pub fn render(&mut self, windows: &mut Windows, touch: &TouchState) -> bool {
         let output_device = match &mut self.output_device {
             Some(output_device) => output_device,
             None => return false,
         };
 
-        match output_device.render(&self.event_loop, windows) {
+        match output_device.render(&self.event_loop, windows, touch) {
             Ok(rendered) => rendered,
             Err(err) => {
                 error!("{err}");
@@ -619,13 +620,14 @@ impl OutputDevice {
         &mut self,
         event_loop: &LoopHandle<'static, Catacomb>,
         windows: &mut Windows,
+        touch: &TouchState,
     ) -> Result<bool, Box<dyn Error>> {
         let scale = windows.output().scale();
 
         // Update output mode since we're using static for transforms.
         self.drm_compositor.set_output_mode_source(windows.canvas().into());
 
-        let textures = windows.textures(&mut self.gles, &mut self.graphics);
+        let textures = windows.textures(&mut self.gles, &mut self.graphics, touch);
         let mut frame_result =
             self.drm_compositor.render_frame(&mut self.gles, textures, CLEAR_COLOR)?;
         let rendered = !frame_result.is_empty;
@@ -650,7 +652,7 @@ impl OutputDevice {
                     return Err(format!("unsupported buffer format: {buffer_type:?}").into());
                 }
 
-                self.copy_framebuffer_shm(windows, region, buffer)?
+                self.copy_framebuffer_shm(windows, region, buffer, touch)?
             };
 
             // Wait for OpenGL sync to submit screencopy, frame.
@@ -709,6 +711,7 @@ impl OutputDevice {
         windows: &mut Windows,
         region: Rectangle<i32, Physical>,
         buffer: &WlBuffer,
+        touch: &TouchState,
     ) -> Result<SyncPoint, Box<dyn Error>> {
         // Create and bind an offscreen render buffer.
         let buffer_dimensions = renderer::buffer_dimensions(buffer).unwrap();
@@ -725,7 +728,7 @@ impl OutputDevice {
         let damage = transform.transform_rect_in(region, &output_size);
 
         // Collect textures for rendering.
-        let textures = windows.textures(&mut self.gles, &mut self.graphics);
+        let textures = windows.textures(&mut self.gles, &mut self.graphics, touch);
 
         // Initialize the buffer to our clear color.
         let mut frame = self.gles.render(output_size, transform)?;
