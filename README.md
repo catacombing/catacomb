@@ -34,4 +34,4 @@ You can find an example configuration [here](./post_start.sh).
 
 | Double-tap to cycle                       | Tiling                                     |
 | ----------------------------------------- | ------------------------------------------ |
-| <img src="./docs/cycle.gif" width="30%"/> | <img src="./docs/tiling.gif" width="30%"/> |
+| <img src="./docs/cycle.gif" width="66%"/> | <img src="./docs/tiling.gif" width="66%"/> |
