@@ -370,14 +370,14 @@ impl Catacomb {
         self.idle_notifier_state.set_is_inhibited(inhibited);
 
         // Redraw only when there is damage present.
-        if true || self.windows.damaged() {
+        if self.windows.damaged() {
             // Apply pending client updates.
             if let Some(renderer) = self.backend.renderer() {
                 self.windows.import_buffers(renderer);
             }
 
             // Draw all visible clients.
-            let rendered = self.backend.render(&mut self.windows, &self.touch_state);
+            let rendered = self.backend.render(&mut self.windows);
 
             // Update render time prediction.
             let frame_interval = self.output().frame_interval();
