@@ -25,3 +25,13 @@ automatically loads `$XDG_CONFIG_HOME/catacomb/post_start.sh` (or
 `~/.config/catacomb/post_start.sh` if `XDG_CONFIG_HOME` is not defined).
 
 You can find an example configuration [here](./post_start.sh).
+
+## Controls
+
+| Open application overview                   | Minimize everything              | Close applications         |
+| ------------------------------------------- | -------------------------------- | -------------------------- |
+| ![open overview](./docs/img/enter_overview.gif) | ![minimize](./docs/img/minimize.gif) | ![close](./docs/img/close.gif) |
+
+| Double-tap to cycle                                                 | Tiling                                                               |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| <p align="center"><img src="./docs/img/cycle.gif" width="66%"/></p> | <p align="center"><img src="./docs/img/tiling.gif" width="66%"/></p> |
