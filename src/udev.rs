@@ -27,7 +27,6 @@ use smithay::backend::renderer::{
 };
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{AsErrno, Event as SessionEvent, Session};
-use smithay::backend::udev;
 use smithay::backend::udev::{UdevBackend, UdevEvent};
 use smithay::output::{Mode, OutputModeSource, PhysicalProperties, Subpixel};
 use smithay::reexports::calloop::generic::Generic;
@@ -142,7 +141,6 @@ pub struct Udev {
     event_loop: LoopHandle<'static, Catacomb>,
     output_device: Option<OutputDevice>,
     session: LibSeatSession,
-    gpu: Option<PathBuf>,
 }
 
 impl Udev {
@@ -205,13 +203,9 @@ impl Udev {
             })
             .expect("insert notifier source");
 
-        // Find active GPUs for hardware acceleration.
-        let gpu = udev::primary_gpu(session.seat()).ok().flatten();
-
         Self {
             event_loop,
             session,
-            gpu,
             scheduled_redraws: Default::default(),
             output_device: Default::default(),
         }
@@ -362,9 +356,7 @@ impl Udev {
         };
 
         // Initialize GPU for EGL rendering.
-        if Some(path) == self.gpu.as_deref() {
-            trace_error!(gles.bind_wl_display(display_handle));
-        }
+        trace_error!(gles.bind_wl_display(display_handle));
 
         // Create the DRM compositor.
         let drm_compositor = self
@@ -432,13 +424,8 @@ impl Udev {
 
     fn remove_device(&mut self, device_id: DeviceId) {
         let output_device = self.output_device.take();
-        if let Some(mut output_device) = output_device.filter(|device| device.id == device_id) {
+        if let Some(output_device) = output_device.filter(|device| device.id == device_id) {
             self.event_loop.remove(output_device.token);
-
-            // Disable hardware acceleration when the GPU is removed.
-            if output_device.gbm.dev_path() == self.gpu {
-                output_device.gles.unbind_wl_display();
-            }
         }
     }
 
