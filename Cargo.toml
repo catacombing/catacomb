@@ -29,7 +29,7 @@ features = [
 ]
 
 [dependencies]
-calloop = { version = "0.13.0", features = ["signals"] }
+calloop = { version = "0.14.0", features = ["signals"] }
 catacomb_ipc = { version = "0.1.0", path = "./catacomb_ipc", features = ["clap", "smithay"] }
 clap = { version = "4.2.3", features = ["derive", "wrap_help"] }
 dirs = "5.0.0"
@@ -41,3 +41,4 @@ serde = { version = "1.0.144", features = ["derive"] }
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 udev = "0.8.0"
+indexmap = "2.5.0"

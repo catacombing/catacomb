@@ -129,8 +129,8 @@ impl<S: Surface + 'static> Window<S> {
     /// Send a frame request to the window.
     pub fn request_frame(&self, runtime: u32) {
         self.with_surfaces(|_, surface_data| {
-            let mut attributes = surface_data.cached_state.current::<SurfaceAttributes>();
-            for callback in attributes.frame_callbacks.drain(..) {
+            let mut attributes = surface_data.cached_state.get::<SurfaceAttributes>();
+            for callback in attributes.current().frame_callbacks.drain(..) {
                 callback.done(runtime);
             }
         });
@@ -267,8 +267,8 @@ impl<S: Surface + 'static> Window<S> {
                 // Use the subsurface's location as the origin for its children.
                 let mut location = *location;
                 if surface_data.role == Some("subsurface") {
-                    let subsurface = surface_data.cached_state.current::<SubsurfaceCachedState>();
-                    location += subsurface.location;
+                    let mut subsurface = surface_data.cached_state.get::<SubsurfaceCachedState>();
+                    location += subsurface.current().location;
                 }
 
                 // Update surface data location so we don't need to recompute for processing.
@@ -299,8 +299,8 @@ impl<S: Surface + 'static> Window<S> {
 
                 // Stage presentation callbacks for submission.
                 let mut feedback_state =
-                    surface_data.cached_state.current::<PresentationFeedbackCachedState>();
-                for callback in feedback_state.callbacks.drain(..) {
+                    surface_data.cached_state.get::<PresentationFeedbackCachedState>();
+                for callback in feedback_state.current().callbacks.drain(..) {
                     let callback = PresentationCallback::new(surface.clone(), callback);
                     self.presentation_callbacks.push(callback);
                 }
@@ -485,7 +485,8 @@ impl<S: Surface + 'static> Window<S> {
                     .borrow_mut();
 
                 // Check if new buffer has been attached.
-                let mut attributes = data.cached_state.current::<SurfaceAttributes>();
+                let mut attributes = data.cached_state.get::<SurfaceAttributes>();
+                let attributes = attributes.current();
                 let buffer_assignment = match attributes.buffer.take() {
                     Some(buffer_assignment) => buffer_assignment,
                     None => return TraversalAction::DoChildren(()),
@@ -499,7 +500,7 @@ impl<S: Surface + 'static> Window<S> {
                     .unwrap_or_default();
 
                 // Store pending buffer updates.
-                surface_data.update_buffer(data, &mut attributes, buffer_assignment);
+                surface_data.update_buffer(data, attributes, buffer_assignment);
 
                 TraversalAction::DoChildren(())
             },
@@ -662,8 +663,8 @@ impl<S: Surface + 'static> Window<S> {
                 // Calculate subsurface offset for child processing.
                 let mut location = *location;
                 if surface_data.role == Some("subsurface") {
-                    let current = surface_data.cached_state.current::<SubsurfaceCachedState>();
-                    location += current.location.to_f64();
+                    let mut cached_state = surface_data.cached_state.get::<SubsurfaceCachedState>();
+                    location += cached_state.current().location.to_f64();
                 }
 
                 TraversalAction::DoChildren(location)
@@ -677,8 +678,8 @@ impl<S: Surface + 'static> Window<S> {
                 // Recalculate subsurface offset for surface processing.
                 let mut location = *location;
                 if surface_data.role == Some("subsurface") {
-                    let current = surface_data.cached_state.current::<SubsurfaceCachedState>();
-                    location += current.location.to_f64();
+                    let mut cached_state = surface_data.cached_state.get::<SubsurfaceCachedState>();
+                    location += cached_state.current().location.to_f64();
                 }
 
                 // Calculate surface's bounding box.
@@ -692,8 +693,8 @@ impl<S: Surface + 'static> Window<S> {
                 let surface_rect = Rectangle::from_loc_and_size(surface_loc, size.to_f64());
 
                 // Get input region and its relative touch position.
-                let attributes = surface_data.cached_state.current::<SurfaceAttributes>();
-                let input_region = attributes.input_region.as_ref();
+                let mut attributes = surface_data.cached_state.get::<SurfaceAttributes>();
+                let input_region = attributes.current().input_region.as_ref();
                 let input_position = (position - surface_rect.loc).to_i32_round();
 
                 // Check if the position is within the surface bounds.
@@ -877,7 +878,7 @@ impl Window<CatacombLayerSurface> {
     /// Recompute the window's size and location.
     pub fn update_dimensions(&mut self, output: &mut Output, fullscreen_active: bool) {
         let state = compositor::with_states(self.surface.surface(), |states| {
-            *states.cached_state.current::<LayerSurfaceCachedState>()
+            *states.cached_state.get::<LayerSurfaceCachedState>().current()
         });
 
         // Exclude gesture handle from Top/Overlay window size.
@@ -933,7 +934,7 @@ impl Window<CatacombLayerSurface> {
     /// Update layer-specific shell properties.
     fn update_layer_state(&mut self, output: &mut Output) {
         let state = compositor::with_states(self.surface.surface(), |states| {
-            *states.cached_state.current::<LayerSurfaceCachedState>()
+            *states.cached_state.get::<LayerSurfaceCachedState>().current()
         });
 
         // Update keyboard interactivity.

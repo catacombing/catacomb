@@ -548,8 +548,8 @@ impl Catacomb {
         // Convert positions to pre-window scaling.
         let scale = self.windows.canvas().scale();
         let window_scale_position = position.upscale(scale / input_surface.surface_scale);
-        let surface_position_x = input_surface.surface_offset.x.round() as i32;
-        let surface_position_y = input_surface.surface_offset.y.round() as i32;
+        let surface_position_x = input_surface.surface_offset.x;
+        let surface_position_y = input_surface.surface_offset.y;
         let surface_position = Point::from((surface_position_x, surface_position_y));
 
         // Send touch event to the client.

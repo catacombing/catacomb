@@ -48,7 +48,7 @@ pub trait Surface {
     /// Geometry of the window's visible bounds.
     fn geometry(&self) -> Option<Rectangle<i32, Logical>> {
         compositor::with_states(self.surface(), |states| {
-            states.cached_state.current::<SurfaceCachedState>().geometry
+            states.cached_state.get::<SurfaceCachedState>().current().geometry
         })
     }
 }

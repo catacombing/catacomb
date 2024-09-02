@@ -11,7 +11,7 @@ use smithay::backend::renderer::element::utils::{
 use smithay::backend::renderer::element::{Element, Id, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{ffi, GlesFrame, GlesRenderer, GlesTexture};
 use smithay::backend::renderer::utils::{
-    Buffer, CommitCounter, DamageBag, DamageSet, DamageSnapshot,
+    Buffer, CommitCounter, DamageBag, DamageSet, DamageSnapshot, OpaqueRegions,
 };
 use smithay::backend::renderer::{self, Renderer, Texture as _};
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
@@ -218,7 +218,7 @@ impl Element for RenderTexture {
         DamageSet::from_iter(damage.into_iter().map(|rect| rect.to_physical_precise_round(scale)))
     }
 
-    fn opaque_regions(&self, scale: Scale<f64>) -> Vec<Rectangle<i32, Physical>> {
+    fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
         let scale = self.window_scale.map_or(scale.x, |window_scale| window_scale.scale(scale.x));
         self.opaque_regions.iter().map(|rect| rect.to_physical_precise_round(scale)).collect()
     }
@@ -231,12 +231,23 @@ impl RenderElement<GlesRenderer> for RenderTexture {
         src: Rectangle<f64, BufferSpace>,
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), <GlesRenderer as Renderer>::Error> {
-        frame.render_texture_from_to(&self.texture, src, dst, damage, self.transform, 1., None, &[])
+        frame.render_texture_from_to(
+            &self.texture,
+            src,
+            dst,
+            damage,
+            opaque_regions,
+            self.transform,
+            1.,
+            None,
+            &[],
+        )
     }
 
     fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage> {
-        self.buffer.clone().map(UnderlyingStorage::Wayland)
+        self.buffer.as_ref().map(UnderlyingStorage::Wayland)
     }
 }
 
@@ -296,7 +307,7 @@ impl Element for CatacombElement {
         self.0.damage_since(scale, commit)
     }
 
-    fn opaque_regions(&self, scale: Scale<f64>) -> Vec<Rectangle<i32, Physical>> {
+    fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
         self.0.opaque_regions(scale)
     }
 }
@@ -308,8 +319,9 @@ impl RenderElement<GlesRenderer> for CatacombElement {
         src: Rectangle<f64, BufferSpace>,
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), <GlesRenderer as Renderer>::Error> {
-        self.0.draw(frame, src, dst, damage)
+        self.0.draw(frame, src, dst, damage, opaque_regions)
     }
 
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage> {
@@ -459,7 +471,8 @@ impl CatacombSurfaceData {
                 let viewport_valid =
                     viewporter::ensure_viewport_valid(surface_data, self.buffer_size);
                 let (viewport_src, viewport_dst) = if viewport_valid {
-                    let viewport = surface_data.cached_state.current::<ViewportCachedState>();
+                    let mut viewport = surface_data.cached_state.get::<ViewportCachedState>();
+                    let viewport = viewport.current();
                     (viewport.src, viewport.size())
                 } else {
                     (None, None)

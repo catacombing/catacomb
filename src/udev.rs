@@ -1,18 +1,19 @@
 //! Udev backend.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::{env, io, mem, process, ptr};
 
 use _linux_dmabuf::zv1::server::zwp_linux_dmabuf_feedback_v1::TrancheFlags;
+use indexmap::IndexSet;
 use libc::dev_t as DeviceId;
 #[cfg(feature = "profiling")]
 use profiling::puffin::GlobalProfiler;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBuffer, GbmBufferFlags, GbmDevice};
-use smithay::backend::allocator::{Format, Fourcc};
+use smithay::backend::allocator::Fourcc;
 use smithay::backend::drm::compositor::{DrmCompositor as SmithayDrmCompositor, RenderFrameResult};
 use smithay::backend::drm::gbm::GbmFramebuffer;
 use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent, DrmNode, DrmSurface};
@@ -20,7 +21,7 @@ use smithay::backend::egl::context::EGLContext;
 use smithay::backend::egl::display::EGLDisplay;
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::element::RenderElementStates;
-use smithay::backend::renderer::gles::{ffi, Capability, GlesRenderbuffer, GlesRenderer};
+use smithay::backend::renderer::gles::{ffi, GlesRenderbuffer, GlesRenderer};
 use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::{
     self, utils, Bind, BufferType, Frame, ImportDma, ImportEgl, Offscreen, Renderer,
@@ -346,14 +347,7 @@ impl Udev {
         let display = unsafe { EGLDisplay::new(gbm.clone())? };
         let context = EGLContext::new(&display)?;
 
-        let mut gles = unsafe {
-            // Filter driver capabilities that reduce performance.
-            let mut capabilities =
-                GlesRenderer::supported_capabilities(&context).expect("gl capabilities");
-            capabilities.retain(|capability| capability != &Capability::ColorTransformations);
-
-            GlesRenderer::with_capabilities(context, capabilities).expect("create renderer")
-        };
+        let mut gles = unsafe { GlesRenderer::new(context).expect("create renderer") };
 
         // Initialize GPU for EGL rendering.
         trace_error!(gles.bind_wl_display(display_handle));
@@ -668,12 +662,12 @@ impl OutputDevice {
     fn copy_framebuffer_dma(
         gles: &mut GlesRenderer,
         scale: f64,
-        frame_result: &RenderFrameResult<GbmBuffer<()>, GbmFramebuffer, CatacombElement>,
+        frame_result: &RenderFrameResult<GbmBuffer, GbmFramebuffer, CatacombElement>,
         region: Rectangle<i32, Physical>,
-        buffer: Dmabuf,
+        buffer: &Dmabuf,
     ) -> Result<SyncPoint, Box<dyn Error>> {
         // Bind the screencopy buffer as render target.
-        gles.bind(buffer)?;
+        gles.bind(buffer.clone())?;
 
         // Blit the framebuffer into the target buffer.
         let damage = [Rectangle::from_loc_and_size((0, 0), region.size)];
@@ -716,7 +710,7 @@ impl OutputDevice {
 
         // Initialize the buffer to our clear color.
         let mut frame = self.gles.render(output_size, transform)?;
-        frame.clear(CLEAR_COLOR, &[damage])?;
+        frame.clear(CLEAR_COLOR.into(), &[damage])?;
 
         // Render everything to the offscreen buffer.
         utils::draw_render_elements(&mut frame, scale, textures, &[damage])?;
@@ -770,20 +764,22 @@ impl OutputDevice {
         let surface = self.drm_compositor.surface();
         let planes = surface.planes();
 
-        // Get primary plane formats supported by renderer.
-        let dmabuf_formats = self.gles.dmabuf_formats().collect::<HashSet<_>>();
-        let mut primary_formats = planes.primary.formats.clone();
-        Self::format_intersection(&mut primary_formats, [&dmabuf_formats]);
+        // Get formats supported by ANY primary plane and the renderer.
+        let dmabuf_formats = self.gles.dmabuf_formats();
+        let dmabuf_formats = dmabuf_formats.indexset();
+        let primary_formats: IndexSet<_> =
+            planes.primary.iter().flat_map(|plane| plane.formats.iter()).copied().collect();
+        let primary_formats = primary_formats.intersection(dmabuf_formats).copied();
 
         // Get formats supported by ANY overlay plane and the renderer.
-        let mut any_overlay_formats: HashSet<_> =
-            planes.overlay.iter().flat_map(|plane| &plane.formats).copied().collect();
-        Self::format_intersection(&mut any_overlay_formats, [&dmabuf_formats]);
+        let any_overlay_formats: IndexSet<_> =
+            planes.overlay.iter().flat_map(|plane| plane.formats.iter()).copied().collect();
+        let any_overlay_formats = any_overlay_formats.intersection(dmabuf_formats).copied();
 
         // Get formats supported by ALL overlay planes and the renderer.
         let mut all_overlay_formats = dmabuf_formats.clone();
-        let overlay_formats = planes.overlay.iter().map(|plane| &plane.formats);
-        Self::format_intersection(&mut all_overlay_formats, overlay_formats);
+        all_overlay_formats
+            .retain(|format| planes.overlay.iter().all(|plane| plane.formats.contains(format)));
 
         // The dmabuf feedback DRM device is expected to have a render node, so if this
         // device doesn't have one, we fall back to the first one that does.
@@ -805,7 +801,7 @@ impl OutputDevice {
         }
 
         // Setup feedback builder.
-        let feedback_builder = DmabufFeedbackBuilder::new(gbm_id, dmabuf_formats);
+        let feedback_builder = DmabufFeedbackBuilder::new(gbm_id, dmabuf_formats.iter().copied());
 
         // Create default feedback preference.
         let surface_id = surface.device_fd().dev_id()?;
@@ -820,22 +816,6 @@ impl OutputDevice {
             .build()?;
 
         Ok(feedback)
-    }
-
-    /// Calculate the intersection of DRM formats between planes.
-    fn format_intersection<'a, D>(drm_formats: &mut HashSet<Format>, filter: D)
-    where
-        D: IntoIterator<Item = &'a HashSet<Format>>,
-    {
-        // Filter formats which aren't supported by all other planes.
-        for formats in filter {
-            drm_formats.retain(|format| formats.contains(format));
-
-            // Abort early if no format intersects.
-            if drm_formats.is_empty() {
-                break;
-            }
-        }
     }
 }
 

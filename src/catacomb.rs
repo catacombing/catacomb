@@ -582,7 +582,6 @@ impl DmabufHandler for Catacomb {
         }
     }
 }
-
 delegate_dmabuf!(Catacomb);
 
 impl XdgShellHandler for Catacomb {
