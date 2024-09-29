@@ -346,6 +346,11 @@ impl<S: Surface + 'static> Window<S> {
             },
             |_, _, _| true,
         );
+
+        // Ensure combined top-left corner of the texture cache is normalized to (0, 0).
+        if geometry.is_none() {
+            self.texture_cache.reset_origin();
+        }
     }
 
     /// Mark all rendered clients as presented for `wp_presentation`.
@@ -649,6 +654,7 @@ impl<S: Surface + 'static> Window<S> {
         position = position.upscale(output_scale / window_scale);
 
         let geometry = self.surface.geometry().unwrap_or_default();
+        let origin_delta = self.texture_cache.origin_delta;
 
         let result = RefCell::new(None);
         compositor::with_surface_tree_downward(
@@ -689,7 +695,7 @@ impl<S: Surface + 'static> Window<S> {
                     .data_map
                     .get::<RefCell<CatacombSurfaceData>>()
                     .map_or_else(Size::default, |data| data.borrow().dst_size);
-                let surface_loc = location - geometry.loc.to_f64();
+                let surface_loc = location - geometry.loc.to_f64() - origin_delta.to_f64();
                 let surface_rect = Rectangle::from_loc_and_size(surface_loc, size.to_f64());
 
                 // Get input region and its relative touch position.
@@ -983,6 +989,11 @@ pub struct TextureCache {
     /// Desired window size during import.
     requested_size: Size<i32, Logical>,
 
+    /// Offset of the top-left corner for all textures combined.
+    origin: Option<Point<i32, Logical>>,
+    /// Distance to the original origin position.
+    origin_delta: Point<i32, Logical>,
+
     /// Cached textures.
     textures: Vec<RenderTexture>,
 }
@@ -996,16 +1007,49 @@ impl TextureCache {
     ) {
         self.requested_size = requested_size;
         self.geometry_size = geometry_size;
+        self.texture_size = Default::default();
+        self.origin_delta = Default::default();
+        self.origin = Default::default();
         self.textures.clear();
     }
 
     /// Add a new texture.
     fn push(&mut self, texture: RenderTexture, location: Point<i32, Logical>) {
+        // Update the combined texture origin.
+        let origin = self.origin.get_or_insert(location);
+        origin.x = origin.x.min(location.x);
+        origin.y = origin.y.min(location.y);
+
         // Update the combined texture size.
-        let max_size = texture.size() + location.max((0, 0)).to_size();
+        let max_size = texture.size() + location.to_size();
         self.texture_size = self.texture_size.max(max_size);
 
         self.textures.push(texture);
+    }
+
+    /// Reset the combined texture origin to zero.
+    ///
+    /// Consistently having an origin of zero for the combined top-left of all
+    /// textures ensures the rendering location and cropping bounds are
+    /// identical, which makes reasoning about them easier in the rest of
+    /// the code.
+    fn reset_origin(&mut self) {
+        let origin = match self.origin.take() {
+            Some(origin) if origin != Point::default() => origin,
+            _ => return,
+        };
+
+        // Move each texture relative to the new origin.
+        for texture in &mut self.textures {
+            texture.offset_location(Point::default() - origin);
+        }
+
+        // Update size to account for offset.
+        self.texture_size.w -= origin.x;
+        self.texture_size.h -= origin.y;
+
+        // Track the old origin, for input handling.
+        self.origin_delta += origin;
     }
 
     /// Get the size of the cached texture.

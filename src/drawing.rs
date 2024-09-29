@@ -154,6 +154,11 @@ impl Texture {
         self.location.replace(location);
     }
 
+    /// Move this texture's location by an offset.
+    pub fn offset_location(&self, offset: Point<i32, Logical>) {
+        self.location.replace(self.location.get() + offset);
+    }
+
     /// Target size after rendering.
     pub fn size(&self) -> Size<i32, Logical> {
         self.dst_size
