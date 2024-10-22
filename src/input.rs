@@ -7,9 +7,7 @@ use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Event, InputBackend, InputEvent, KeyState,
     KeyboardKeyEvent, MouseButton, PointerButtonEvent, TouchEvent as _, TouchSlot,
 };
-use smithay::input::keyboard::{
-    keysyms, FilterResult, Keycode, KeysymHandle, ModifiersState, XkbContextHandler,
-};
+use smithay::input::keyboard::{keysyms, FilterResult, Keycode, KeysymHandle, ModifiersState};
 use smithay::input::touch::{DownEvent, MotionEvent, UpEvent};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
@@ -729,7 +727,7 @@ impl Catacomb {
     }
 
     /// Handle new keyboard input events.
-    fn on_keyboard_input(&mut self, code: u32, state: KeyState, time: u32) {
+    fn on_keyboard_input(&mut self, code: Keycode, state: KeyState, time: u32) {
         let keyboard = match self.seat.get_keyboard() {
             Some(keyboard) => keyboard,
             None => return,
@@ -797,23 +795,23 @@ impl Catacomb {
 
         // Set desired modifiers.
         for old_mod in &old_mods {
-            self.on_keyboard_input(*old_mod, KeyState::Released, 0);
+            self.on_keyboard_input(Keycode::new(*old_mod), KeyState::Released, 0);
         }
         for new_mod in &new_mods {
-            self.on_keyboard_input(*new_mod, KeyState::Pressed, 0);
+            self.on_keyboard_input(Keycode::new(*new_mod), KeyState::Pressed, 0);
         }
 
         // Send the key itself.
         let raw_keycode = keycode.raw() - 8;
-        self.on_keyboard_input(raw_keycode, KeyState::Pressed, 0);
-        self.on_keyboard_input(raw_keycode, KeyState::Released, 0);
+        self.on_keyboard_input(Keycode::new(raw_keycode), KeyState::Pressed, 0);
+        self.on_keyboard_input(Keycode::new(raw_keycode), KeyState::Released, 0);
 
         // Restore previous modifier state.
         for new_mod in &new_mods {
-            self.on_keyboard_input(*new_mod, KeyState::Released, 0);
+            self.on_keyboard_input(Keycode::new(*new_mod), KeyState::Released, 0);
         }
         for old_mod in &old_mods {
-            self.on_keyboard_input(*old_mod, KeyState::Pressed, 0);
+            self.on_keyboard_input(Keycode::new(*old_mod), KeyState::Pressed, 0);
         }
     }
 
@@ -915,10 +913,11 @@ impl Catacomb {
         let mut codes = Vec::new();
 
         // Iterate over all keycodes with the current layout to check for matches.
-        keyboard.with_xkb_state(self, |context| {
-            let layout = context.active_layout();
-            context.keymap().key_for_each(|_keymap, keycode| {
-                let matches = context
+        keyboard.with_xkb_state(self, |context| unsafe {
+            let xkb = context.xkb().lock().unwrap();
+            let layout = xkb.active_layout();
+            xkb.keymap().key_for_each(|_keymap, keycode| {
+                let matches = xkb
                     .raw_syms_for_key_in_layout(keycode, layout)
                     .iter()
                     .any(|sym| sym.raw() == keysym);

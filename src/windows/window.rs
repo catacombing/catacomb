@@ -1074,7 +1074,7 @@ impl PresentationCallback {
 /// Helper for applying constraints to popup locations.
 struct PopupConstrainer<'a>(&'a mut PositionerState);
 
-impl<'a> PopupConstrainer<'a> {
+impl PopupConstrainer<'_> {
     /// Get the popup's constrained location.
     fn constrained_location(
         &mut self,
@@ -1189,7 +1189,7 @@ impl<'a> PopupConstrainer<'a> {
     }
 }
 
-impl<'a> Deref for PopupConstrainer<'a> {
+impl Deref for PopupConstrainer<'_> {
     type Target = PositionerState;
 
     fn deref(&self) -> &Self::Target {
@@ -1197,7 +1197,7 @@ impl<'a> Deref for PopupConstrainer<'a> {
     }
 }
 
-impl<'a> DerefMut for PopupConstrainer<'a> {
+impl DerefMut for PopupConstrainer<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.0
     }

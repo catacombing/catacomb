@@ -469,7 +469,7 @@ impl CatacombSurfaceData {
                 self.scale = attributes.buffer_scale;
                 self.transform = attributes.buffer_transform.into();
                 self.buffer_size = buffer_dimensions(&buffer, self.scale, self.transform);
-                self.buffer = Some(Buffer::from(buffer));
+                self.buffer = Some(Buffer::with_implicit(buffer));
                 self.texture = None;
 
                 // Check for viewporter src/dst.
