@@ -30,7 +30,7 @@ pub const HOLD_DURATION: Duration = Duration::from_secs(1);
 const MAX_DOUBLE_TAP_DURATION: Duration = Duration::from_millis(300);
 
 /// Square of the maximum distance between taps to be considered a double-tap.
-const MAX_DOUBLE_TAP_DISTANCE: f64 = 400.;
+const MAX_DOUBLE_TAP_DISTANCE: f64 = 2000.;
 
 /// Square of the maximum distance before touch input is considered a drag.
 const MAX_TAP_DISTANCE: f64 = 400.;
@@ -340,8 +340,8 @@ impl Catacomb {
 
     /// Process new input events.
     pub fn handle_input<I: InputBackend>(&mut self, event: InputEvent<I>) {
-        // Ignore non-keyboard input events while the screen is off.
-        if !self.display_on && !matches!(event, InputEvent::Keyboard { .. }) {
+        // Ignore events captured while the display is off.
+        if !self.display_on && self.handle_display_off_input(&event) {
             return;
         }
 
@@ -413,6 +413,56 @@ impl Catacomb {
 
         // Wakeup rendering.
         self.unstall();
+    }
+
+    /// Handle input while display is turned off.
+    ///
+    /// This will return `true` if the event should be suppressed.
+    fn handle_display_off_input<I: InputBackend>(&mut self, event: &InputEvent<I>) -> bool {
+        match event {
+            // Allow keyboard input while screen is off.
+            InputEvent::Keyboard { .. } => return false,
+            InputEvent::TouchDown { event } => {
+                let position = self.transform_position(event);
+                let event_type = TouchEventType::Down;
+                let event = TouchEvent::new(event_type, event.slot(), event.time_msec(), position);
+                self.touch_state.events.push(event);
+            },
+            InputEvent::TouchUp { event } => {
+                let position = self.touch_state.position;
+                let event_type = TouchEventType::Up;
+                let event = TouchEvent::new(event_type, event.slot(), event.time_msec(), position);
+                self.touch_state.events.push(event);
+            },
+            InputEvent::TouchFrame { .. } => {
+                for i in 0..self.touch_state.events.len() {
+                    let event = self.touch_state.events[i];
+                    match event.ty {
+                        TouchEventType::Down => {
+                            let canvas = self.windows.canvas();
+                            self.touch_state.start(canvas, event.slot, event.position);
+                        },
+                        TouchEventType::Up if self.touch_state.slot == Some(event.slot) => {
+                            self.touch_state.slot = None;
+                            match self.touch_state.action(self.windows.canvas()) {
+                                Some(TouchAction::Tap) => {
+                                    self.touch_state.last_tap =
+                                        Some((Instant::now(), event.position));
+                                },
+                                Some(TouchAction::DoubleTap) => self.set_display_status(true),
+                                _ => (),
+                            }
+                        },
+                        _ => (),
+                    }
+                }
+                self.seat.get_touch().unwrap().frame(self);
+                self.touch_state.events.clear();
+            },
+            _ => (),
+        }
+
+        true
     }
 
     /// Handle new touch input start.
