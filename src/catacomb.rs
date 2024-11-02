@@ -115,10 +115,10 @@ pub struct Catacomb {
     pub touch_state: TouchState,
     pub frame_pacer: FramePacer,
     pub seat_name: String,
+    pub display_on: bool,
     pub windows: Windows,
     pub seat: Seat<Self>,
     pub terminated: bool,
-    pub sleeping: bool,
     pub backend: Udev,
 
     // Smithay state.
@@ -317,13 +317,13 @@ impl Catacomb {
             backend,
             seat,
             accelerometer_token: accel_token,
+            display_on: true,
             idle_inhibitors: Default::default(),
             key_bindings: Default::default(),
             ime_override: Default::default(),
             frame_pacer: Default::default(),
             last_focus: Default::default(),
             terminated: Default::default(),
-            sleeping: Default::default(),
             stalled: Default::default(),
             locker: Default::default(),
         }
@@ -341,7 +341,7 @@ impl Catacomb {
     #[cfg_attr(feature = "profiling", profiling::function)]
     pub fn create_frame(&mut self) {
         // Skip rendering while the screen is off.
-        if self.sleeping {
+        if !self.display_on {
             self.stalled = true;
             return;
         }
@@ -442,11 +442,11 @@ impl Catacomb {
     }
 
     /// Set output power mode.
-    pub fn set_sleep(&mut self, sleep: bool) {
-        self.sleeping = sleep;
+    pub fn set_display_status(&mut self, on: bool) {
+        self.display_on = on;
 
-        // Pause accelerometer checks during sleep.
-        if sleep {
+        // Pause accelerometer checks while display is off.
+        if on {
             trace_error!(self.event_loop.disable(&self.accelerometer_token));
         } else if !self.windows.orientation_locked() {
             trace_error!(self.event_loop.enable(&self.accelerometer_token));
@@ -456,7 +456,7 @@ impl Catacomb {
             self.idle_notifier_state.notify_activity(&self.seat);
         }
 
-        self.backend.set_sleep(sleep);
+        self.backend.set_display_status(on);
     }
 
     /// Lock the output's orientation.

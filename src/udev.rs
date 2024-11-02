@@ -222,17 +222,17 @@ impl Udev {
         trace_error!(self.session.change_vt(vt));
     }
 
-    /// Set power saving state.
-    pub fn set_sleep(&mut self, sleep: bool) {
+    /// Set output power saving state.
+    pub fn set_display_status(&mut self, on: bool) {
         let output_device = match &mut self.output_device {
             Some(output_device) => output_device,
             None => return,
         };
 
-        output_device.set_enabled(!sleep);
+        output_device.set_enabled(on);
 
         // Request immediate redraw, so vblanks start coming in again.
-        if !sleep {
+        if on {
             self.schedule_redraw(Duration::ZERO);
         }
     }

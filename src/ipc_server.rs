@@ -148,9 +148,11 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
                 binding.app_id.base() != app_id || binding.key != key || binding.mods != mods
             });
         },
-        IpcMessage::Dpms { state: Some(state) } => catacomb.set_sleep(state == DpmsState::Off),
+        IpcMessage::Dpms { state: Some(state) } => {
+            catacomb.set_display_status(state == DpmsState::On)
+        },
         IpcMessage::Dpms { state: None } => {
-            let state = if catacomb.sleeping { DpmsState::Off } else { DpmsState::On };
+            let state = if catacomb.display_on { DpmsState::On } else { DpmsState::Off };
             send_reply(&mut stream, &IpcMessage::DpmsReply { state });
         },
         // Ignore IPC replies.

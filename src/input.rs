@@ -29,6 +29,9 @@ pub const HOLD_DURATION: Duration = Duration::from_secs(1);
 /// Maximum time between taps to be considered a double-tap.
 const MAX_DOUBLE_TAP_DURATION: Duration = Duration::from_millis(300);
 
+/// Square of the maximum distance between taps to be considered a double-tap.
+const MAX_DOUBLE_TAP_DISTANCE: f64 = 400.;
+
 /// Square of the maximum distance before touch input is considered a drag.
 const MAX_TAP_DISTANCE: f64 = 400.;
 
@@ -47,6 +50,7 @@ pub struct TouchState {
     pub user_gestures: Vec<GestureBinding>,
     pub position: Point<f64, Logical>,
 
+    last_tap: Option<(Instant, Point<f64, Logical>)>,
     pending_single_tap: Option<RegistrationToken>,
     event_loop: LoopHandle<'static, Catacomb>,
     velocity_timer: Option<RegistrationToken>,
@@ -57,7 +61,6 @@ pub struct TouchState {
     events: Vec<TouchEvent>,
     slot: Option<TouchSlot>,
     start: TouchStart,
-    last_tap: Instant,
     is_drag: bool,
 }
 
@@ -65,13 +68,13 @@ impl TouchState {
     pub fn new(event_loop: LoopHandle<'static, Catacomb>) -> Self {
         Self {
             event_loop,
-            last_tap: Instant::now(),
             pending_single_tap: Default::default(),
             velocity_timer: Default::default(),
             input_surface: Default::default(),
             user_gestures: Default::default(),
             active_app_id: Default::default(),
             tap_surface: Default::default(),
+            last_tap: Default::default(),
             position: Default::default(),
             velocity: Default::default(),
             is_drag: Default::default(),
@@ -162,11 +165,22 @@ impl TouchState {
             return Some(TouchAction::Drag);
         }
 
-        if self.last_tap.elapsed() <= MAX_DOUBLE_TAP_DURATION {
-            (!touching).then_some(TouchAction::DoubleTap)
-        } else {
-            (!touching).then_some(TouchAction::Tap)
+        // Only report taps after release.
+        if touching {
+            return None;
         }
+
+        // Report double-taps.
+        if let Some(last_tap) = self.last_tap.take() {
+            let last_tap_delta = last_tap.1 - self.position;
+            if last_tap.0.elapsed() <= MAX_DOUBLE_TAP_DURATION
+                && last_tap_delta.x.powi(2) + last_tap_delta.y.powi(2) <= MAX_DOUBLE_TAP_DISTANCE
+            {
+                return Some(TouchAction::DoubleTap);
+            }
+        }
+
+        Some(TouchAction::Tap)
     }
 
     /// Find gestures matching an origin point.
@@ -327,7 +341,7 @@ impl Catacomb {
     /// Process new input events.
     pub fn handle_input<I: InputBackend>(&mut self, event: InputEvent<I>) {
         // Ignore non-keyboard input events while the screen is off.
-        if self.sleeping && !matches!(event, InputEvent::Keyboard { .. }) {
+        if !self.display_on && !matches!(event, InputEvent::Keyboard { .. }) {
             return;
         }
 
@@ -480,7 +494,7 @@ impl Catacomb {
                 let pending_single_tap =
                     self.event_loop.insert_source(timer, Self::on_single_tap).unwrap();
                 self.touch_state.pending_single_tap = Some(pending_single_tap);
-                self.touch_state.last_tap = Instant::now();
+                self.touch_state.last_tap = Some((Instant::now(), self.touch_state.position));
             },
             Some(TouchAction::DoubleTap) => {
                 // Cancel single-tap.
