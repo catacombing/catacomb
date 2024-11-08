@@ -450,9 +450,11 @@ impl Catacomb {
             trace_error!(self.event_loop.disable(&self.accelerometer_token));
         } else if !self.windows.orientation_locked() {
             trace_error!(self.event_loop.enable(&self.accelerometer_token));
+        }
 
-            // Count wakeup as activity, to ensure that clients like wayidle receive a
-            // resume and new idle events after waking the monitor back up.
+        // Count wakeup as activity, to ensure that clients like wayidle receive a
+        // resume and new idle events after waking the monitor back up.
+        if !on {
             self.idle_notifier_state.notify_activity(&self.seat);
         }
 
