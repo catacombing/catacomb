@@ -449,7 +449,6 @@ impl Catacomb {
                                     self.touch_state.last_tap =
                                         Some((Instant::now(), event.position));
                                 },
-                                // TODO: Update idle timeout.
                                 Some(TouchAction::DoubleTap) => self.set_display_status(true),
                                 _ => (),
                             }

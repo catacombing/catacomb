@@ -447,15 +447,15 @@ impl Catacomb {
 
         // Pause accelerometer checks while display is off.
         if on {
-            trace_error!(self.event_loop.disable(&self.accelerometer_token));
-        } else if !self.windows.orientation_locked() {
-            trace_error!(self.event_loop.enable(&self.accelerometer_token));
-        }
-
-        // Count wakeup as activity, to ensure that clients like wayidle receive a
-        // resume and new idle events after waking the monitor back up.
-        if !on {
+            // Count wakeup as activity, to ensure that clients like wayidle receive a
+            // resume and new idle events after waking the monitor back up.
             self.idle_notifier_state.notify_activity(&self.seat);
+
+            if !self.windows.orientation_locked() {
+                trace_error!(self.event_loop.enable(&self.accelerometer_token));
+            }
+        } else {
+            trace_error!(self.event_loop.disable(&self.accelerometer_token));
         }
 
         self.backend.set_display_status(on);
