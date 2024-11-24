@@ -486,7 +486,7 @@ impl Catacomb {
             // Check if surface captures shortcuts.
             let inhibits_shortcuts = compositor::with_states(&input_surface.surface, |states| {
                 let data = states.data_map.get::<CatacombSurfaceData>();
-                data.map_or(false, |data| data.inhibits_shortcuts)
+                data.is_some_and(|data| data.inhibits_shortcuts)
             });
 
             // Check if there's a gesture for this touch event.
@@ -906,10 +906,10 @@ impl Catacomb {
         state: KeyState,
     ) -> FilterResult<InputAction> {
         // Check if focused surface inhibits shortcuts.
-        let inhibits_shortcuts = catacomb.last_focus().map_or(false, |surface| {
+        let inhibits_shortcuts = catacomb.last_focus().is_some_and(|surface| {
             compositor::with_states(surface, |states| {
                 let data = states.data_map.get::<CatacombSurfaceData>();
-                data.map_or(false, |data| data.inhibits_shortcuts)
+                data.is_some_and(|data| data.inhibits_shortcuts)
             })
         });
         if inhibits_shortcuts {

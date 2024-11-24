@@ -255,9 +255,9 @@ impl Layouts {
             let secondary = layout.secondary.as_deref().map(RefCell::borrow_mut);
 
             // Determine window which might need resizing.
-            let growing_window = if primary.as_ref().map_or(false, |win| &win.surface == surface) {
+            let growing_window = if primary.as_ref().is_some_and(|win| &win.surface == surface) {
                 secondary
-            } else if secondary.as_ref().map_or(false, |win| &win.surface == surface) {
+            } else if secondary.as_ref().is_some_and(|win| &win.surface == surface) {
                 primary
             } else {
                 continue;
@@ -621,7 +621,7 @@ impl Layout {
         let secondary = self.secondary.as_deref().map(RefCell::borrow_mut);
 
         if let Some(mut primary) = primary {
-            let secondary_alive = secondary.as_ref().map_or(false, |window| window.alive());
+            let secondary_alive = secondary.as_ref().is_some_and(|window| window.alive());
             let rectangle = output.primary_rectangle(secondary_alive);
             primary.set_dimensions(output.scale(), rectangle);
         }

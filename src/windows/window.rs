@@ -24,7 +24,7 @@ use smithay::wayland::compositor::{
 };
 use smithay::wayland::fractional_scale;
 use smithay::wayland::presentation::{
-    PresentationFeedbackCachedState, PresentationFeedbackCallback,
+    PresentationFeedbackCachedState, PresentationFeedbackCallback, Refresh,
 };
 use smithay::wayland::shell::wlr_layer::{
     Anchor, ExclusiveZone, KeyboardInteractivity, Layer, LayerSurfaceCachedState,
@@ -366,7 +366,7 @@ impl<S: Surface + 'static> Window<S> {
             return;
         }
 
-        let refresh = output.frame_interval();
+        let refresh = Refresh::Fixed(output.frame_interval());
         let output = output.smithay_output();
 
         // Try to get monitor clock.
@@ -386,7 +386,7 @@ impl<S: Surface + 'static> Window<S> {
 
         for PresentationCallback { callback, surface } in self.presentation_callbacks.drain(..) {
             // Set zero-copy flag if direct scanout was used.
-            let zero_copy = states.element_render_state(&surface).map_or(false, |states| {
+            let zero_copy = states.element_render_state(&surface).is_some_and(|states| {
                 states.presentation_state == RenderElementPresentationState::ZeroCopy
             });
             let flags = if zero_copy { FeedbackKind::ZeroCopy } else { flags };
@@ -743,10 +743,7 @@ impl<S: Surface + 'static> Window<S> {
         }
 
         for window in &mut self.popups {
-            popup = match window.add_popup(popup, parent) {
-                Some(popup) => popup,
-                None => return None,
-            };
+            popup = window.add_popup(popup, parent)?;
         }
 
         Some(popup)

@@ -873,7 +873,7 @@ impl Windows {
             View::Fullscreen(window) => {
                 window.borrow().dirty() || self.layers.overlay().any(Window::dirty)
             },
-            View::Lock(window) => window.as_ref().map_or(false, |window| window.dirty()),
+            View::Lock(window) => window.as_ref().is_some_and(|window| window.dirty()),
             View::DragAndDrop(_) => false,
         }
     }

@@ -811,9 +811,7 @@ impl XdgActivationHandler for Catacomb {
         };
 
         Seat::from_resource(&seat).as_ref() == Some(&self.seat)
-            && keyboard
-                .last_enter()
-                .map_or(false, |last_enter| serial.is_no_older_than(&last_enter))
+            && keyboard.last_enter().is_some_and(|last_enter| serial.is_no_older_than(&last_enter))
     }
 
     fn request_activation(

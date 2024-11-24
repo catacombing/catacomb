@@ -163,12 +163,12 @@ impl Overview {
                 };
 
                 // Check if click was within secondary window.
-                if layout.secondary().map_or(false, contains_point) {
+                if layout.secondary().is_some_and(contains_point) {
                     return Some(LayoutPosition::new(layout_index, true));
                 }
 
                 // Check if click was within primary window.
-                if layout.primary().map_or(false, contains_point) {
+                if layout.primary().is_some_and(contains_point) {
                     return Some(LayoutPosition::new(layout_index, false));
                 }
             }
