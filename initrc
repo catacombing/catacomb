@@ -1,20 +1,20 @@
 #!/bin/sh
 
-# This configuration file describes a minimal example for a usable mobile
-# experience.
+# This configuration file describes a minimal example for a Catacomb config.
 #
 # The following applications should be installed or replaced:
 # - tremor: Used for vibration effects (https://github.com/catacombing/tremor)
 # - epitaph: Panel (https://github.com/catacombing/epitaph)
 # - tzompantli: Application launcher (https://github.com/catacombing/tzompantli)
 # - squeekboard: Virtual Keyboard (https://gitlab.gnome.org/World/Phosh/squeekboard)
+# - swayidle: Automatic idle timeouts (https://github.com/swaywm/sway)
 
 # Exit on error
 set -e
 
 # Key Bindings
 
-# Ignore power-button press, to allow binding to it
+## Ignore power-button press, to allow binding to it
 systemd-inhibit --what handle-power-key sleep infinity &
 
 ## Launch `tzompantli` when holding the power button
@@ -34,8 +34,11 @@ catacomb msg bind-key '*' XF86PowerOff bash -c \
         fi \
     fi"
 
-# Per-application scale overrides
-catacomb msg scale --app-id firefox 1.5
+## Allow manually toggling the virtual keyboard
+catacomb msg bind-key '*' EnableVirtualKeyboard \
+    busctl call --user sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0 SetVisible b true
+catacomb msg bind-key '*' AutoVirtualKeyboard \
+    busctl call --user sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0 SetVisible b false
 
 # Spawn background apps
 squeekboard &

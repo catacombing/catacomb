@@ -99,7 +99,7 @@ use crate::{daemon, delegate_screencopy, delegate_single_pixel_buffer, ipc_serve
 const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The script to run after compositor start.
-const POST_START_SCRIPT: &str = "post_start.sh";
+const INIT_EXEC: &str = "initrc";
 
 /// Number of frames considered for best-case rendering times.
 const RECENT_FRAME_COUNT: usize = 16;
@@ -287,7 +287,7 @@ impl Catacomb {
         // Run user startup script.
         if let Some(mut script_path) = dirs::config_dir() {
             script_path.push("catacomb");
-            script_path.push(POST_START_SCRIPT);
+            script_path.push(INIT_EXEC);
 
             if let Err(err) = crate::daemon(script_path.as_os_str(), []) {
                 error!("Unable to launch {script_path:?}: {err}");

@@ -21,10 +21,9 @@ Documentation for available configuration options is available under `catacomb
 msg -h`.
 
 For persistent configuration or to launch applications on startup, Catacomb
-automatically loads `$XDG_CONFIG_HOME/catacomb/post_start.sh` (or
-`~/.config/catacomb/post_start.sh` if `XDG_CONFIG_HOME` is not defined).
+automatically executes `${XDG_CONFIG_HOME:-~/.config}/catacomb/initrc`.
 
-You can find an example configuration [here](./post_start.sh).
+You can find an example configuration [here](./initrc).
 
 ## Controls
 
