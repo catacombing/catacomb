@@ -46,7 +46,7 @@ use smithay::reexports::wayland_protocols::wp::linux_dmabuf as _linux_dmabuf;
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_shm;
 use smithay::reexports::wayland_server::DisplayHandle;
-use smithay::utils::{DevPath, DeviceFd, Physical, Rectangle, Size, Transform};
+use smithay::utils::{DevPath, DeviceFd, Logical, Physical, Point, Rectangle, Size, Transform};
 use smithay::wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder};
 use smithay::wayland::{dmabuf, shm};
 use tracing::{debug, error};
@@ -240,13 +240,17 @@ impl Udev {
     /// Render a frame.
     ///
     /// Will return `true` if something was rendered.
-    pub fn render(&mut self, windows: &mut Windows) -> bool {
+    pub fn render(
+        &mut self,
+        windows: &mut Windows,
+        cursor_position: Option<Point<f64, Logical>>,
+    ) -> bool {
         let output_device = match &mut self.output_device {
             Some(output_device) => output_device,
             None => return false,
         };
 
-        match output_device.render(&self.event_loop, windows) {
+        match output_device.render(&self.event_loop, windows, cursor_position) {
             Ok(rendered) => rendered,
             Err(err) => {
                 error!("{err}");
@@ -600,13 +604,14 @@ impl OutputDevice {
         &mut self,
         event_loop: &LoopHandle<'static, Catacomb>,
         windows: &mut Windows,
+        cursor_position: Option<Point<f64, Logical>>,
     ) -> Result<bool, Box<dyn Error>> {
         let scale = windows.output().scale();
 
         // Update output mode since we're using static for transforms.
         self.drm_compositor.set_output_mode_source(windows.canvas().into());
 
-        let textures = windows.textures(&mut self.gles, &mut self.graphics);
+        let textures = windows.textures(&mut self.gles, &mut self.graphics, cursor_position);
         let mut frame_result =
             self.drm_compositor.render_frame(&mut self.gles, textures, CLEAR_COLOR)?;
         let rendered = !frame_result.is_empty;
@@ -631,7 +636,7 @@ impl OutputDevice {
                     return Err(format!("unsupported buffer format: {buffer_type:?}").into());
                 }
 
-                self.copy_framebuffer_shm(windows, region, buffer)?
+                self.copy_framebuffer_shm(windows, cursor_position, region, buffer)?
             };
 
             // Wait for OpenGL sync to submit screencopy, frame.
@@ -688,6 +693,7 @@ impl OutputDevice {
     fn copy_framebuffer_shm(
         &mut self,
         windows: &mut Windows,
+        cursor_position: Option<Point<f64, Logical>>,
         region: Rectangle<i32, Physical>,
         buffer: &WlBuffer,
     ) -> Result<SyncPoint, Box<dyn Error>> {
@@ -706,7 +712,7 @@ impl OutputDevice {
         let damage = transform.transform_rect_in(region, &output_size);
 
         // Collect textures for rendering.
-        let textures = windows.textures(&mut self.gles, &mut self.graphics);
+        let textures = windows.textures(&mut self.gles, &mut self.graphics, cursor_position);
 
         // Initialize the buffer to our clear color.
         let mut frame = self.gles.render(output_size, transform)?;

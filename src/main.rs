@@ -4,7 +4,7 @@ use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::{env, io, ptr};
 
-use catacomb_ipc::{DpmsState, IpcMessage};
+use catacomb_ipc::{CliToggle, IpcMessage};
 use clap::{Parser, Subcommand};
 #[cfg(feature = "profiling")]
 use profiling::puffin;
@@ -58,8 +58,8 @@ pub fn main() {
     match Options::parse().subcommands {
         Some(Subcommands::Msg(msg)) => match catacomb_ipc::send_message(&msg) {
             Err(err) => eprintln!("\x1b[31merror\x1b[0m: {err}"),
-            Ok(Some(IpcMessage::DpmsReply { state: DpmsState::On })) => println!("on"),
-            Ok(Some(IpcMessage::DpmsReply { state: DpmsState::Off })) => println!("off"),
+            Ok(Some(IpcMessage::DpmsReply { state: CliToggle::On })) => println!("on"),
+            Ok(Some(IpcMessage::DpmsReply { state: CliToggle::Off })) => println!("off"),
             Ok(_) => (),
         },
         None => udev::run(),

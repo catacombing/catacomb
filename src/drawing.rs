@@ -41,13 +41,19 @@ const DROP_TARGET_RGBA: [u8; 4] = [32, 32, 32, 64];
 const GESTURE_NOTCH_PERCENTAGE: f64 = 0.2;
 
 /// Gesture handle color with automatic IME control.
-const GESTURE_HANDLE_DEFAULT_RGBA: [u8; 3] = [255; 3];
+const GESTURE_HANDLE_DEFAULT_RGB: [u8; 3] = [255; 3];
 
 /// Gesture handle color with IME force-enabled.
-const GESTURE_HANDLE_LOCKED_RGBA: [u8; 3] = [42, 117, 42];
+const GESTURE_HANDLE_LOCKED_RGB: [u8; 3] = [42, 117, 42];
 
 /// Gesture handle color with IME force-disabled.
-const GESTURE_HANDLE_BLOCKED_RGBA: [u8; 3] = [117, 42, 42];
+const GESTURE_HANDLE_BLOCKED_RGB: [u8; 3] = [117, 42, 42];
+
+/// Color of the touch cursor.
+const CURSOR_RGBA: [u8; 4] = [86, 33, 33, 192];
+
+/// Width and height of the touch cursor texture.
+const CURSOR_SIZE: f64 = 32.;
 
 /// Cached texture.
 ///
@@ -344,6 +350,7 @@ pub struct Graphics {
     gesture_handle_default: Option<RenderTexture>,
     gesture_handle_blocked: Option<RenderTexture>,
     gesture_handle_locked: Option<RenderTexture>,
+    cursor: Option<RenderTexture>,
 }
 
 impl Graphics {
@@ -351,7 +358,6 @@ impl Graphics {
         let active_drop_target =
             Texture::from_buffer(renderer, 1., &ACTIVE_DROP_TARGET_RGBA, 1, 1, false);
         let drop_target = Texture::from_buffer(renderer, 1., &DROP_TARGET_RGBA, 1, 1, false);
-
         let urgency_icon = Texture::from_buffer(renderer, 1., &URGENCY_ICON_RGBA, 1, 1, true);
 
         Self {
@@ -361,6 +367,7 @@ impl Graphics {
             gesture_handle_default: None,
             gesture_handle_blocked: None,
             gesture_handle_locked: None,
+            cursor: None,
         }
     }
 
@@ -372,9 +379,9 @@ impl Graphics {
         ime_override: Option<bool>,
     ) -> RenderTexture {
         let (handle, color) = match ime_override {
-            None => (&mut self.gesture_handle_default, GESTURE_HANDLE_DEFAULT_RGBA),
-            Some(true) => (&mut self.gesture_handle_locked, GESTURE_HANDLE_LOCKED_RGBA),
-            Some(false) => (&mut self.gesture_handle_blocked, GESTURE_HANDLE_BLOCKED_RGBA),
+            None => (&mut self.gesture_handle_default, GESTURE_HANDLE_DEFAULT_RGB),
+            Some(true) => (&mut self.gesture_handle_locked, GESTURE_HANDLE_LOCKED_RGB),
+            Some(false) => (&mut self.gesture_handle_blocked, GESTURE_HANDLE_BLOCKED_RGB),
         };
 
         // Initialize texture or replace it after scale change.
@@ -411,6 +418,34 @@ impl Graphics {
 
         // SAFETY: The code above ensures the `Option` is `Some`.
         unsafe { handle.clone().unwrap_unchecked() }
+    }
+
+    /// Get texture for the touch cursor.
+    pub fn cursor(&mut self, renderer: &mut GlesRenderer, canvas: &Canvas) -> RenderTexture {
+        let scale = canvas.scale();
+        let size = (CURSOR_SIZE * scale).round() as i32;
+        if self.cursor.as_ref().map_or(true, |cursor| {
+            cursor.texture.width() != size as u32 || cursor.texture.height() != size as u32
+        }) {
+            // Create a texture with a circle inside it.
+            let mut buffer = vec![0; (size * size * 4) as usize];
+            for x in 0..size {
+                let x_delta = (size as f64 / 2. - x as f64).floor();
+                for y in 0..size {
+                    let y_delta = (size as f64 / 2. - y as f64).floor();
+                    if x_delta.powi(2) + y_delta.powi(2) <= (size as f64 / 2.).powi(2) {
+                        let offset = (y * size + x) as usize * 4;
+                        buffer[offset..offset + 4].copy_from_slice(&CURSOR_RGBA);
+                    }
+                }
+            }
+
+            let texture = Texture::from_buffer(renderer, scale, &buffer, size, size, false);
+            self.cursor = Some(RenderTexture(Rc::new(texture)));
+        }
+
+        // SAFETY: The code above ensures the `Option` is `Some`.
+        unsafe { self.cursor.clone().unwrap_unchecked() }
     }
 }
 

@@ -141,11 +141,16 @@ pub enum IpcMessage {
     /// Output power management.
     Dpms {
         /// Desired power management state; leave empty to get current state.
-        state: Option<DpmsState>,
+        state: Option<CliToggle>,
     },
     /// Reply for DPMS state request.
     #[cfg_attr(feature = "clap", clap(skip))]
-    DpmsReply { state: DpmsState },
+    DpmsReply { state: CliToggle },
+    /// Set touch cursor visibility.
+    Cursor {
+        /// Desired touch cursor visibility.
+        state: CliToggle,
+    },
 }
 
 /// Device orientation.
@@ -192,10 +197,10 @@ impl Orientation {
     }
 }
 
-/// Output power state.
+/// Cli argument that allows enabling or disabling a system.
 #[cfg_attr(feature = "clap", derive(ValueEnum))]
 #[derive(Deserialize, Serialize, PartialEq, Eq, Copy, Clone, Debug)]
-pub enum DpmsState {
+pub enum CliToggle {
     On,
     Off,
 }

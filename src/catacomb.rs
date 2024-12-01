@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use std::{cmp, env};
+use std::{cmp, env, mem};
 
 use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use _server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as ManagerMode;
@@ -26,7 +26,7 @@ use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, Resource};
-use smithay::utils::{Logical, Rectangle, Serial, SERIAL_COUNTER};
+use smithay::utils::{Logical, Point, Rectangle, Serial, SERIAL_COUNTER};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor;
 use smithay::wayland::compositor::{CompositorClientState, CompositorHandler, CompositorState};
@@ -114,6 +114,7 @@ pub struct Catacomb {
     pub key_bindings: Vec<KeyBinding>,
     pub touch_state: TouchState,
     pub frame_pacer: FramePacer,
+    pub draw_cursor: bool,
     pub seat_name: String,
     pub display_on: bool,
     pub windows: Windows,
@@ -137,6 +138,7 @@ pub struct Catacomb {
     seat_state: SeatState<Self>,
     shm_state: ShmState,
 
+    last_cursor_position: Option<Point<f64, Logical>>,
     accelerometer_token: RegistrationToken,
     idle_inhibitors: Vec<WlSurface>,
     last_focus: Option<WlSurface>,
@@ -318,10 +320,12 @@ impl Catacomb {
             seat,
             accelerometer_token: accel_token,
             display_on: true,
+            last_cursor_position: Default::default(),
             idle_inhibitors: Default::default(),
             key_bindings: Default::default(),
             ime_override: Default::default(),
             frame_pacer: Default::default(),
+            draw_cursor: Default::default(),
             last_focus: Default::default(),
             terminated: Default::default(),
             stalled: Default::default(),
@@ -369,15 +373,19 @@ impl Catacomb {
         let inhibited = inhibitors.any(|surface| self.windows.surface_visible(surface));
         self.idle_notifier_state.set_is_inhibited(inhibited);
 
+        // Check whether touch cursor should be drawn.
+        let cursor_position = self.touch_state.position().filter(|_| self.draw_cursor);
+        let last_cursor_position = mem::replace(&mut self.last_cursor_position, cursor_position);
+
         // Redraw only when there is damage present.
-        if self.windows.damaged() {
+        if self.windows.damaged() || last_cursor_position != cursor_position {
             // Apply pending client updates.
             if let Some(renderer) = self.backend.renderer() {
                 self.windows.import_buffers(renderer);
             }
 
             // Draw all visible clients.
-            let rendered = self.backend.render(&mut self.windows);
+            let rendered = self.backend.render(&mut self.windows, cursor_position);
 
             // Update render time prediction.
             let frame_interval = self.output().frame_interval();

@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
-use catacomb_ipc::{AppIdMatcher, DpmsState, IpcMessage, Keysym, WindowScale};
+use catacomb_ipc::{AppIdMatcher, CliToggle, IpcMessage, Keysym, WindowScale};
 use smithay::reexports::calloop::LoopHandle;
 use tracing::{error, warn};
 
@@ -149,11 +149,14 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
             });
         },
         IpcMessage::Dpms { state: Some(state) } => {
-            catacomb.set_display_status(state == DpmsState::On)
+            catacomb.set_display_status(state == CliToggle::On)
         },
         IpcMessage::Dpms { state: None } => {
-            let state = if catacomb.display_on { DpmsState::On } else { DpmsState::Off };
+            let state = if catacomb.display_on { CliToggle::On } else { CliToggle::Off };
             send_reply(&mut stream, &IpcMessage::DpmsReply { state });
+        },
+        IpcMessage::Cursor { state } => {
+            catacomb.draw_cursor = state == CliToggle::On;
         },
         // Ignore IPC replies.
         IpcMessage::DpmsReply { .. } => (),

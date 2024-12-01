@@ -368,6 +368,7 @@ impl Windows {
         &mut self,
         renderer: &mut GlesRenderer,
         graphics: &mut Graphics,
+        cursor_position: Option<Point<f64, Logical>>,
     ) -> &[CatacombElement] {
         // Clear global damage.
         self.dirty = false;
@@ -392,6 +393,27 @@ impl Windows {
                 &mut self.textures,
                 gesture_handle,
                 handle_location,
+                bounds,
+                None,
+                scale,
+            );
+        }
+
+        // Render touch location cursor.
+        if let Some(cursor_position) = cursor_position {
+            let cursor = graphics.cursor(renderer, &self.canvas);
+
+            // Center texture around touch position.
+            let mut cursor_position = cursor_position.to_physical(scale).to_i32_round();
+            let mut bounds = cursor.geometry(scale.into());
+            cursor_position.x -= bounds.size.w / 2;
+            cursor_position.y -= bounds.size.h / 2;
+            bounds.loc = cursor_position;
+
+            CatacombElement::add_element(
+                &mut self.textures,
+                cursor,
+                cursor_position,
                 bounds,
                 None,
                 scale,

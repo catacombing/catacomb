@@ -48,7 +48,6 @@ const POINTER_TOUCH_SLOT: Option<u32> = Some(0);
 /// Touch input state.
 pub struct TouchState {
     pub user_gestures: Vec<GestureBinding>,
-    pub position: Point<f64, Logical>,
 
     last_tap: Option<(Instant, Point<f64, Logical>)>,
     pending_single_tap: Option<RegistrationToken>,
@@ -58,6 +57,7 @@ pub struct TouchState {
     tap_surface: Option<InputSurface>,
     active_app_id: Option<String>,
     velocity: Point<f64, Logical>,
+    position: Point<f64, Logical>,
     events: Vec<TouchEvent>,
     slot: Option<TouchSlot>,
     start: TouchStart,
@@ -116,6 +116,11 @@ impl TouchState {
     #[inline]
     pub fn touching(&self) -> bool {
         self.slot.is_some()
+    }
+
+    /// Get current touch location.
+    pub fn position(&self) -> Option<Point<f64, Logical>> {
+        self.slot.map(|_| self.position)
     }
 
     /// Get the updated active touch action.
@@ -568,6 +573,10 @@ impl Catacomb {
 
     /// Handle touch input movement.
     fn on_touch_motion(&mut self, event: TouchEvent) {
+        // Always update touch position to ensure accurate cursor location.
+        self.touch_state.velocity = event.position - self.touch_state.position;
+        self.touch_state.position = event.position;
+
         // Handle client input.
         if let Some(input_surface) = &self.touch_state.input_surface {
             // Convert position to pre-window scaling.
@@ -587,7 +596,6 @@ impl Catacomb {
             return;
         }
 
-        self.touch_state.velocity = event.position - self.touch_state.position;
         self.update_position(event.position);
     }
 
