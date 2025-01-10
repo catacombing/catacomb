@@ -14,7 +14,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install libudev-dev libdbus-1-dev libsystemd-dev \
-            libxkbcommon-dev libinput-dev libwayland-dev libseat-dev
+            libxkbcommon-dev libinput-dev libwayland-dev libseat-dev libgbm-dev
       - uses: actions/checkout@v2
       - name: Stable
         run: cargo test
