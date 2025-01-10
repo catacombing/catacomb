@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "A Wayland mobile compositor"
 authors = ["Christian Duerr <contact@christianduerr.com>"]
 repository = "https://github.com/catacombing/catacomb"
-rust-version = "1.74.0"
+rust-version = "1.80.1"
 license = "GPL-3.0"
 edition = "2021"
 
