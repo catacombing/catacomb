@@ -217,20 +217,20 @@ impl<N: Coordinate, K> SubtractRectFast<N, K> for Vec<Rectangle<N, K>> {
 
             // Push all the resulting non-empty rectangles.
 
-            let top_size = (rect.size.w, overlap.loc.y.saturating_sub(rect.loc.y));
-            push_nonempty(Rectangle::from_loc_and_size(rect.loc, top_size));
+            let top_size = (rect.size.w, overlap.loc.y.saturating_sub(rect.loc.y)).into();
+            push_nonempty(Rectangle::new(rect.loc, top_size));
 
-            let left_loc = (rect.loc.x, overlap.loc.y);
-            let left_size = (overlap.loc.x.saturating_sub(rect.loc.x), overlap.size.h);
-            push_nonempty(Rectangle::from_loc_and_size(left_loc, left_size));
+            let left_loc = (rect.loc.x, overlap.loc.y).into();
+            let left_size = (overlap.loc.x.saturating_sub(rect.loc.x), overlap.size.h).into();
+            push_nonempty(Rectangle::new(left_loc, left_size));
 
             let right_loc = (overlap.loc.x.saturating_add(overlap.size.w), overlap.loc.y);
             let right_width = rect.loc.x.saturating_add(rect.size.w).saturating_sub(right_loc.0);
-            push_nonempty(Rectangle::from_loc_and_size(right_loc, (right_width, overlap.size.h)));
+            push_nonempty(Rectangle::new(right_loc.into(), (right_width, overlap.size.h).into()));
 
             let bottom_loc = (rect.loc.x, overlap.loc.y.saturating_add(overlap.size.h));
             let bottom_height = rect.loc.y.saturating_add(rect.size.h).saturating_sub(bottom_loc.1);
-            push_nonempty(Rectangle::from_loc_and_size(bottom_loc, (rect.size.w, bottom_height)));
+            push_nonempty(Rectangle::new(bottom_loc.into(), (rect.size.w, bottom_height).into()));
         }
 
         // Efficiently remove all processed rects from the front of the vec.

@@ -696,7 +696,7 @@ impl<S: Surface + 'static> Window<S> {
                     .get::<RefCell<CatacombSurfaceData>>()
                     .map_or_else(Size::default, |data| data.borrow().dst_size);
                 let surface_loc = location - geometry.loc.to_f64() - origin_delta.to_f64();
-                let surface_rect = Rectangle::from_loc_and_size(surface_loc, size.to_f64());
+                let surface_rect = Rectangle::new(surface_loc, size.to_f64());
 
                 // Get input region and its relative touch position.
                 let mut attributes = surface_data.cached_state.get::<SurfaceAttributes>();
@@ -930,7 +930,7 @@ impl Window<CatacombLayerSurface> {
             (output_size.h - size.h) / 2
         };
 
-        let dimensions = Rectangle::from_loc_and_size((x, y), size);
+        let dimensions = Rectangle::new((x, y).into(), size);
         self.set_dimensions(output.scale(), dimensions);
     }
 
@@ -1078,11 +1078,11 @@ impl PopupConstrainer<'_> {
         parent_size: Size<i32, Logical>,
         popup_size: Size<i32, Logical>,
     ) -> Point<i32, Logical> {
-        let bounds = Rectangle::from_loc_and_size((0, 0), parent_size);
+        let bounds = Rectangle::from_size(parent_size);
         let mut location = self.0.get_geometry().loc;
 
         // Skip if no constraint is necessary.
-        let rect = Rectangle::from_loc_and_size(location, popup_size);
+        let rect = Rectangle::new(location, popup_size);
         if bounds.contains_rect(rect) {
             return location;
         }
@@ -1127,7 +1127,7 @@ impl PopupConstrainer<'_> {
 
         // Return new location if flip solved our constraint violations.
         let new_location = self.get_geometry().loc;
-        let new_rect = Rectangle::from_loc_and_size(new_location, popup_size);
+        let new_rect = Rectangle::new(new_location, popup_size);
         if bounds.contains_rect(new_rect) {
             return new_location;
         }
@@ -1228,7 +1228,7 @@ mod tests {
     fn dummy_positioner() -> PositionerState {
         PositionerState {
             rect_size: (10, 10).into(),
-            anchor_rect: Rectangle::from_loc_and_size((0, 0), (10, 10)),
+            anchor_rect: Rectangle::from_size((10, 10)),
             anchor_edges: xdg_positioner::Anchor::TopLeft,
             gravity: Gravity::BottomRight,
             constraint_adjustment: ConstraintAdjustment::None,

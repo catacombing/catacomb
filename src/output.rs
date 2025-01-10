@@ -100,7 +100,7 @@ impl Output {
         } else {
             (available.size.w, available.size.h).into()
         };
-        Rectangle::from_loc_and_size(available.loc, size)
+        Rectangle::new(available.loc, size)
     }
 
     /// Secondary window dimensions.
@@ -110,11 +110,11 @@ impl Output {
         if available.size.h > available.size.w {
             let size: Size<i32, Logical> = (available.size.w, available.size.h / 2).into();
             loc.y += (available.size.h + 1) / 2;
-            Rectangle::from_loc_and_size(loc, size)
+            Rectangle::new(loc, size)
         } else {
             let size: Size<i32, Logical> = (available.size.w / 2, available.size.h).into();
             loc.x += (available.size.w + 1) / 2;
-            Rectangle::from_loc_and_size(loc, size)
+            Rectangle::new(loc, size)
         }
     }
 
@@ -230,7 +230,7 @@ impl Canvas {
         let mut size = self.wm_size();
         size.w -= *self.exclusive.left + self.exclusive.right;
         size.h -= *self.exclusive.top + self.exclusive.bottom;
-        Rectangle::from_loc_and_size(loc, size)
+        Rectangle::new(loc.into(), size)
     }
 
     /// Area of the output available in the application overview.
@@ -255,7 +255,7 @@ impl Canvas {
         let mut size = self.wm_size();
         size.w -= left + right;
         size.h -= top + bottom;
-        Rectangle::from_loc_and_size(loc, size)
+        Rectangle::new(loc.into(), size)
     }
 
     /// Area of the output available for fullscreen surfaces.
@@ -280,7 +280,7 @@ impl Canvas {
         let mut size = self.size();
         size.w -= left + right;
         size.h -= top + bottom;
-        Rectangle::from_loc_and_size(loc, size)
+        Rectangle::new(loc.into(), size)
     }
 
     /// Output fractional scale.

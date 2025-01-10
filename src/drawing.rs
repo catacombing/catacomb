@@ -84,7 +84,7 @@ impl Texture {
         opaque: bool,
     ) -> Self {
         let buffer_size = buffer_size.into();
-        let src_rect = Rectangle::from_loc_and_size((0, 0), buffer_size);
+        let src_rect = Rectangle::from_size(buffer_size);
 
         // Ensure fully opaque textures are treated as such.
         let opaque_regions = if opaque { vec![src_rect] } else { Vec::new() };
@@ -204,8 +204,7 @@ impl Element for RenderTexture {
 
     fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
         let scale = self.window_scale.map_or(scale.x, |window_scale| window_scale.scale(scale.x));
-        Rectangle::from_loc_and_size(self.location.get(), self.dst_size)
-            .to_physical_precise_round(scale)
+        Rectangle::new(self.location.get(), self.dst_size).to_physical_precise_round(scale)
     }
 
     fn damage_since(
@@ -218,7 +217,7 @@ impl Element for RenderTexture {
             // Fallback to fully damage.
             None => {
                 let size = self.geometry(scale).size;
-                return DamageSet::from_slice(&[Rectangle::from_loc_and_size((0, 0), size)]);
+                return DamageSet::from_slice(&[Rectangle::from_size(size)]);
             },
         };
 
@@ -519,9 +518,8 @@ impl CatacombSurfaceData {
                 };
 
                 // Fallback to buffer size without viewporter.
-                self.src_rect = viewport_src.unwrap_or_else(|| {
-                    Rectangle::from_loc_and_size((0.0, 0.0), self.buffer_size.to_f64())
-                });
+                self.src_rect =
+                    viewport_src.unwrap_or_else(|| Rectangle::from_size(self.buffer_size.to_f64()));
                 self.dst_size = viewport_dst.unwrap_or(self.buffer_size);
 
                 // Reset damage on buffer resize.

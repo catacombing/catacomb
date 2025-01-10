@@ -14,7 +14,9 @@ use profiling::puffin::GlobalProfiler;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBuffer, GbmBufferFlags, GbmDevice};
 use smithay::backend::allocator::Fourcc;
-use smithay::backend::drm::compositor::{DrmCompositor as SmithayDrmCompositor, RenderFrameResult};
+use smithay::backend::drm::compositor::{
+    DrmCompositor as SmithayDrmCompositor, FrameFlags, RenderFrameResult,
+};
 use smithay::backend::drm::gbm::GbmFramebuffer;
 use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent, DrmNode, DrmSurface};
 use smithay::backend::egl::context::EGLContext;
@@ -500,7 +502,7 @@ impl Udev {
             None,
             allocator,
             gbm.clone(),
-            SUPPORTED_COLOR_FORMATS,
+            SUPPORTED_COLOR_FORMATS.into_iter().copied(),
             formats,
             Size::default(),
             None,
@@ -612,8 +614,12 @@ impl OutputDevice {
         self.drm_compositor.set_output_mode_source(windows.canvas().into());
 
         let textures = windows.textures(&mut self.gles, &mut self.graphics, cursor_position);
-        let mut frame_result =
-            self.drm_compositor.render_frame(&mut self.gles, textures, CLEAR_COLOR)?;
+        let mut frame_result = self.drm_compositor.render_frame(
+            &mut self.gles,
+            textures,
+            CLEAR_COLOR,
+            FrameFlags::DEFAULT,
+        )?;
         let rendered = !frame_result.is_empty;
 
         // Update last render states.
@@ -623,7 +629,7 @@ impl OutputDevice {
         if let Some(mut screencopy) = self.screencopy.take() {
             // Mark entire buffer as damaged.
             let region = screencopy.region();
-            let damage = [Rectangle::from_loc_and_size((0, 0), region.size)];
+            let damage = [Rectangle::from_size(region.size)];
             screencopy.damage(&damage);
 
             let buffer = screencopy.buffer();
@@ -675,7 +681,7 @@ impl OutputDevice {
         gles.bind(buffer.clone())?;
 
         // Blit the framebuffer into the target buffer.
-        let damage = [Rectangle::from_loc_and_size((0, 0), region.size)];
+        let damage = [Rectangle::from_size(region.size)];
         let sync_point = frame_result.blit_frame_result(
             region.size,
             Transform::Normal,

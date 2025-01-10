@@ -292,8 +292,8 @@ impl HandleGesture {
     /// Check if a touch should start a new gesture.
     fn is_start(canvas: &Canvas, position: Point<f64, Logical>) -> bool {
         let canvas_size = canvas.size().to_f64();
-        let loc = (0., canvas_size.h - GESTURE_HANDLE_HEIGHT as f64);
-        Rectangle::from_loc_and_size(loc, canvas_size).contains(position)
+        let loc = (0., canvas_size.h - GESTURE_HANDLE_HEIGHT as f64).into();
+        Rectangle::new(loc, canvas_size).contains(position)
     }
 }
 

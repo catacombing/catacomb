@@ -226,7 +226,7 @@ impl Windows {
 
         // Set lock surface size.
         let mut window = Window::new(&[], surface, output_scale, surface_transform, None);
-        window.set_dimensions(output_scale, Rectangle::from_loc_and_size((0, 0), output_size));
+        window.set_dimensions(output_scale, Rectangle::from_size(output_size));
 
         // Update lockscreen.
         *lock_window = Some(window);
@@ -770,7 +770,7 @@ impl Windows {
                 Some(window.surface().clone())
             },
             View::Lock(Some(window)) => {
-                let rect = Rectangle::from_loc_and_size((0, 0), output_size);
+                let rect = Rectangle::from_size(output_size);
                 window.set_dimensions(scale, rect);
 
                 None
@@ -815,7 +815,7 @@ impl Windows {
                 }
             },
             View::Lock(Some(window)) => {
-                let rect = Rectangle::from_loc_and_size((0, 0), output_size);
+                let rect = Rectangle::from_size(output_size);
                 window.set_dimensions(output_scale, rect);
             },
             // Resize active XDG layout and layer shell in any other view.
@@ -1324,7 +1324,7 @@ impl Windows {
         });
 
         // Default to full output size.
-        Rectangle::from_loc_and_size((0, 0), self.output().size())
+        Rectangle::from_size(self.output().size())
     }
 
     /// IME force enable/disable status.

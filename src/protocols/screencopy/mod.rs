@@ -73,12 +73,11 @@ where
     ) {
         let (frame, overlay_cursor, rect) = match request {
             Request::CaptureOutput { frame, overlay_cursor, .. } => {
-                let rect =
-                    Rectangle::from_loc_and_size((0, 0), state.output().physical_resolution());
+                let rect = Rectangle::from_size(state.output().physical_resolution());
                 (frame, overlay_cursor, rect)
             },
             Request::CaptureOutputRegion { frame, overlay_cursor, x, y, width, height, .. } => {
-                let rect = Rectangle::from_loc_and_size((x, y), (width, height));
+                let rect = Rectangle::new((x, y).into(), (width, height).into());
 
                 // Translate logical rect to physical framebuffer coordinates.
                 let output = state.output();
@@ -88,10 +87,7 @@ where
 
                 // Clamp captured region to the output.
                 let clamped_rect = physical_rect
-                    .intersection(Rectangle::from_loc_and_size(
-                        (0, 0),
-                        output.physical_resolution(),
-                    ))
+                    .intersection(Rectangle::from_size(output.physical_resolution()))
                     .unwrap_or_default();
 
                 (frame, overlay_cursor, clamped_rect)
