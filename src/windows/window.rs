@@ -1228,7 +1228,7 @@ mod tests {
     fn dummy_positioner() -> PositionerState {
         PositionerState {
             rect_size: (10, 10).into(),
-            anchor_rect: Rectangle::from_size((10, 10)),
+            anchor_rect: Rectangle::from_size((10, 10).into()),
             anchor_edges: xdg_positioner::Anchor::TopLeft,
             gravity: Gravity::BottomRight,
             constraint_adjustment: ConstraintAdjustment::None,
