@@ -618,7 +618,7 @@ impl OutputDevice {
             &mut self.gles,
             textures,
             CLEAR_COLOR,
-            FrameFlags::DEFAULT,
+            FrameFlags::DEFAULT | FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT_ANY,
         )?;
         let rendered = !frame_result.is_empty;
 
