@@ -853,16 +853,16 @@ impl Catacomb {
         let mut new_mods = Vec::new();
         let current_mods = keyboard.modifier_state();
         if mods.shift && !current_mods.shift {
-            new_mods.push(42);
+            new_mods.push(50);
         }
         if mods.control && !current_mods.ctrl {
-            new_mods.push(29);
+            new_mods.push(37);
         }
         if mods.alt && !current_mods.alt {
-            new_mods.push(56);
+            new_mods.push(64);
         }
         if mods.logo && !current_mods.logo {
-            new_mods.push(125);
+            new_mods.push(133);
         }
 
         // Set desired modifiers.
@@ -874,7 +874,7 @@ impl Catacomb {
         }
 
         // Send the key itself.
-        let raw_keycode = keycode.raw() - 8;
+        let raw_keycode = keycode.raw();
         self.on_keyboard_input(Keycode::new(raw_keycode), KeyState::Pressed, 0);
         self.on_keyboard_input(Keycode::new(raw_keycode), KeyState::Released, 0);
 
