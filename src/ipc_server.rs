@@ -176,7 +176,7 @@ fn send_reply_fallible(
     message: &IpcMessage,
 ) -> Result<(), Box<dyn Error>> {
     let json = serde_json::to_string(&message)?;
-    stream.write_all(json[..].as_bytes())?;
+    stream.write_all(json.as_bytes())?;
     stream.flush()?;
     Ok(())
 }

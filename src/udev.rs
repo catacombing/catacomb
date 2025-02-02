@@ -502,7 +502,7 @@ impl Udev {
             None,
             allocator,
             gbm.clone(),
-            SUPPORTED_COLOR_FORMATS.into_iter().copied(),
+            SUPPORTED_COLOR_FORMATS.iter().copied(),
             formats,
             Size::default(),
             None,

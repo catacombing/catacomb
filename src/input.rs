@@ -94,8 +94,9 @@ impl TouchState {
 
     /// Start a new touch session.
     fn start(&mut self, canvas: &Canvas, slot: TouchSlot, position: Point<f64, Logical>) {
-        // Allow only a single touch at a time.
-        if self.slot.is_some() {
+        // Invalidate both sequences if more than one slot is active.
+        if self.slot.take().is_some() {
+            self.last_tap = None;
             return;
         }
         self.slot = Some(slot);
@@ -447,8 +448,7 @@ impl Catacomb {
                             let canvas = self.windows.canvas();
                             self.touch_state.start(canvas, event.slot, event.position);
                         },
-                        TouchEventType::Up if self.touch_state.slot == Some(event.slot) => {
-                            self.touch_state.slot = None;
+                        TouchEventType::Up if self.touch_state.slot.take() == Some(event.slot) => {
                             match self.touch_state.action(self.windows.canvas()) {
                                 Some(TouchAction::Tap) => {
                                     self.touch_state.last_tap =

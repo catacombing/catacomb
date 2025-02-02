@@ -465,7 +465,7 @@ pub fn send_message(message: &IpcMessage) -> Result<Option<IpcMessage>, Box<dyn 
 
     // Write message to socket.
     let json = serde_json::to_string(&message)?;
-    stream.write_all(json[..].as_bytes())?;
+    stream.write_all(json.as_bytes())?;
     stream.flush()?;
 
     // Shutdown write, to allow reading.
