@@ -182,6 +182,9 @@ impl Windows {
 
         let window = Rc::new(RefCell::new(Window::new(&[], surface, scale, transform, None)));
         self.layouts.create(&self.output, window);
+
+        // Leave fullscreen if it is currently active.
+        self.unfullscreen(None);
     }
 
     /// Add a new layer shell window.
@@ -574,14 +577,19 @@ impl Windows {
         }
     }
 
-    /// Unfullscreen the supplied XDG surface, if it is currently fullscreened.
-    pub fn unfullscreen(&mut self, surface: &ToplevelSurface) {
+    /// Switch from fullscreen back to workspace view.
+    ///
+    /// If a surface is supplied, the view will not be changed unless the
+    /// supplied surface matches the current fullscreen surface.
+    pub fn unfullscreen<'a>(&mut self, surface: impl Into<Option<&'a ToplevelSurface>>) {
+        let surface = surface.into();
+
         let window = match &self.view {
             View::Fullscreen(window) => window.borrow_mut(),
             _ => return,
         };
 
-        if &window.surface == surface {
+        if surface.is_some_and(|surface| surface == &window.surface) {
             // Update window's XDG state.
             window.surface.set_state(|state| {
                 state.states.unset(State::Fullscreen);
