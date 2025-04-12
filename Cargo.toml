@@ -32,7 +32,7 @@ features = [
 calloop = { version = "0.14.0", features = ["signals"] }
 catacomb_ipc = { version = "0.1.0", path = "./catacomb_ipc", features = ["clap", "smithay"] }
 clap = { version = "4.2.3", features = ["derive", "wrap_help"] }
-dirs = "5.0.0"
+dirs = "6.0.0"
 libc = "0.2.123"
 profiling = { version = "1.0.14", optional = true, features = ["profile-with-puffin"] }
 puffin_http = { version = "0.16.0", optional = true }

@@ -9,11 +9,11 @@ use smithay::backend::renderer::element::utils::{
     CropRenderElement, Relocate, RelocateRenderElement, RescaleRenderElement,
 };
 use smithay::backend::renderer::element::{Element, Id, RenderElement, UnderlyingStorage};
-use smithay::backend::renderer::gles::{ffi, GlesFrame, GlesRenderer, GlesTexture};
+use smithay::backend::renderer::gles::{ffi, GlesError, GlesFrame, GlesRenderer, GlesTexture};
 use smithay::backend::renderer::utils::{
     Buffer, CommitCounter, DamageBag, DamageSet, DamageSnapshot, OpaqueRegions,
 };
-use smithay::backend::renderer::{self, Renderer, Texture as _};
+use smithay::backend::renderer::{self, Texture as _};
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{
@@ -242,7 +242,7 @@ impl RenderElement<GlesRenderer> for RenderTexture {
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
-    ) -> Result<(), <GlesRenderer as Renderer>::Error> {
+    ) -> Result<(), GlesError> {
         frame.render_texture_from_to(
             &self.texture,
             src,
@@ -330,7 +330,7 @@ impl RenderElement<GlesRenderer> for CatacombElement {
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
-    ) -> Result<(), <GlesRenderer as Renderer>::Error> {
+    ) -> Result<(), GlesError> {
         self.0.draw(frame, src, dst, damage, opaque_regions)
     }
 

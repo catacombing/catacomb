@@ -634,7 +634,13 @@ impl OutputDevice {
 
             let buffer = screencopy.buffer();
             let sync_point = if let Ok(dmabuf) = dmabuf::get_dmabuf(buffer) {
-                Self::copy_framebuffer_dma(&mut self.gles, scale, &frame_result, region, dmabuf)?
+                Self::copy_framebuffer_dma(
+                    &mut self.gles,
+                    scale,
+                    &frame_result,
+                    region,
+                    &mut dmabuf.clone(),
+                )?
             } else {
                 // Ignore unknown buffer types.
                 let buffer_type = renderer::buffer_type(buffer);
@@ -675,10 +681,10 @@ impl OutputDevice {
         scale: f64,
         frame_result: &RenderFrameResult<GbmBuffer, GbmFramebuffer, CatacombElement>,
         region: Rectangle<i32, Physical>,
-        buffer: &Dmabuf,
+        buffer: &mut Dmabuf,
     ) -> Result<SyncPoint, Box<dyn Error>> {
         // Bind the screencopy buffer as render target.
-        gles.bind(buffer.clone())?;
+        let mut framebuffer = gles.bind(buffer)?;
 
         // Blit the framebuffer into the target buffer.
         let damage = [Rectangle::from_size(region.size)];
@@ -687,6 +693,7 @@ impl OutputDevice {
             Transform::Normal,
             scale,
             gles,
+            &mut framebuffer,
             damage,
             [],
         )?;
@@ -705,9 +712,9 @@ impl OutputDevice {
     ) -> Result<SyncPoint, Box<dyn Error>> {
         // Create and bind an offscreen render buffer.
         let buffer_dimensions = renderer::buffer_dimensions(buffer).unwrap();
-        let offscreen_buffer: GlesRenderbuffer =
+        let mut offscreen_buffer: GlesRenderbuffer =
             self.gles.create_buffer(Fourcc::Abgr8888, buffer_dimensions)?;
-        self.gles.bind(offscreen_buffer)?;
+        let mut framebuffer = self.gles.bind(&mut offscreen_buffer)?;
 
         let output = windows.output();
         let scale = output.scale();
@@ -721,7 +728,7 @@ impl OutputDevice {
         let textures = windows.textures(&mut self.gles, &mut self.graphics, cursor_position);
 
         // Initialize the buffer to our clear color.
-        let mut frame = self.gles.render(output_size, transform)?;
+        let mut frame = self.gles.render(&mut framebuffer, output_size, transform)?;
         frame.clear(CLEAR_COLOR.into(), &[damage])?;
 
         // Render everything to the offscreen buffer.

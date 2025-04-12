@@ -232,7 +232,7 @@ impl Windows {
         window.set_dimensions(output_scale, Rectangle::from_size(output_size));
 
         // Update lockscreen.
-        *lock_window = Some(window);
+        *lock_window = Some(Box::new(window));
     }
 
     /// Lock the session.
@@ -1367,7 +1367,7 @@ enum View {
     /// Fullscreened XDG-shell window.
     Fullscreen(Rc<RefCell<Window>>),
     /// Session lock.
-    Lock(Option<Window<LockSurface>>),
+    Lock(Option<Box<Window<LockSurface>>>),
     /// Currently active windows.
     #[default]
     Workspace,
