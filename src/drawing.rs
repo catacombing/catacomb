@@ -9,7 +9,7 @@ use smithay::backend::renderer::element::utils::{
     CropRenderElement, Relocate, RelocateRenderElement, RescaleRenderElement,
 };
 use smithay::backend::renderer::element::{Element, Id, RenderElement, UnderlyingStorage};
-use smithay::backend::renderer::gles::{ffi, GlesError, GlesFrame, GlesRenderer, GlesTexture};
+use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture, ffi};
 use smithay::backend::renderer::utils::{
     Buffer, CommitCounter, DamageBag, DamageSet, DamageSnapshot, OpaqueRegions,
 };
@@ -387,7 +387,7 @@ impl Graphics {
         let scale = canvas.scale();
         let width = canvas.physical_size().w;
         let height = (GESTURE_HANDLE_HEIGHT as f64 * scale).round() as i32;
-        if handle.as_ref().map_or(true, |handle| {
+        if handle.as_ref().is_none_or(|handle| {
             handle.texture.width() != width as u32 || handle.texture.height() != height as u32
         }) {
             // Initialize a black buffer with the correct size.
@@ -423,7 +423,7 @@ impl Graphics {
     pub fn cursor(&mut self, renderer: &mut GlesRenderer, canvas: &Canvas) -> RenderTexture {
         let scale = canvas.scale();
         let size = (CURSOR_SIZE * scale).round() as i32;
-        if self.cursor.as_ref().map_or(true, |cursor| {
+        if self.cursor.as_ref().is_none_or(|cursor| {
             cursor.texture.width() != size as u32 || cursor.texture.height() != size as u32
         }) {
             // Create a texture with a circle inside it.

@@ -122,18 +122,10 @@ impl SensorAccelerometer {
 
         // Check if we're far enough from portrait axis to pick landscape mode.
         let orientation = if portrait_angle_abs > THRESHOLD {
-            if portrait_angle > 0. {
-                Orientation::InverseLandscape
-            } else {
-                Orientation::Landscape
-            }
+            if portrait_angle > 0. { Orientation::InverseLandscape } else { Orientation::Landscape }
         // Ditto for landspace axis.
         } else if landscape_angle_abs > THRESHOLD {
-            if landscape_angle > 0. {
-                Orientation::InversePortrait
-            } else {
-                Orientation::Portrait
-            }
+            if landscape_angle > 0. { Orientation::InversePortrait } else { Orientation::Portrait }
         } else {
             // No orientation is present when parallel to the ground.
             return None;

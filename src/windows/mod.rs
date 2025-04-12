@@ -15,8 +15,8 @@ use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::reexports::calloop::LoopHandle;
 use smithay::reexports::wayland_protocols::xdg::decoration as _decoration;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::DisplayHandle;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle};
 use smithay::wayland::compositor;
 use smithay::wayland::session_lock::LockSurface;
@@ -28,7 +28,7 @@ use crate::drawing::{CatacombElement, Graphics};
 use crate::input::{HandleGesture, TouchState};
 use crate::layer::Layers;
 use crate::orientation::Orientation;
-use crate::output::{Canvas, Output, GESTURE_HANDLE_HEIGHT};
+use crate::output::{Canvas, GESTURE_HANDLE_HEIGHT, Output};
 use crate::overview::{DragActionType, DragAndDrop, Overview};
 use crate::windows::layout::{LayoutPosition, Layouts};
 use crate::windows::surface::{CatacombLayerSurface, InputSurface, InputSurfaceKind, Surface};
@@ -266,9 +266,7 @@ impl Windows {
 
         // Find a window matching the root surface.
         macro_rules! find_window {
-            ($windows:expr) => {{
-                $windows.find(|window| window.surface().eq(root_surface.as_ref()))
-            }};
+            ($windows:expr) => {{ $windows.find(|window| window.surface().eq(root_surface.as_ref())) }};
         }
 
         // Handle session lock surface commits.

@@ -401,7 +401,7 @@ impl FromStr for Modifiers {
                             "invalid modifier {invalid:?}, expected one of \"shift\", \
                              \"control\", \"alt\", or \"super\""
                         ),
-                    ))
+                    ));
                 },
             }
         }

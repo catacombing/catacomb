@@ -506,10 +506,10 @@ impl Layouts {
         for (i, layout) in self.layouts.iter().enumerate() {
             match (&layout.primary, &layout.secondary) {
                 (Some(primary), _) if primary.borrow().owns_surface(surface) => {
-                    return Some(LayoutPosition::new(i, false))
+                    return Some(LayoutPosition::new(i, false));
                 },
                 (_, Some(secondary)) if secondary.borrow().owns_surface(surface) => {
-                    return Some(LayoutPosition::new(i, true))
+                    return Some(LayoutPosition::new(i, true));
                 },
                 _ => (),
             }
@@ -520,11 +520,7 @@ impl Layouts {
     /// Convert overview layout position to winow.
     pub fn window_at(&self, position: LayoutPosition) -> Option<&Rc<RefCell<Window>>> {
         self.layouts.get(position.index).and_then(|layout| {
-            if position.secondary {
-                layout.secondary.as_ref()
-            } else {
-                layout.primary.as_ref()
-            }
+            if position.secondary { layout.secondary.as_ref() } else { layout.primary.as_ref() }
         })
     }
 

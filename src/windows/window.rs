@@ -16,8 +16,8 @@ use smithay::reexports::wayland_protocols::wp::presentation_time::server as _pre
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_positioner::{
     self, ConstraintAdjustment, Gravity,
 };
-use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Physical, Point, Rectangle, Size, Transform};
 use smithay::wayland::compositor::{
     self, SubsurfaceCachedState, SurfaceAttributes, SurfaceData, TraversalAction,
@@ -462,7 +462,7 @@ impl<S: Surface + 'static> Window<S> {
 
     /// Check if the transaction is ready for application.
     pub fn transaction_done(&self) -> bool {
-        !self.alive() || self.transaction.as_ref().map_or(true, |t| t.size == self.acked_size)
+        !self.alive() || self.transaction.as_ref().is_none_or(|t| t.size == self.acked_size)
     }
 
     /// Handle common surface commit logic for surfaces of any kind.
@@ -705,7 +705,7 @@ impl<S: Surface + 'static> Window<S> {
 
                 // Check if the position is within the surface bounds.
                 if surface_rect.contains(position)
-                    && input_region.map_or(true, |region| region.contains(input_position))
+                    && input_region.is_none_or(|region| region.contains(input_position))
                 {
                     let surface = InputSurface::new(wl_surface.clone(), surface_loc, window_scale);
                     *result.borrow_mut() = Some(surface);

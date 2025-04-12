@@ -26,7 +26,7 @@ use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, Resource};
-use smithay::utils::{Logical, Point, Rectangle, Serial, SERIAL_COUNTER};
+use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Serial};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor;
 use smithay::wayland::compositor::{CompositorClientState, CompositorHandler, CompositorState};
@@ -44,6 +44,7 @@ use smithay::wayland::keyboard_shortcuts_inhibit::{
 };
 use smithay::wayland::output::{OutputHandler, OutputManagerState};
 use smithay::wayland::presentation::PresentationState;
+use smithay::wayland::selection::SelectionHandler;
 use smithay::wayland::selection::data_device::{
     self, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
 };
@@ -51,7 +52,6 @@ use smithay::wayland::selection::primary_selection::{
     self, PrimarySelectionHandler, PrimarySelectionState,
 };
 use smithay::wayland::selection::wlr_data_control::{DataControlHandler, DataControlState};
-use smithay::wayland::selection::SelectionHandler;
 use smithay::wayland::session_lock::{
     LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker,
 };
@@ -91,8 +91,8 @@ use crate::protocols::screencopy::frame::Screencopy;
 use crate::protocols::screencopy::{ScreencopyHandler, ScreencopyManagerState};
 use crate::protocols::single_pixel_buffer::SinglePixelBufferState;
 use crate::udev::Udev;
-use crate::windows::surface::Surface;
 use crate::windows::Windows;
+use crate::windows::surface::Surface;
 use crate::{daemon, delegate_screencopy, delegate_single_pixel_buffer, ipc_server, trace_error};
 
 /// Time before xdg_activation tokens are invalidated.
@@ -176,7 +176,7 @@ impl Catacomb {
             .expect("register Wayland socket source");
 
         // Log and set `WAYLAND_DISPLAY` for children.
-        env::set_var("WAYLAND_DISPLAY", &socket_name);
+        unsafe { env::set_var("WAYLAND_DISPLAY", &socket_name) };
         info!("Wayland socket: {socket_name}");
 
         // Register display event source.

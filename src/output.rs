@@ -6,9 +6,9 @@ use std::time::Duration;
 use smithay::output::{
     Mode, Output as SmithayOutput, OutputModeSource, PhysicalProperties, Scale, Subpixel,
 };
+use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::reexports::wayland_server::backend::GlobalId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::utils::{Logical, Physical, Rectangle, Size};
 use smithay::wayland::shell::wlr_layer::{Anchor, ExclusiveZone, Layer};
 

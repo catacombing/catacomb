@@ -7,7 +7,7 @@ use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Event, InputBackend, InputEvent, KeyState,
     KeyboardKeyEvent, MouseButton, PointerButtonEvent, TouchEvent as _, TouchSlot,
 };
-use smithay::input::keyboard::{keysyms, FilterResult, Keycode, KeysymHandle, ModifiersState};
+use smithay::input::keyboard::{FilterResult, Keycode, KeysymHandle, ModifiersState, keysyms};
 use smithay::input::touch::{DownEvent, MotionEvent, UpEvent};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
@@ -203,7 +203,7 @@ impl TouchState {
 
         self.user_gestures.iter().filter(move |gesture| {
             gesture.start == start_sector
-                && end_sector.map_or(true, |sector| gesture.end == sector)
+                && end_sector.is_none_or(|sector| gesture.end == sector)
                 && gesture.app_id.matches(app_id)
         })
     }

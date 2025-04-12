@@ -11,9 +11,9 @@ use indexmap::IndexSet;
 use libc::dev_t as DeviceId;
 #[cfg(feature = "profiling")]
 use profiling::puffin::GlobalProfiler;
+use smithay::backend::allocator::Fourcc;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBuffer, GbmBufferFlags, GbmDevice};
-use smithay::backend::allocator::Fourcc;
 use smithay::backend::drm::compositor::{
     DrmCompositor as SmithayDrmCompositor, FrameFlags, RenderFrameResult,
 };
@@ -23,10 +23,10 @@ use smithay::backend::egl::context::EGLContext;
 use smithay::backend::egl::display::EGLDisplay;
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::element::RenderElementStates;
-use smithay::backend::renderer::gles::{ffi, GlesRenderbuffer, GlesRenderer};
+use smithay::backend::renderer::gles::{GlesRenderbuffer, GlesRenderer, ffi};
 use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::{
-    self, utils, Bind, BufferType, Frame, ImportDma, ImportEgl, Offscreen, Renderer,
+    self, Bind, BufferType, Frame, ImportDma, ImportEgl, Offscreen, Renderer, utils,
 };
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{AsErrno, Event as SessionEvent, Session};
@@ -45,9 +45,9 @@ use smithay::reexports::drm::control::{Device, Mode as DrmMode, ModeTypeFlags, R
 use smithay::reexports::input::Libinput;
 use smithay::reexports::rustix::fs::OFlags;
 use smithay::reexports::wayland_protocols::wp::linux_dmabuf as _linux_dmabuf;
+use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_shm;
-use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::utils::{DevPath, DeviceFd, Logical, Physical, Point, Rectangle, Size, Transform};
 use smithay::wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder};
 use smithay::wayland::{dmabuf, shm};
@@ -79,7 +79,7 @@ pub fn run() {
     // up on the primary plane when rendering buffers with the AFBC modifier:
     //
     // https://gitlab.freedesktop.org/mesa/mesa/-/issues/7968#note_1799187
-    env::set_var("PAN_MESA_DEBUG", "noafbc");
+    unsafe { env::set_var("PAN_MESA_DEBUG", "noafbc") };
 
     let mut event_loop = EventLoop::try_new().expect("event loop");
     let udev = Udev::new(event_loop.handle());
