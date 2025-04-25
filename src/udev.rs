@@ -17,6 +17,7 @@ use smithay::backend::allocator::gbm::{GbmAllocator, GbmBuffer, GbmBufferFlags, 
 use smithay::backend::drm::compositor::{
     DrmCompositor as SmithayDrmCompositor, FrameFlags, RenderFrameResult,
 };
+use smithay::backend::drm::exporter::gbm::GbmFramebufferExporter;
 use smithay::backend::drm::gbm::GbmFramebuffer;
 use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent, DrmNode, DrmSurface};
 use smithay::backend::egl::context::EGLContext;
@@ -501,7 +502,7 @@ impl Udev {
             surface,
             None,
             allocator,
-            gbm.clone(),
+            GbmFramebufferExporter::new(gbm.clone()),
             SUPPORTED_COLOR_FORMATS.iter().copied(),
             formats,
             Size::default(),
@@ -839,5 +840,9 @@ impl OutputDevice {
 }
 
 /// DRM compositor type alias.
-type DrmCompositor =
-    SmithayDrmCompositor<GbmAllocator<DrmDeviceFd>, GbmDevice<DrmDeviceFd>, (), DrmDeviceFd>;
+type DrmCompositor = SmithayDrmCompositor<
+    GbmAllocator<DrmDeviceFd>,
+    GbmFramebufferExporter<DrmDeviceFd>,
+    (),
+    DrmDeviceFd,
+>;

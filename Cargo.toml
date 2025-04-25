@@ -16,7 +16,7 @@ default = []
 profiling = ["dep:profiling", "dep:puffin_http"]
 
 [dependencies.smithay]
-git = "https://github.com/smithay/smithay"
+version = "0.6.0"
 default-features = false
 features = [
     "use_system_lib",
@@ -33,6 +33,7 @@ calloop = { version = "0.14.0", features = ["signals"] }
 catacomb_ipc = { version = "0.1.0", path = "./catacomb_ipc", features = ["clap", "smithay"] }
 clap = { version = "4.2.3", features = ["derive", "wrap_help"] }
 dirs = "6.0.0"
+indexmap = "2.5.0"
 libc = "0.2.123"
 profiling = { version = "1.0.14", optional = true, features = ["profile-with-puffin"] }
 puffin_http = { version = "0.16.0", optional = true }
@@ -41,4 +42,3 @@ serde = { version = "1.0.144", features = ["derive"] }
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 udev = "0.9.1"
-indexmap = "2.5.0"
