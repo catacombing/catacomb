@@ -117,9 +117,9 @@ pub enum IpcMessage {
         /// Required modifiers.
         #[cfg_attr(feature = "clap", clap(long, short))]
         mods: Option<Modifiers>,
-        /// Execute command on key press, rather than release.
-        #[cfg_attr(feature = "clap", clap(long))]
-        on_press: bool,
+        /// Point at which the key event's command gets executed.
+        #[cfg_attr(feature = "clap", clap(long, default_value = "press"))]
+        trigger: KeyTrigger,
         /// Base key for this binding.
         key: Keysym,
         /// Program this gesture should spawn.
@@ -316,7 +316,7 @@ impl Display for WindowScale {
             Self::Divisive(scale) => ("/", scale),
             Self::Fixed(scale) => ("", scale),
         };
-        write!(f, "{}{}", prefix, scale)
+        write!(f, "{prefix}{scale}")
     }
 }
 
@@ -438,6 +438,18 @@ impl FromStr for Keysym {
             keysym => Ok(Self::Xkb(keysym)),
         }
     }
+}
+
+/// Point at which a key event's command gets executed.
+#[cfg_attr(feature = "clap", derive(ValueEnum))]
+#[derive(Deserialize, Serialize, PartialEq, Eq, Copy, Clone, Debug)]
+pub enum KeyTrigger {
+    /// Trigger on key down.
+    Press,
+    /// Trigger on key down and key repeat.
+    Repeat,
+    /// Trigger on key up.
+    Release,
 }
 
 /// Send a message to the Catacomb IPC socket.

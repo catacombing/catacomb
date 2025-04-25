@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use catacomb_ipc::{GestureSector, Keysym, Modifiers};
+use catacomb_ipc::{GestureSector, KeyTrigger, Keysym, Modifiers};
 use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Event, InputBackend, InputEvent, KeyState,
     KeyboardKeyEvent, MouseButton, PointerButtonEvent, TouchEvent as _, TouchSlot,
@@ -25,6 +25,12 @@ use crate::windows::surface::{InputSurface, InputSurfaceKind};
 
 /// Time before a tap is considered a hold.
 pub const HOLD_DURATION: Duration = Duration::from_secs(1);
+
+/// Time before key repeat starts.
+pub const REPEAT_DELAY: Duration = Duration::from_millis(200);
+
+/// Key repeat interval after the first repetition.
+pub const REPEAT_RATE: Duration = Duration::from_millis(25);
 
 /// Maximum time between taps to be considered a double-tap.
 const MAX_DOUBLE_TAP_DURATION: Duration = Duration::from_millis(300);
@@ -53,6 +59,7 @@ pub struct TouchState {
     pending_single_tap: Option<RegistrationToken>,
     event_loop: LoopHandle<'static, Catacomb>,
     velocity_timer: Option<RegistrationToken>,
+    repeat_timer: Option<RegistrationToken>,
     input_surface: Option<InputSurface>,
     tap_surface: Option<InputSurface>,
     active_app_id: Option<String>,
@@ -73,6 +80,7 @@ impl TouchState {
             input_surface: Default::default(),
             user_gestures: Default::default(),
             active_app_id: Default::default(),
+            repeat_timer: Default::default(),
             tap_surface: Default::default(),
             last_tap: Default::default(),
             position: Default::default(),
@@ -90,6 +98,29 @@ impl TouchState {
             self.event_loop.remove(velocity_timer);
         }
         self.velocity = Default::default();
+    }
+
+    /// Start new key repetition timer.
+    pub fn start_key_repeat<F>(&mut self, mut fun: F)
+    where
+        F: FnMut() + 'static,
+    {
+        let timer = Timer::from_duration(REPEAT_DELAY);
+        let repeat_timer = self
+            .event_loop
+            .insert_source(timer, move |_, _, _| {
+                fun();
+                TimeoutAction::ToDuration(REPEAT_RATE)
+            })
+            .expect("insert key repeat timer");
+        self.repeat_timer = Some(repeat_timer);
+    }
+
+    /// Stop all key repetition.
+    pub fn cancel_key_repeat(&mut self) {
+        if let Some(repeat_timer) = self.repeat_timer.take() {
+            self.event_loop.remove(repeat_timer);
+        }
     }
 
     /// Start a new touch session.
@@ -913,6 +944,9 @@ impl Catacomb {
         raw_keysym: u32,
         state: KeyState,
     ) -> FilterResult<InputAction> {
+        // Cancel active key repeat timers.
+        catacomb.touch_state.cancel_key_repeat();
+
         // Check if focused surface inhibits shortcuts.
         let inhibits_shortcuts = catacomb.last_focus().is_some_and(|surface| {
             compositor::with_states(surface, |states| {
@@ -936,13 +970,24 @@ impl Catacomb {
             if key_binding.key == Keysym::Xkb(raw_keysym)
                 && key_binding.mods == mods
                 && key_binding.app_id.matches(active_app.as_ref())
-                && key_binding.on_press == pressed
+                && (key_binding.trigger != KeyTrigger::Release) == pressed
             {
                 // Execute subcommand.
                 let program = &key_binding.program;
                 let arguments = &key_binding.arguments;
-                if let Err(err) = daemon::spawn(program, arguments) {
-                    error!("Failed keybinding command {program} {arguments:?}: {err}");
+                let _ = daemon::spawn(program, arguments).inspect_err(|err| {
+                    error!("Failed keybinding command {program} {arguments:?}: {err}")
+                });
+
+                // Stage timer for bindings triggered on repeat.
+                if key_binding.trigger == KeyTrigger::Repeat {
+                    let program = key_binding.program.clone();
+                    let arguments = key_binding.arguments.clone();
+                    catacomb.touch_state.start_key_repeat(move || {
+                        let _ = daemon::spawn(&program, &arguments).inspect_err(|err| {
+                            error!("Failed keybinding command {program} {arguments:?}: {err}")
+                        });
+                    });
                 }
 
                 // Prevent key propagation.

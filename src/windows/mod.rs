@@ -63,7 +63,7 @@ pub fn start_transaction() {
 
 /// Perform operation for every known window.
 macro_rules! with_all_windows {
-    ($windows:expr, |$window:tt| $fn:expr) => {{
+    ($windows:expr, | $window:tt | $fn:expr) => {{
         match $windows.pending_view() {
             View::Lock(Some($window)) => $fn,
             _ => (),
@@ -80,7 +80,7 @@ macro_rules! with_all_windows {
 
 /// Perform mutable operation for every known window.
 macro_rules! with_all_windows_mut {
-    ($windows:expr, |$window:tt| $fn:expr) => {{
+    ($windows:expr, | $window:tt | $fn:expr) => {{
         match $windows.pending_view_mut() {
             View::Lock(Some($window)) => $fn,
             _ => (),

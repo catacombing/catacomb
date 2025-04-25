@@ -84,7 +84,7 @@ use tracing::{error, info};
 
 use crate::config::KeyBinding;
 use crate::drawing::CatacombSurfaceData;
-use crate::input::TouchState;
+use crate::input::{REPEAT_DELAY, REPEAT_RATE, TouchState};
 use crate::orientation::{Accelerometer, AccelerometerSource};
 use crate::output::Output;
 use crate::protocols::screencopy::frame::Screencopy;
@@ -258,7 +258,10 @@ impl Catacomb {
 
         // Initialize keyboard/touch/data device.
         let data_device_state = DataDeviceState::new::<Self>(&display_handle);
-        seat.add_keyboard(XkbConfig::default(), 200, 25).expect("adding keyboard");
+        let repeat_delay = REPEAT_DELAY.as_millis() as i32;
+        let repeat_rate = REPEAT_RATE.as_millis() as i32;
+        seat.add_keyboard(XkbConfig::default(), repeat_delay, repeat_rate)
+            .expect("adding keyboard");
 
         let data_control_state = DataControlState::new::<Self, _>(
             &display_handle,

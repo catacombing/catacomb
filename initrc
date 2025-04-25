@@ -40,6 +40,12 @@ catacomb msg bind-key '*' EnableVirtualKeyboard \
 catacomb msg bind-key '*' AutoVirtualKeyboard \
     busctl call --user sm.puri.OSK0 /sm/puri/OSK0 sm.puri.OSK0 SetVisible b false
 
+## Bind global volume keys
+catacomb msg bind-key --trigger repeat '*' XF86AudioRaiseVolume \
+    pactl set-sink-volume 0 +5%
+catacomb msg bind-key --trigger repeat '*' XF86AudioLowerVolume \
+    pactl set-sink-volume 0 -5%
+
 # Spawn background apps
 squeekboard &
 epitaph &
