@@ -403,7 +403,7 @@ impl Udev {
         let token = self.event_loop.register_dispatcher(dispatcher.clone())?;
 
         // Create OpenGL textures.
-        let graphics = Graphics::new(&mut gles);
+        let graphics = Graphics::new();
 
         // Initialize last render state as empty.
         let last_render_states = RenderElementStates { states: HashMap::new() };

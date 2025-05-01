@@ -14,7 +14,6 @@ use smithay::backend::renderer::utils::{
     Buffer, CommitCounter, DamageBag, DamageSet, DamageSnapshot, OpaqueRegions,
 };
 use smithay::backend::renderer::{self, Texture as _};
-use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{
     Buffer as BufferSpace, Logical, Physical, Point, Rectangle, Scale, Size, Transform,
@@ -26,7 +25,6 @@ use smithay::wayland::viewporter::{self, ViewportCachedState};
 
 use crate::geometry::SubtractRectFast;
 use crate::output::{Canvas, GESTURE_HANDLE_HEIGHT};
-use crate::protocols::single_pixel_buffer;
 
 /// Color of the hovered overview tiling location highlight.
 const ACTIVE_DROP_TARGET_RGBA: [u8; 4] = [64, 64, 64, 128];
@@ -68,7 +66,7 @@ pub struct Texture {
     dst_size: Size<i32, Logical>,
     buffer_size: Size<i32, Logical>,
     buffer: Option<Buffer>,
-    texture: GlesTexture,
+    renderable: Renderable,
     transform: Transform,
     window_scale: Option<WindowScale>,
     scale: f64,
@@ -92,8 +90,8 @@ impl Texture {
         Self {
             opaque_regions,
             buffer_size,
-            texture,
             scale,
+            renderable: Renderable::Texture(texture),
             tracker: DamageSnapshot::empty(),
             src_rect: src_rect.to_f64(),
             dst_size: buffer_size,
@@ -127,8 +125,37 @@ impl Texture {
         Self {
             opaque_regions,
             window_scale,
-            texture,
             tracker: buffer.damage.tracker.snapshot(),
+            renderable: Renderable::Texture(texture),
+            buffer_size: buffer.buffer_size,
+            location: Cell::new(location),
+            buffer: buffer.buffer.clone(),
+            transform: buffer.transform,
+            scale: buffer.scale as f64,
+            src_rect: buffer.src_rect,
+            dst_size: buffer.dst_size,
+            id: surface.into(),
+        }
+    }
+
+    /// Create a texture from a Wayland single pixel buffer surface.
+    pub fn from_spb(
+        color: [u8; 4],
+        window_scale: Option<WindowScale>,
+        location: impl Into<Point<i32, Logical>>,
+        buffer: &CatacombSurfaceData,
+        surface: &WlSurface,
+    ) -> Self {
+        let location = location.into();
+
+        let opaque_regions =
+            if color[3] == 255 { vec![Rectangle::from_size(buffer.dst_size)] } else { Vec::new() };
+
+        Self {
+            opaque_regions,
+            window_scale,
+            tracker: buffer.damage.tracker.snapshot(),
+            renderable: Renderable::Color(color),
             buffer_size: buffer.buffer_size,
             location: Cell::new(location),
             buffer: buffer.buffer.clone(),
@@ -155,6 +182,30 @@ impl Texture {
         Texture::new(texture, logical_size, scale, opaque)
     }
 
+    /// Create a single-color non-surface renderable.
+    pub fn from_color(color: [u8; 4], opaque: bool) -> Self {
+        let buffer_size = Size::from((1, 1));
+        let src_rect = Rectangle::from_size(buffer_size);
+
+        // Ensure fully opaque textures are treated as such.
+        let opaque_regions = if opaque { vec![src_rect] } else { Vec::new() };
+
+        Self {
+            opaque_regions,
+            buffer_size,
+            renderable: Renderable::Color(color),
+            tracker: DamageSnapshot::empty(),
+            src_rect: src_rect.to_f64(),
+            dst_size: buffer_size,
+            id: Id::new(),
+            scale: 1.,
+            window_scale: Default::default(),
+            transform: Default::default(),
+            location: Default::default(),
+            buffer: Default::default(),
+        }
+    }
+
     /// Move texture to a different location.
     pub fn set_location(&self, location: Point<i32, Logical>) {
         self.location.replace(location);
@@ -165,10 +216,27 @@ impl Texture {
         self.location.replace(self.location.get() + offset);
     }
 
+    /// Get the buffer's size.
+    pub fn buffer_size(&self) -> Size<i32, Buffer> {
+        match &self.renderable {
+            Renderable::Texture(texture) => {
+                (texture.width() as i32, texture.height() as i32).into()
+            },
+            Renderable::Color(_) => (1, 1).into(),
+        }
+    }
+
     /// Target size after rendering.
     pub fn size(&self) -> Size<i32, Logical> {
         self.dst_size
     }
+}
+
+/// OpenGL rendering primitive.
+#[derive(Clone, Debug)]
+enum Renderable {
+    Texture(GlesTexture),
+    Color([u8; 4]),
 }
 
 /// Newtype to implement element traits on `Rc<Texture>`.
@@ -243,17 +311,24 @@ impl RenderElement<GlesRenderer> for RenderTexture {
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), GlesError> {
-        frame.render_texture_from_to(
-            &self.texture,
-            src,
-            dst,
-            damage,
-            opaque_regions,
-            self.transform,
-            1.,
-            None,
-            &[],
-        )
+        match &self.renderable {
+            Renderable::Texture(texture) => frame.render_texture_from_to(
+                texture,
+                src,
+                dst,
+                damage,
+                opaque_regions,
+                self.transform,
+                1.,
+                None,
+                &[],
+            ),
+            Renderable::Color([r, g, b, a]) => {
+                let color =
+                    [*r as f32 / 255., *g as f32 / 255., *b as f32 / 255., *a as f32 / 255.];
+                frame.draw_solid(dst, damage, color.into())
+            },
+        }
     }
 
     fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage> {
@@ -353,11 +428,10 @@ pub struct Graphics {
 }
 
 impl Graphics {
-    pub fn new(renderer: &mut GlesRenderer) -> Self {
-        let active_drop_target =
-            Texture::from_buffer(renderer, 1., &ACTIVE_DROP_TARGET_RGBA, 1, 1, false);
-        let drop_target = Texture::from_buffer(renderer, 1., &DROP_TARGET_RGBA, 1, 1, false);
-        let urgency_icon = Texture::from_buffer(renderer, 1., &URGENCY_ICON_RGBA, 1, 1, true);
+    pub fn new() -> Self {
+        let active_drop_target = Texture::from_color(ACTIVE_DROP_TARGET_RGBA, false);
+        let drop_target = Texture::from_color(DROP_TARGET_RGBA, false);
+        let urgency_icon = Texture::from_color(URGENCY_ICON_RGBA, true);
 
         Self {
             active_drop_target: RenderTexture::new(active_drop_target),
@@ -387,9 +461,7 @@ impl Graphics {
         let scale = canvas.scale();
         let width = canvas.physical_size().w;
         let height = (GESTURE_HANDLE_HEIGHT as f64 * scale).round() as i32;
-        if handle.as_ref().is_none_or(|handle| {
-            handle.texture.width() != width as u32 || handle.texture.height() != height as u32
-        }) {
+        if handle.as_ref().is_none_or(|handle| handle.buffer_size() != (width, height).into()) {
             // Initialize a black buffer with the correct size.
             let mut buffer = vec![0; (height * width * 4) as usize];
 
@@ -423,9 +495,7 @@ impl Graphics {
     pub fn cursor(&mut self, renderer: &mut GlesRenderer, canvas: &Canvas) -> RenderTexture {
         let scale = canvas.scale();
         let size = (CURSOR_SIZE * scale).round() as i32;
-        if self.cursor.as_ref().is_none_or(|cursor| {
-            cursor.texture.width() != size as u32 || cursor.texture.height() != size as u32
-        }) {
+        if self.cursor.as_ref().is_none_or(|cursor| cursor.buffer_size() != (size, size).into()) {
             // Create a texture with a circle inside it.
             let mut buffer = vec![0; (size * size * 4) as usize];
             for x in 0..size {
@@ -502,7 +572,9 @@ impl CatacombSurfaceData {
                 let old_size = self.buffer_size;
                 self.scale = attributes.buffer_scale;
                 self.transform = attributes.buffer_transform.into();
-                self.buffer_size = buffer_dimensions(&buffer, self.scale, self.transform);
+                self.buffer_size = renderer::buffer_dimensions(&buffer)
+                    .unwrap_or_default()
+                    .to_logical(self.scale, self.transform);
                 self.buffer = Some(Buffer::with_implicit(buffer));
                 self.texture = None;
 
@@ -554,18 +626,6 @@ impl CatacombSurfaceData {
     }
 }
 
-/// Get WlBuffer dimensions.
-///
-/// NOTE: This can be removed once the single-pixel buffer protocol is supported
-/// upstream.
-fn buffer_dimensions(buffer: &WlBuffer, scale: i32, transform: Transform) -> Size<i32, Logical> {
-    match single_pixel_buffer::get_single_pixel_buffer(buffer) {
-        Ok(_) => Size::from((1, 1)),
-        Err(_) => renderer::buffer_dimensions(buffer).unwrap_or_default(),
-    }
-    .to_logical(scale, transform)
-}
-
 /// Pending buffer damage.
 #[derive(Default)]
 pub struct Damage {
@@ -586,7 +646,7 @@ impl Damage {
 }
 
 /// Create a new OpenGL texture.
-pub fn create_texture(
+fn create_texture(
     renderer: &mut GlesRenderer,
     buffer: &[u8],
     width: i32,

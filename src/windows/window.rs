@@ -22,7 +22,6 @@ use smithay::utils::{Logical, Physical, Point, Rectangle, Size, Transform};
 use smithay::wayland::compositor::{
     self, SubsurfaceCachedState, SurfaceAttributes, SurfaceData, TraversalAction,
 };
-use smithay::wayland::fractional_scale;
 use smithay::wayland::presentation::{
     PresentationFeedbackCachedState, PresentationFeedbackCallback, Refresh,
 };
@@ -33,12 +32,12 @@ use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ToplevelSurface, XdgPopupSurfaceRoleAttributes,
     XdgToplevelSurfaceRoleAttributes,
 };
+use smithay::wayland::{fractional_scale, single_pixel_buffer};
 use tracing::error;
 
-use crate::drawing::{self, CatacombElement, CatacombSurfaceData, RenderTexture, Texture};
+use crate::drawing::{CatacombElement, CatacombSurfaceData, RenderTexture, Texture};
 use crate::geometry::Vector;
 use crate::output::{ExclusiveSpace, Output};
-use crate::protocols::single_pixel_buffer;
 use crate::windows;
 use crate::windows::surface::{CatacombLayerSurface, InputSurface, Surface};
 
@@ -312,9 +311,8 @@ impl<S: Surface + 'static> Window<S> {
                     // Handle single-pixel buffer protocol.
                     Ok(buffer) => {
                         // Create 1x1 OpenGL texture.
-                        let opaque = !buffer.has_alpha();
                         let rgba = buffer.rgba8888();
-                        drawing::create_texture(renderer, &rgba, 1, 1, opaque)
+                        Texture::from_spb(rgba, self.scale, data.location, &data, surface)
                     },
                     // Import and cache the buffer.
                     Err(_) => match renderer.import_buffer(buffer, Some(surface_data), damage) {
@@ -324,7 +322,13 @@ impl<S: Surface + 'static> Window<S> {
                                 data.buffer = None;
                             }
 
-                            texture
+                            Texture::from_surface(
+                                texture,
+                                self.scale,
+                                data.location,
+                                &data,
+                                surface,
+                            )
                         },
                         _ => {
                             error!("unable to import buffer");
@@ -335,8 +339,6 @@ impl<S: Surface + 'static> Window<S> {
                 };
 
                 // Update and cache the texture.
-                let texture =
-                    Texture::from_surface(texture, self.scale, data.location, &data, surface);
                 let render_texture = RenderTexture::new(texture);
                 self.texture_cache.push(render_texture.clone(), data.location);
                 data.texture = Some(render_texture);
