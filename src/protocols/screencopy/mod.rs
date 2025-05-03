@@ -10,7 +10,7 @@ use smithay::reexports::wayland_server::{
 };
 use smithay::utils::Rectangle;
 
-use crate::output::Output;
+use crate::output::Canvas;
 use crate::protocols::screencopy::frame::{Screencopy, ScreencopyFrameState};
 
 pub mod frame;
@@ -73,21 +73,21 @@ where
     ) {
         let (frame, overlay_cursor, rect) = match request {
             Request::CaptureOutput { frame, overlay_cursor, .. } => {
-                let rect = Rectangle::from_size(state.output().physical_resolution());
+                let rect = Rectangle::from_size(state.canvas().physical_resolution());
                 (frame, overlay_cursor, rect)
             },
             Request::CaptureOutputRegion { frame, overlay_cursor, x, y, width, height, .. } => {
                 let rect = Rectangle::new((x, y).into(), (width, height).into());
 
                 // Translate logical rect to physical framebuffer coordinates.
-                let output = state.output();
-                let output_transform = output.orientation().output_transform();
-                let rotated_rect = output_transform.transform_rect_in(rect, &output.size());
-                let physical_rect = rotated_rect.to_physical_precise_round(output.scale());
+                let canvas = state.canvas();
+                let output_transform = canvas.orientation().output_transform();
+                let rotated_rect = output_transform.transform_rect_in(rect, &canvas.size());
+                let physical_rect = rotated_rect.to_physical_precise_round(canvas.scale());
 
                 // Clamp captured region to the output.
                 let clamped_rect = physical_rect
-                    .intersection(Rectangle::from_size(output.physical_resolution()))
+                    .intersection(Rectangle::from_size(canvas.physical_resolution()))
                     .unwrap_or_default();
 
                 (frame, overlay_cursor, clamped_rect)
@@ -120,8 +120,8 @@ where
 
 /// Handler trait for wlr-screencopy.
 pub trait ScreencopyHandler {
-    /// Get the physical size of an output.
-    fn output(&mut self) -> &Output;
+    /// Get the active output render state.
+    fn canvas(&mut self) -> &Canvas;
 
     /// Handle new screencopy request.
     fn frame(&mut self, frame: Screencopy);

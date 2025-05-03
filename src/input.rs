@@ -784,7 +784,7 @@ impl Catacomb {
         //
         // The animations are designed for 60FPS, but should still behave properly for
         // other refresh rates.
-        let frame_interval = self.windows.output().frame_interval();
+        let frame_interval = self.windows.canvas().frame_interval();
         let velocity = &mut self.touch_state.velocity;
         let position = &mut self.touch_state.position;
         let animation_speed = frame_interval.as_millis() as f64 / 16.;
@@ -821,7 +821,7 @@ impl Catacomb {
         }
 
         // Stage new velocity timer.
-        let timer = Timer::from_duration(self.windows.output().frame_interval());
+        let timer = Timer::from_duration(self.windows.canvas().frame_interval());
         let velocity_timer = self
             .event_loop
             .insert_source(timer, |_, _, catacomb| catacomb.on_velocity_tick())

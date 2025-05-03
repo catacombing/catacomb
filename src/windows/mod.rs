@@ -1075,7 +1075,7 @@ impl Windows {
             },
             (HandleGesture::Vertical(position), View::Workspace) if !self.layouts.is_empty() => {
                 // Ignore overview gesture until changes are required.
-                let available = self.output.available_overview().to_f64();
+                let available = self.canvas.available_overview().to_f64();
                 if position < available.loc.y || position >= available.loc.y + available.size.h {
                     return;
                 }
@@ -1118,7 +1118,7 @@ impl Windows {
             // Leave fullscreen on "drag up".
             (HandleGesture::Vertical(position), View::Fullscreen(window)) => {
                 // Require drag end to be above the gesture handle.
-                let available = self.output.available_overview().to_f64();
+                let available = self.canvas.available_overview().to_f64();
                 if position < available.loc.y || position >= available.loc.y + available.size.h {
                     return;
                 }
@@ -1142,7 +1142,7 @@ impl Windows {
     ///
     /// This filters out non-interactive surfaces.
     pub fn surface_at(&mut self, position: Point<f64, Logical>) -> Option<InputSurface> {
-        let scale = self.output.scale();
+        let scale = self.canvas.scale();
 
         /// Focus a layer shell surface and return it.
         macro_rules! focus_layer_surface {
@@ -1272,11 +1272,6 @@ impl Windows {
         }
     }
 
-    /// Get immutable reference to the current output.
-    pub fn output(&self) -> &Output {
-        &self.output
-    }
-
     /// Update the window manager's current output.
     pub fn set_output(&mut self, output: Output) {
         self.canvas = *output.canvas();
@@ -1325,12 +1320,12 @@ impl Windows {
     pub fn parent_geometry(&self, surface: &WlSurface) -> Rectangle<i32, Logical> {
         with_all_windows!(self, |window| {
             if window.owns_surface(surface) {
-                return window.bounds(self.output().scale());
+                return window.bounds(self.output.scale());
             }
         });
 
         // Default to full output size.
-        Rectangle::from_size(self.output().size())
+        Rectangle::from_size(self.output.size())
     }
 
     /// IME force enable/disable status.

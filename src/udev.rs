@@ -388,7 +388,7 @@ impl Udev {
                             .mark_presented(&output_device.last_render_states, metadata);
 
                         // Request redraw before the next VBlank.
-                        let frame_interval = catacomb.windows.output().frame_interval();
+                        let frame_interval = catacomb.windows.canvas().frame_interval();
                         let prediction = catacomb.frame_pacer.predict();
                         match prediction.filter(|prediction| prediction < &frame_interval) {
                             Some(prediction) => {
@@ -609,7 +609,7 @@ impl OutputDevice {
         windows: &mut Windows,
         cursor_position: Option<Point<f64, Logical>>,
     ) -> Result<bool, Box<dyn Error>> {
-        let scale = windows.output().scale();
+        let scale = windows.canvas().scale();
 
         // Update output mode since we're using static for transforms.
         self.drm_compositor.set_output_mode_source(windows.canvas().into());
@@ -717,10 +717,10 @@ impl OutputDevice {
             self.gles.create_buffer(Fourcc::Abgr8888, buffer_dimensions)?;
         let mut framebuffer = self.gles.bind(&mut offscreen_buffer)?;
 
-        let output = windows.output();
-        let scale = output.scale();
-        let output_size = output.physical_resolution();
-        let transform = output.orientation().output_transform();
+        let canvas = windows.canvas();
+        let scale = canvas.scale();
+        let output_size = canvas.physical_resolution();
+        let transform = canvas.orientation().output_transform();
 
         // Calculate drawing area after output transform.
         let damage = transform.transform_rect_in(region, &output_size);

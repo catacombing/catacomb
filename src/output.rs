@@ -118,11 +118,6 @@ impl Output {
         }
     }
 
-    /// Duration between frames.
-    pub fn frame_interval(&self) -> Duration {
-        Duration::from_nanos(1_000_000_000_000 / self.canvas.mode.refresh as u64)
-    }
-
     /// Update the device orientation.
     pub fn set_orientation(&mut self, orientation: Orientation) {
         self.canvas.orientation = orientation;
@@ -286,6 +281,11 @@ impl Canvas {
     /// Output fractional scale.
     pub fn scale(&self) -> f64 {
         self.scale
+    }
+
+    /// Duration between frames.
+    pub fn frame_interval(&self) -> Duration {
+        Duration::from_nanos(1_000_000_000_000 / self.mode.refresh as u64)
     }
 }
 

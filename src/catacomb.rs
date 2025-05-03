@@ -87,7 +87,7 @@ use crate::config::KeyBinding;
 use crate::drawing::CatacombSurfaceData;
 use crate::input::{REPEAT_DELAY, REPEAT_RATE, TouchState};
 use crate::orientation::{Accelerometer, AccelerometerSource};
-use crate::output::Output;
+use crate::output::Canvas;
 use crate::protocols::screencopy::frame::Screencopy;
 use crate::protocols::screencopy::{ScreencopyHandler, ScreencopyManagerState};
 use crate::udev::Udev;
@@ -391,7 +391,7 @@ impl Catacomb {
             let rendered = self.backend.render(&mut self.windows, cursor_position);
 
             // Update render time prediction.
-            let frame_interval = self.output().frame_interval();
+            let frame_interval = self.canvas().frame_interval();
             self.frame_pacer.add_frame(frame_start.elapsed(), frame_interval);
 
             // Create artificial VBlank if renderer didn't draw.
@@ -399,7 +399,7 @@ impl Catacomb {
             // This is necessary, since rendering might have been skipped due to DRM planes
             // and the next frame could still contain more damage like overview animations.
             if !rendered {
-                let frame_interval = self.windows.output().frame_interval();
+                let frame_interval = self.canvas().frame_interval();
                 self.backend.schedule_redraw(frame_interval);
             } else if let Some(locker) = self.locker.take() {
                 // Update session lock after successful draw.
@@ -761,8 +761,8 @@ impl BufferHandler for Catacomb {
 }
 
 impl ScreencopyHandler for Catacomb {
-    fn output(&mut self) -> &Output {
-        self.windows.output()
+    fn canvas(&mut self) -> &Canvas {
+        self.windows.canvas()
     }
 
     fn frame(&mut self, screencopy: Screencopy) {
