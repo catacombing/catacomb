@@ -4,7 +4,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point};
 use smithay::wayland::shell::wlr_layer::Layer;
 
-use crate::windows::surface::CatacombLayerSurface;
+use crate::windows::surface::{CatacombLayerSurface, InputSurface};
 use crate::windows::window::Window;
 
 type LayerWindow = Window<CatacombLayerSurface>;
@@ -78,35 +78,42 @@ impl Layers {
         }
     }
 
-    /// Foreground window at the specified position.
-    pub fn foreground_window_at(
+    /// Foreground window and surface at the specified position.
+    pub fn foreground_surface_at(
         &self,
         output_scale: f64,
         position: Point<f64, Logical>,
-    ) -> Option<&LayerWindow> {
-        self.overlay.iter().rev().find(|window| window.contains(output_scale, position)).or_else(
-            || self.top.iter().rev().find(|window| window.contains(output_scale, position)),
-        )
+    ) -> Option<(&LayerWindow, InputSurface)> {
+        self.overlay
+            .iter()
+            .rev()
+            .chain(self.top.iter().rev())
+            .find_map(|window| Some((window, window.surface_at(output_scale, position)?)))
     }
 
-    /// Background window at the specified position.
-    pub fn background_window_at(
+    /// Background window and surface at the specified position.
+    pub fn background_surface_at(
         &self,
         output_scale: f64,
         position: Point<f64, Logical>,
-    ) -> Option<&LayerWindow> {
-        self.bottom.iter().rev().find(|window| window.contains(output_scale, position)).or_else(
-            || self.background.iter().rev().find(|window| window.contains(output_scale, position)),
-        )
+    ) -> Option<(&LayerWindow, InputSurface)> {
+        self.bottom
+            .iter()
+            .rev()
+            .chain(self.background.iter().rev())
+            .find_map(|window| Some((window, window.surface_at(output_scale, position)?)))
     }
 
-    /// Overlay window at the specified position.
-    pub fn overlay_window_at(
+    /// Overlay window and surface at the specified position.
+    pub fn overlay_surface_at(
         &self,
         output_scale: f64,
         position: Point<f64, Logical>,
-    ) -> Option<&LayerWindow> {
-        self.overlay.iter().rev().find(|window| window.contains(output_scale, position))
+    ) -> Option<(&LayerWindow, InputSurface)> {
+        self.overlay
+            .iter()
+            .rev()
+            .find_map(|window| Some((window, window.surface_at(output_scale, position)?)))
     }
 
     /// Apply all pending transactional updates.

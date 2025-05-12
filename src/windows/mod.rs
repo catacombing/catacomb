@@ -1146,17 +1146,13 @@ impl Windows {
 
         /// Focus a layer shell surface and return it.
         macro_rules! focus_layer_surface {
-            ($window:expr) => {{
-                let mut surface = $window.surface_at(scale, position)?;
-
+            ($window:expr, $surface:expr) => {{
                 // Only set new focus target if focus is accepted.
                 if !$window.deny_focus {
                     let wl_surface = $window.surface().clone();
                     let app_id = $window.app_id.clone();
-                    surface.toplevel = Some(InputSurfaceKind::Layer((wl_surface, app_id)));
+                    $surface.toplevel = Some(InputSurfaceKind::Layer((wl_surface, app_id)));
                 }
-
-                Some(surface)
             }};
         }
 
@@ -1164,8 +1160,10 @@ impl Windows {
         match &self.view {
             View::Workspace => (),
             View::Fullscreen(window) => {
-                if let Some(window) = self.layers.overlay_window_at(scale, position) {
-                    return focus_layer_surface!(window);
+                if let Some((window, mut surface)) = self.layers.overlay_surface_at(scale, position)
+                {
+                    focus_layer_surface!(window, surface);
+                    return Some(surface);
                 }
 
                 // Get surface of the fullscreened window.
@@ -1185,16 +1183,18 @@ impl Windows {
 
         // Search for topmost clicked surface.
 
-        if let Some(window) = self.layers.foreground_window_at(scale, position) {
-            return focus_layer_surface!(window);
+        if let Some((window, mut surface)) = self.layers.foreground_surface_at(scale, position) {
+            focus_layer_surface!(window, surface);
+            return Some(surface);
         }
 
         if let Some(surface) = self.layouts.touch_surface_at(scale, position) {
             return Some(surface);
         }
 
-        if let Some(window) = self.layers.background_window_at(scale, position) {
-            return focus_layer_surface!(window);
+        if let Some((window, mut surface)) = self.layers.background_surface_at(scale, position) {
+            focus_layer_surface!(window, surface);
+            return Some(surface);
         }
 
         None

@@ -542,8 +542,7 @@ impl Layouts {
 
         for window in active_layout.windows() {
             let window_ref = window.borrow();
-            if window_ref.contains(output_scale, position) {
-                let mut surface = window_ref.surface_at(output_scale, position)?;
+            if let Some(mut surface) = window_ref.surface_at(output_scale, position) {
                 let app_id = window_ref.app_id.clone();
                 let window = Rc::downgrade(window);
                 surface.toplevel = Some(InputSurfaceKind::Layout((window, app_id)));

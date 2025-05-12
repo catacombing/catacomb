@@ -145,11 +145,6 @@ impl<S: Surface + 'static> Window<S> {
         !self.dead && self.surface.alive()
     }
 
-    /// Check if this window contains a specific point.
-    pub fn contains(&self, output_scale: f64, point: Point<f64, Logical>) -> bool {
-        self.bounds(output_scale).to_f64().contains(point)
-    }
-
     /// Add this window's textures to the supplied buffer.
     pub fn textures(
         &self,
