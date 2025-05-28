@@ -180,7 +180,7 @@ impl Windows {
         let transform = self.output.orientation().surface_transform();
         let scale = self.output.scale();
 
-        let window = Rc::new(RefCell::new(Window::new(&[], surface, scale, transform, None)));
+        let window = Rc::new(RefCell::new(Window::new(surface, scale, transform, None)));
         self.layouts.create(&self.output, window);
 
         // Leave fullscreen if it is currently active.
@@ -193,8 +193,7 @@ impl Windows {
         let scale = self.output.scale();
 
         let surface = CatacombLayerSurface::new(layer, surface);
-        let mut window =
-            Window::new(&self.window_scales, surface, scale, transform, Some(namespace));
+        let mut window = Window::new(surface, scale, transform, Some(namespace));
 
         window.enter(&self.output);
         self.layers.add(window);
@@ -205,7 +204,7 @@ impl Windows {
         let transform = self.output.orientation().surface_transform();
         let scale = self.output.scale();
 
-        self.orphan_popups.push(Window::new(&[], popup, scale, transform, None));
+        self.orphan_popups.push(Window::new(popup, scale, transform, None));
     }
 
     /// Move popup location.
@@ -228,7 +227,7 @@ impl Windows {
         };
 
         // Set lock surface size.
-        let mut window = Window::new(&[], surface, output_scale, surface_transform, None);
+        let mut window = Window::new(surface, output_scale, surface_transform, None);
         window.set_dimensions(output_scale, Rectangle::from_size(output_size));
 
         // Update lockscreen.
@@ -1215,7 +1214,7 @@ impl Windows {
         // Update existing window scales.
         let window_scales = mem::take(&mut self.window_scales);
         let output_scale = self.output.scale();
-        with_all_windows_mut!(self, |window| window.update_scale(&window_scales, output_scale));
+        with_all_windows_mut!(self, |window| window.set_window_scale(&window_scales, output_scale));
         self.window_scales = window_scales;
     }
 
@@ -1291,8 +1290,8 @@ impl Windows {
         self.start_transaction();
         self.output.set_scale(scale);
 
-        // Update surface's preferred fractional and buffer scale.
-        with_all_windows!(self, |window| window.set_preferred_scale(scale));
+        // Update surfaces' preferred fractional and buffer scale.
+        with_all_windows!(self, |window| window.update_scale(scale));
 
         self.resize_all();
     }

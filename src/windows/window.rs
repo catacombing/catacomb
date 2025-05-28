@@ -93,13 +93,12 @@ pub struct Window<S = ToplevelSurface> {
 impl<S: Surface + 'static> Window<S> {
     /// Create a new Toplevel window.
     pub fn new(
-        window_scales: &[(AppIdMatcher, WindowScale)],
         surface: S,
         output_scale: f64,
         surface_transform: Transform,
         app_id: Option<String>,
     ) -> Self {
-        let mut window = Window {
+        let window = Window {
             surface,
             app_id,
             presentation_callbacks: Default::default(),
@@ -118,7 +117,7 @@ impl<S: Surface + 'static> Window<S> {
         };
 
         // Ensure preferred integer scale and per-window layer shell scale are set.
-        window.update_scale(window_scales, output_scale);
+        window.update_scale(output_scale);
 
         window.update_transform(surface_transform);
 
@@ -533,7 +532,7 @@ impl<S: Surface + 'static> Window<S> {
 
         // Try to update window scale when App ID changes.
         if app_id_changed {
-            self.update_scale(window_scales, output_scale);
+            self.set_window_scale(window_scales, output_scale);
         }
     }
 
@@ -550,48 +549,51 @@ impl<S: Surface + 'static> Window<S> {
         }
     }
 
-    /// Update the window's scale override.
-    pub fn update_scale(
+    /// Update the pre-window scale override.
+    pub fn set_window_scale(
         &mut self,
         window_scales: &[(AppIdMatcher, WindowScale)],
         output_scale: f64,
     ) {
-        // Update popup scale.
-        for popup in &mut self.popups {
-            popup.update_scale(window_scales, output_scale);
+        // Update per-window scale, handling identical scales as no-op.
+        let window_scale = window_scales.iter().find_map(|(matcher, window_scale)| {
+            matcher.matches(self.app_id.as_ref()).then_some(*window_scale)
+        });
+        if window_scale == self.scale {
+            return;
         }
+        self.set_window_scale_internal(window_scale);
 
-        // Update the per-window scale override.
-        self.scale = None;
-        for (matcher, window_scale) in window_scales {
-            // Pick the first match and assign it.
-            if matcher.matches(self.app_id.as_ref()) {
-                self.scale = Some(*window_scale);
-                break;
-            }
-        }
+        // Submit new scale to the window.
+        self.update_scale(output_scale);
 
-        // Handle preferred buffer scale and fractional scale.
-        self.set_preferred_scale_toplevel(output_scale);
-
-        // Resubmit dimensions in case per-window scaling changed.
+        // Resubmit dimensions to adjust for scale change.
         let transaction = self.transaction.as_ref();
         let current_rectangle = transaction.map_or(self.output_rectangle, |t| t.output_rectangle);
         self.set_dimensions(output_scale, current_rectangle);
     }
 
-    /// Update the surface's preferred scale.
-    pub fn set_preferred_scale(&self, output_scale: f64) {
-        // Update popups' preferred scale.
+    /// Recursively set the window's and popups' window scale.
+    fn set_window_scale_internal(&mut self, window_scale: Option<WindowScale>) {
+        for popup in &mut self.popups {
+            popup.set_window_scale_internal(window_scale);
+        }
+        self.scale = window_scale;
+    }
+
+    /// Update the window's preferred scale.
+    pub fn update_scale(&self, output_scale: f64) {
+        // Update popup scale.
         for popup in &self.popups {
-            popup.set_preferred_scale(output_scale);
+            popup.update_scale(output_scale);
         }
 
-        self.set_preferred_scale_toplevel(output_scale);
+        // Handle preferred buffer scale and fractional scale.
+        self.set_preferred_scale_internal(output_scale);
     }
 
     /// Update the surface's preferred scale, without updating its popups.
-    fn set_preferred_scale_toplevel(&self, output_scale: f64) {
+    fn set_preferred_scale_internal(&self, output_scale: f64) {
         let scale = self.window_scale(output_scale);
         let surface = self.surface.surface();
 
