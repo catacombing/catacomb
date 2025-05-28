@@ -587,7 +587,7 @@ impl Windows {
             _ => return,
         };
 
-        if surface.is_some_and(|surface| surface == &window.surface) {
+        if surface.is_none_or(|surface| surface == &window.surface) {
             // Update window's XDG state.
             window.surface.set_state(|state| {
                 state.states.unset(State::Fullscreen);
