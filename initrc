@@ -18,14 +18,14 @@ set -e
 systemd-inhibit --what handle-power-key sleep infinity &
 
 ## Launch `tzompantli` when holding the power button
-catacomb msg bind-key --on-press '*' XF86PowerOff bash -c \
+catacomb msg bind-key --trigger press '*' XF86PowerOff bash -c \
     "sleep 0 0 0 0 0 0 0 0.5 && \
         if [ \"\$(catacomb msg dpms)\" == \"on\" ]; then \
             (tremor 100 0 1; tzompantli) \
         fi"
 
 ## Turn off display when pressing the power button
-catacomb msg bind-key '*' XF86PowerOff bash -c \
+catacomb msg bind-key --trigger release '*' XF86PowerOff bash -c \
     "if pkill -xf -9 \"sleep 0 0 0 0 0 0 0 0.5\"; then \
         if [ \"\$(catacomb msg dpms)\" == \"on\" ]; then \
             catacomb msg dpms off; \
