@@ -1,0 +1,44 @@
+#!/bin/sh
+
+# Based on Niri's session script.
+
+if [ -n "$SHELL" ] \
+    && grep -q "$SHELL" /etc/shells \
+    && ! (echo "$SHELL" | grep -q "false") \
+    && ! (echo "$SHELL" | grep -q "nologin")
+then
+    if [ "$1" != '-l' ]; then
+        exec bash -c "exec -l '$SHELL' -c '$0 -l $*'"
+    else
+        shift
+    fi
+fi
+
+# Ensure Catacomb session is not running yet.
+if systemctl --user -q is-active catacomb.service; then
+    echo 'A Catacomb session is already running.'
+    exit 1
+fi
+
+# Reset failed state of all user units.
+systemctl --user reset-failed
+
+# Import the login manager environment.
+systemctl --user import-environment
+
+# DBus activation environment is independent from systemd. While most of
+# dbus-activated services are already using `SystemdService` directive, some
+# still don't and thus we should set the dbus environment with a separate
+# command.
+if hash dbus-update-activation-environment 2>/dev/null; then
+    dbus-update-activation-environment --all
+fi
+
+# Start Catacomb and wait for it to terminate.
+systemctl --user --wait start catacomb.service
+
+# Force stop of graphical-session.target.
+systemctl --user start --job-mode=replace-irreversibly catacomb-shutdown.target
+
+# Unset environment that we've set.
+systemctl --user unset-environment WAYLAND_DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP
