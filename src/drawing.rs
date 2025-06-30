@@ -331,7 +331,7 @@ impl RenderElement<GlesRenderer> for RenderTexture {
         }
     }
 
-    fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage> {
+    fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
         self.buffer.as_ref().map(UnderlyingStorage::Wayland)
     }
 }
@@ -409,7 +409,7 @@ impl RenderElement<GlesRenderer> for CatacombElement {
         self.0.draw(frame, src, dst, damage, opaque_regions)
     }
 
-    fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage> {
+    fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
         self.0.underlying_storage(renderer)
     }
 }

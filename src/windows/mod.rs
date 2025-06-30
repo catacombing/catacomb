@@ -245,7 +245,7 @@ impl Windows {
     }
 
     /// Find the XDG shell window responsible for a specific surface.
-    pub fn find_xdg(&mut self, wl_surface: &WlSurface) -> Option<RefMut<Window>> {
+    pub fn find_xdg(&mut self, wl_surface: &WlSurface) -> Option<RefMut<'_, Window>> {
         // Get root surface.
         let mut wl_surface = Cow::Borrowed(wl_surface);
         while let Some(surface) = compositor::get_parent(&wl_surface) {

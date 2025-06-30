@@ -492,12 +492,12 @@ impl Layouts {
     }
 
     /// Get an iterator over all windows.
-    pub fn windows(&self) -> impl Iterator<Item = Ref<Window>> {
+    pub fn windows(&self) -> impl Iterator<Item = Ref<'_, Window>> {
         self.layouts.iter().flat_map(|layout| layout.windows()).map(|window| window.borrow())
     }
 
     /// Get an iterator over all windows.
-    pub fn windows_mut(&mut self) -> impl Iterator<Item = RefMut<Window>> {
+    pub fn windows_mut(&mut self) -> impl Iterator<Item = RefMut<'_, Window>> {
         self.layouts.iter().flat_map(|layout| layout.windows()).map(|window| window.borrow_mut())
     }
 

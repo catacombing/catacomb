@@ -1,6 +1,7 @@
 //! Catacomb compositor state.
 
 use std::cell::RefCell;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp, env, mem};
@@ -290,13 +291,28 @@ impl Catacomb {
         }
 
         // Run user startup script.
-        if let Some(mut script_path) = dirs::config_dir() {
-            script_path.push("catacomb");
-            script_path.push(INIT_EXEC);
+        let user_config = dirs::config_dir().map(|dir| dir.join("catacomb").join(INIT_EXEC));
+        match user_config {
+            Some(user_config) if user_config.exists() => {
+                info!("Loading user config at {:?}", user_config);
 
-            if let Err(err) = crate::daemon(script_path.as_os_str(), []) {
-                error!("Unable to launch {script_path:?}: {err}");
-            }
+                if let Err(err) = crate::daemon(user_config.as_os_str(), []) {
+                    error!("Unable to launch {user_config:?}: {err}");
+                }
+            },
+            _ => {
+                let global_path = format!("/etc/catacomb/{INIT_EXEC}");
+                let global_path = Path::new(&global_path);
+                if global_path.exists() {
+                    info!("Loading global config at {:?}", global_path);
+
+                    if let Err(err) = crate::daemon(global_path.as_os_str(), []) {
+                        error!("Unable to launch {global_path:?}: {err}");
+                    }
+                } else {
+                    info!("No configuration script found");
+                }
+            },
         }
 
         Self {
