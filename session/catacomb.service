@@ -10,5 +10,5 @@ Before=xdg-desktop-autostart.target
 
 [Service]
 Slice=session.slice
-Type=notify
+Type=exec
 ExecStart=/usr/bin/catacomb
