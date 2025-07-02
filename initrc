@@ -47,7 +47,7 @@ catacomb msg bind-key --trigger repeat '*' XF86AudioLowerVolume \
     pactl set-sink-volume 0 -5%
 
 # Ensure the virtual keyboard is enabled
-set org.gnome.desktop.a11y.applications screen-keyboard-enabled true
+gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true
 
 # Spawn background apps
 squeekboard &
