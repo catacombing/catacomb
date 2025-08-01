@@ -63,6 +63,7 @@ impl Output {
         let mode = Mode { size: (0, 0).into(), refresh: 0 };
         Output::new(display, "dummy-0", mode, PhysicalProperties {
             subpixel: Subpixel::Unknown,
+            serial_number: "dummy-0".into(),
             model: "dummy-0".into(),
             make: "dummy-0".into(),
             size: (0, 0).into(),

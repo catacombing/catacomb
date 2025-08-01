@@ -9,7 +9,8 @@ license = "GPL-3.0"
 edition = "2024"
 
 [dependencies.smithay]
-version = "0.6.0"
+git = "https://github.com/smithay/smithay"
+rev = "bdf094ab687aa85f84abbeeaff06e3b66ab1e054"
 default-features = false
 features = [
     "use_system_lib",

@@ -17,7 +17,7 @@ use smithay::backend::allocator::gbm::{GbmAllocator, GbmBuffer, GbmBufferFlags, 
 use smithay::backend::drm::compositor::{
     DrmCompositor as SmithayDrmCompositor, FrameFlags, RenderFrameResult,
 };
-use smithay::backend::drm::exporter::gbm::GbmFramebufferExporter;
+use smithay::backend::drm::exporter::gbm::{GbmFramebufferExporter, NodeFilter};
 use smithay::backend::drm::gbm::GbmFramebuffer;
 use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent, DrmNode, DrmSurface};
 use smithay::backend::egl::context::EGLContext;
@@ -491,6 +491,7 @@ impl Udev {
         windows.set_output(Output::new(display, output_name, mode, PhysicalProperties {
             size: (physical_width as i32, physical_height as i32).into(),
             subpixel: Subpixel::Unknown,
+            serial_number: "Unknown".into(),
             model: "Generic DRM".into(),
             make: "Catacomb".into(),
         }));
@@ -502,7 +503,7 @@ impl Udev {
             surface,
             None,
             allocator,
-            GbmFramebufferExporter::new(gbm.clone()),
+            GbmFramebufferExporter::new(gbm.clone(), NodeFilter::All),
             SUPPORTED_COLOR_FORMATS.iter().copied(),
             formats,
             Size::default(),

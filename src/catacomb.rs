@@ -871,15 +871,15 @@ impl SelectionHandler for Catacomb {
 }
 
 impl PrimarySelectionHandler for Catacomb {
-    fn primary_selection_state(&self) -> &PrimarySelectionState {
-        &self.primary_selection_state
+    fn primary_selection_state(&mut self) -> &mut PrimarySelectionState {
+        &mut self.primary_selection_state
     }
 }
 delegate_primary_selection!(Catacomb);
 
 impl DataDeviceHandler for Catacomb {
-    fn data_device_state(&self) -> &DataDeviceState {
-        &self.data_device_state
+    fn data_device_state(&mut self) -> &mut DataDeviceState {
+        &mut self.data_device_state
     }
 }
 impl ClientDndGrabHandler for Catacomb {}
@@ -887,8 +887,8 @@ impl ServerDndGrabHandler for Catacomb {}
 delegate_data_device!(Catacomb);
 
 impl DataControlHandler for Catacomb {
-    fn data_control_state(&self) -> &DataControlState {
-        &self.data_control_state
+    fn data_control_state(&mut self) -> &mut DataControlState {
+        &mut self.data_control_state
     }
 }
 delegate_data_control!(Catacomb);
