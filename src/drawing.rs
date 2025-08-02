@@ -60,7 +60,7 @@ const CURSOR_SIZE: f64 = 32.;
 #[derive(Clone, Debug)]
 pub struct Texture {
     opaque_regions: Vec<Rectangle<i32, Logical>>,
-    tracker: DamageSnapshot<i32, Logical>,
+    tracker: DamageSnapshot<i32, BufferSpace>,
     location: Cell<Point<i32, Logical>>,
     src_rect: Rectangle<f64, Logical>,
     dst_size: Size<i32, Logical>,
@@ -280,12 +280,12 @@ impl Element for RenderTexture {
         scale: Scale<f64>,
         commit: Option<CommitCounter>,
     ) -> DamageSet<i32, Physical> {
+        let geometry = self.geometry(scale);
         let damage = match self.tracker.damage_since(commit) {
             Some(damage) => damage,
             // Fallback to fully damage.
             None => {
-                let size = self.geometry(scale).size;
-                return DamageSet::from_slice(&[Rectangle::from_size(size)]);
+                return DamageSet::from_slice(&[Rectangle::from_size(geometry.size)]);
             },
         };
 
@@ -293,7 +293,23 @@ impl Element for RenderTexture {
         let scale = self.window_scale.map_or(scale.x, |window_scale| window_scale.scale(scale.x));
 
         // Convert damage to physical space.
-        DamageSet::from_iter(damage.into_iter().map(|rect| rect.to_physical_precise_round(scale)))
+        let buffer_size = self.buffer_size.to_f64().to_buffer(self.scale, self.transform);
+        let damage = damage.into_iter().map(|rect| {
+            // Convert buffer damage to logical space with viewporter transforms applied.
+            let viewporter_scale = Scale::from((
+                self.dst_size.w as f64 / self.src_rect.size.w,
+                self.dst_size.h as f64 / self.src_rect.size.h,
+            ));
+            let mut logical = rect
+                .to_f64()
+                .to_logical(self.scale, self.transform, &buffer_size)
+                .upscale(viewporter_scale);
+            logical.loc -= self.src_rect.loc;
+
+            logical.to_physical_precise_round(scale)
+        });
+
+        DamageSet::from_iter(damage)
     }
 
     fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
@@ -603,26 +619,21 @@ impl CatacombSurfaceData {
         }
 
         // Store new damage updates.
-        let physical_damage = attributes.damage.drain(..).map(|damage| {
+        let buffer_damage = attributes.damage.drain(..).map(|damage| {
             // Get damage in buffer and logical space.
-            let (buffer, logical) = match damage {
-                SurfaceDamage::Buffer(buffer) => {
-                    let buffer_size = self.buffer_size.to_buffer(self.scale, self.transform);
-                    let logical = buffer.to_logical(self.scale, self.transform, &buffer_size);
-                    (buffer, logical)
-                },
+            let damage = match damage {
+                SurfaceDamage::Buffer(buffer) => buffer,
                 SurfaceDamage::Surface(logical) => {
-                    let buffer = logical.to_buffer(self.scale, self.transform, &self.buffer_size);
-                    (buffer, logical)
+                    logical.to_buffer(self.scale, self.transform, &self.buffer_size)
                 },
             };
 
             // Store buffer space damage for buffer import.
-            self.damage.buffer.push(buffer);
+            self.damage.buffer.push(damage);
 
-            logical
+            damage
         });
-        self.damage.tracker.add(physical_damage);
+        self.damage.tracker.add(buffer_damage);
     }
 }
 
@@ -630,7 +641,7 @@ impl CatacombSurfaceData {
 #[derive(Default)]
 pub struct Damage {
     buffer: Vec<Rectangle<i32, BufferSpace>>,
-    tracker: DamageBag<i32, Logical>,
+    tracker: DamageBag<i32, BufferSpace>,
 }
 
 impl Damage {
