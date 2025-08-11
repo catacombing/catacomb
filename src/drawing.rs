@@ -8,7 +8,7 @@ use catacomb_ipc::WindowScale;
 use smithay::backend::renderer::element::utils::{
     CropRenderElement, Relocate, RelocateRenderElement, RescaleRenderElement,
 };
-use smithay::backend::renderer::element::{Element, Id, RenderElement, UnderlyingStorage};
+use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer, GlesTexture, ffi};
 use smithay::backend::renderer::utils::{
     Buffer, CommitCounter, DamageBag, DamageSet, DamageSnapshot, OpaqueRegions,
@@ -410,6 +410,10 @@ impl Element for CatacombElement {
 
     fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
         self.0.opaque_regions(scale)
+    }
+
+    fn kind(&self) -> Kind {
+        Kind::ScanoutCandidate
     }
 }
 
