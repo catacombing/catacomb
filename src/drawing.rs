@@ -627,8 +627,19 @@ impl CatacombSurfaceData {
             // Get damage in buffer and logical space.
             let damage = match damage {
                 SurfaceDamage::Buffer(buffer) => buffer,
-                SurfaceDamage::Surface(logical) => {
-                    logical.to_buffer(self.scale, self.transform, &self.buffer_size)
+                SurfaceDamage::Surface(mut logical) => {
+                    let viewporter_scale = Scale::from((
+                        self.dst_size.w as f64 / self.src_rect.size.w,
+                        self.dst_size.h as f64 / self.src_rect.size.h,
+                    ));
+
+                    // Apply inverse viewporter transforms.
+                    logical.loc += self.src_rect.loc.to_i32_round();
+                    let mut buffer =
+                        logical.to_buffer(self.scale, self.transform, &self.buffer_size).to_f64();
+                    buffer = buffer.downscale(viewporter_scale);
+
+                    buffer.to_i32_round()
                 },
             };
 
