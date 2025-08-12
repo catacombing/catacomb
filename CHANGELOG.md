@@ -5,6 +5,14 @@ The sections should follow the order `Packaging`, `Added`, `Changed`, `Fixed` an
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 1.0.3 - 2025-08-12
+
+### Fixed
+
+- Damage tracking for viewporter clients
+- Rendering on devices without instancing support
+- No applications getting scanned out directly
+
 ## 1.0.2 - 2025-07-02
 
 ### Fixed
