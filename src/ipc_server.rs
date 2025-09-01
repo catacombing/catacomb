@@ -7,6 +7,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
 use catacomb_ipc::{AppIdMatcher, CliToggle, IpcMessage, Keysym, WindowScale};
+use smithay::input::keyboard::XkbConfig;
 use smithay::reexports::calloop::LoopHandle;
 use tracing::{error, warn};
 
@@ -147,6 +148,11 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
             catacomb.key_bindings.retain(|binding| {
                 binding.app_id.base() != app_id || binding.key != key || binding.mods != mods
             });
+        },
+        IpcMessage::KeyboardConfig { layout, options } => {
+            let layout = layout.as_deref().unwrap_or_default();
+            let config = XkbConfig { layout, options, ..Default::default() };
+            catacomb.set_xkb_config(config);
         },
         IpcMessage::Dpms { state: Some(state) } => {
             catacomb.set_display_status(state == CliToggle::On)

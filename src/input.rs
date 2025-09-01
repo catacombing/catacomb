@@ -7,7 +7,9 @@ use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Event, InputBackend, InputEvent, KeyState,
     KeyboardKeyEvent, MouseButton, PointerButtonEvent, TouchEvent as _, TouchSlot,
 };
-use smithay::input::keyboard::{FilterResult, Keycode, KeysymHandle, ModifiersState, keysyms};
+use smithay::input::keyboard::{
+    FilterResult, Keycode, KeysymHandle, ModifiersState, XkbConfig, keysyms,
+};
 use smithay::input::touch::{DownEvent, MotionEvent, UpEvent};
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
@@ -373,6 +375,28 @@ impl Catacomb {
     pub fn handle_orientation(&mut self, orientation: Orientation) {
         self.windows.update_orientation(orientation);
         self.force_redraw(false);
+    }
+
+    /// Change the seat's keyboard configuration.
+    pub fn set_xkb_config(&mut self, config: XkbConfig) {
+        let keyboard = match self.seat.get_keyboard() {
+            Some(keyboard) => keyboard,
+            None => return,
+        };
+
+        let num_lock = keyboard.modifier_state().num_lock;
+
+        if let Err(err) = keyboard.set_xkb_config(self, config) {
+            error!("Failed to update xkb config: {err}");
+            return;
+        }
+
+        // Restore num lock to its previous value.
+        let mut mods_state = keyboard.modifier_state();
+        if mods_state.num_lock != num_lock {
+            mods_state.num_lock = num_lock;
+            keyboard.set_modifier_state(mods_state);
+        }
     }
 
     /// Process new input events.

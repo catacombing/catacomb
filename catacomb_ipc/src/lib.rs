@@ -138,6 +138,15 @@ pub enum IpcMessage {
         /// Base key for this binding.
         key: Keysym,
     },
+    /// Keyboard configuration.
+    KeyboardConfig {
+        /// Comma-separated list of layouts.
+        #[cfg_attr(feature = "clap", clap(long, short))]
+        layout: Option<String>,
+        /// Comma-separated list of XKB options.
+        #[cfg_attr(feature = "clap", clap(long, short))]
+        options: Option<String>,
+    },
     /// Output power management.
     Dpms {
         /// Desired power management state; leave empty to get current state.
@@ -531,6 +540,10 @@ fn validate_message(message: &IpcMessage) -> Result<(), Box<dyn Error>> {
         // Ensure only fixed scales are used for global scale changes.
         IpcMessage::Scale { scale, app_id: None } if !matches!(scale, WindowScale::Fixed(_)) => {
             return Err(format!("global scale must be fixed, got \"{scale}\"").into());
+        },
+        // Clarify keyboard config behavior without any options set.
+        IpcMessage::KeyboardConfig { layout: None, options: None } => {
+            eprintln!("Resetting keyboard configuration to default");
         },
         _ => (),
     }
