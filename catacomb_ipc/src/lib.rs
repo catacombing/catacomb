@@ -140,18 +140,18 @@ pub enum IpcMessage {
     },
     /// Keyboard configuration.
     KeyboardConfig {
-        /// Comma-separated list of layouts.
-        #[cfg_attr(feature = "clap", clap(long, short))]
-        layout: Option<String>,
         /// Keyboard model.
         #[cfg_attr(feature = "clap", clap(long, short))]
         model: Option<String>,
-        /// Comma-separated list of XKB options.
+        /// Comma-separated list of layouts.
         #[cfg_attr(feature = "clap", clap(long, short))]
-        options: Option<String>,
+        layout: Option<String>,
         /// Comma-separated list of XKB variants.
         #[cfg_attr(feature = "clap", clap(long, short))]
         variant: Option<String>,
+        /// Comma-separated list of XKB options.
+        #[cfg_attr(feature = "clap", clap(long, short))]
+        options: Option<String>,
     },
     /// Output power management.
     Dpms {
