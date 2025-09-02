@@ -143,9 +143,15 @@ pub enum IpcMessage {
         /// Comma-separated list of layouts.
         #[cfg_attr(feature = "clap", clap(long, short))]
         layout: Option<String>,
+        /// Keyboard model.
+        #[cfg_attr(feature = "clap", clap(long, short))]
+        model: Option<String>,
         /// Comma-separated list of XKB options.
         #[cfg_attr(feature = "clap", clap(long, short))]
         options: Option<String>,
+        /// Comma-separated list of XKB variants.
+        #[cfg_attr(feature = "clap", clap(long, short))]
+        variant: Option<String>,
     },
     /// Output power management.
     Dpms {
@@ -542,7 +548,7 @@ fn validate_message(message: &IpcMessage) -> Result<(), Box<dyn Error>> {
             return Err(format!("global scale must be fixed, got \"{scale}\"").into());
         },
         // Clarify keyboard config behavior without any options set.
-        IpcMessage::KeyboardConfig { layout: None, options: None } => {
+        IpcMessage::KeyboardConfig { model: None, layout: None, variant: None, options: None } => {
             eprintln!("Resetting keyboard configuration to default");
         },
         _ => (),
