@@ -149,11 +149,11 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
                 binding.app_id.base() != app_id || binding.key != key || binding.mods != mods
             });
         },
-        IpcMessage::KeyboardConfig { layout, options } => {
-            let layout = layout.as_deref().unwrap_or_default();
+        IpcMessage::KeyboardConfig { model, layout, variant, options } => {
             let model = model.as_deref().unwrap_or_default();
+            let layout = layout.as_deref().unwrap_or_default();
             let variant = variant.as_deref().unwrap_or_default();
-            let config = XkbConfig { model, layout, variant, options, ..Default::default() };
+            let config = XkbConfig { model, layout, variant, options, rules: "" };
             catacomb.set_xkb_config(config);
         },
         IpcMessage::Dpms { state: Some(state) } => {
