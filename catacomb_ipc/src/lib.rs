@@ -143,7 +143,7 @@ pub enum IpcMessage {
         /// Comma-separated list of layouts.
         #[cfg_attr(feature = "clap", clap(long, short))]
         layout: Option<String>,
-        /// Comma-separated list of XKB models.
+        /// Specification of single XKB model.
         #[cfg_attr(feature = "clap", clap(long, short))]
         model: Option<String>,
         /// Comma-separated list of XKB options.
