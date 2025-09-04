@@ -21,7 +21,7 @@ systemd-inhibit --what handle-power-key sleep infinity &
 catacomb msg bind-key --trigger press '*' XF86PowerOff bash -c \
     "sleep 0 0 0 0 0 0 0 0.5 && \
         if [ \"\$(catacomb msg dpms)\" == \"on\" ]; then \
-            (tremor 100 0 1; tzompantli) \
+            (tremor 150 0 1; tzompantli) \
         fi"
 
 ## Turn off display when pressing the power button
