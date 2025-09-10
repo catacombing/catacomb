@@ -106,6 +106,7 @@ const INIT_EXEC: &str = "initrc";
 const RECENT_FRAME_COUNT: usize = 16;
 
 /// Padding added to render time predictions.
+#[allow(unused)]
 const PREDICTION_PADDING: Duration = Duration::from_millis(8);
 
 /// Shared compositor state.
@@ -961,6 +962,7 @@ impl FramePacer {
     }
 
     /// Predict time required for next frame.
+    #[allow(unused)]
     pub fn predict(&self) -> Option<Duration> {
         if self.frame_count == 0 {
             return None;

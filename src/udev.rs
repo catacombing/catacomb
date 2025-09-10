@@ -388,14 +388,20 @@ impl Udev {
                             .mark_presented(&output_device.last_render_states, metadata);
 
                         // Request redraw before the next VBlank.
-                        let frame_interval = catacomb.windows.canvas().frame_interval();
-                        let prediction = catacomb.frame_pacer.predict();
-                        match prediction.filter(|prediction| prediction < &frame_interval) {
-                            Some(prediction) => {
-                                catacomb.backend.schedule_redraw(frame_interval - prediction);
-                            },
-                            None => catacomb.create_frame(),
-                        }
+                        //
+                        // TODO: Frame scheduling prediction is disabled since it does not take
+                        // asynchronous rendering time into account, causing consistent failure to
+                        // meet the vblank timeout.
+                        //
+                        // let frame_interval = catacomb.windows.canvas().frame_interval();
+                        // let prediction = catacomb.frame_pacer.predict();
+                        // match prediction.filter(|prediction| prediction < &frame_interval) {
+                        //     Some(prediction) => {
+                        //         catacomb.backend.schedule_redraw(frame_interval - prediction);
+                        //     },
+                        //     None => catacomb.create_frame(),
+                        // }
+                        catacomb.create_frame();
                     },
                     DrmEvent::Error(error) => error!("DRM error: {error}"),
                 };
