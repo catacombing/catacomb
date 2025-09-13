@@ -1,6 +1,7 @@
 //! Catacomb compositor state.
 
 use std::cell::RefCell;
+use std::os::fd::OwnedFd;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -8,6 +9,7 @@ use std::{cmp, env, mem};
 
 use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use _server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as ManagerMode;
+use calloop::Mode;
 use catacomb_ipc::{Keysym, Orientation};
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::ImportDma;
@@ -105,9 +107,11 @@ const INIT_EXEC: &str = "initrc";
 /// Number of frames considered for best-case rendering times.
 const RECENT_FRAME_COUNT: usize = 16;
 
-/// Padding added to render time predictions.
-#[allow(unused)]
-const PREDICTION_PADDING: Duration = Duration::from_millis(8);
+/// Percentage of frame prediction added as extra margin.
+///
+/// A value of 150 means the final suggestion is 150% of the original
+/// prediction.
+const PREDICTION_PADDING: u64 = 150;
 
 /// Shared compositor state.
 pub struct Catacomb {
@@ -370,7 +374,7 @@ impl Catacomb {
             return;
         }
 
-        let frame_start = Instant::now();
+        self.frame_pacer.start_frame(&self.event_loop);
 
         // Clear rendering stall status.
         self.stalled = false;
@@ -405,17 +409,18 @@ impl Catacomb {
             }
 
             // Draw all visible clients.
-            let rendered = self.backend.render(&mut self.windows, cursor_position);
+            let frame = self.backend.render(&mut self.windows, cursor_position);
 
-            // Update render time prediction.
-            let frame_interval = self.canvas().frame_interval();
-            self.frame_pacer.add_frame(frame_start.elapsed(), frame_interval);
+            // Finish measuring render time.
+            if let Some(gpu_fence) = frame.gpu_fence {
+                self.frame_pacer.finish_frame(&self.event_loop, gpu_fence);
+            }
 
             // Create artificial VBlank if renderer didn't draw.
             //
             // This is necessary, since rendering might have been skipped due to DRM planes
             // and the next frame could still contain more damage like overview animations.
-            if !rendered {
+            if !frame.rendered {
                 let frame_interval = self.canvas().frame_interval();
                 self.backend.schedule_redraw(frame_interval);
             } else if let Some(locker) = self.locker.take() {
@@ -940,14 +945,60 @@ impl ClientData for ClientState {
 delegate_single_pixel_buffer!(Catacomb);
 
 /// Compositor rendering time prediction.
-#[derive(Default)]
 pub struct FramePacer {
     recent_frames: [u64; RECENT_FRAME_COUNT],
     frame_count: u64,
     total_ns: u64,
+
+    // Current frame state.
+    frame_token: Option<RegistrationToken>,
+    frame_start: Instant,
+}
+
+impl Default for FramePacer {
+    fn default() -> Self {
+        Self {
+            frame_start: Instant::now(),
+            recent_frames: Default::default(),
+            frame_count: Default::default(),
+            frame_token: Default::default(),
+            total_ns: Default::default(),
+        }
+    }
 }
 
 impl FramePacer {
+    /// Start measuring a new frame.
+    fn start_frame(&mut self, event_loop: &LoopHandle<'static, Catacomb>) {
+        // Ensure slow older frames do not interfere with the current frame.
+        if let Some(token) = self.frame_token {
+            event_loop.remove(token);
+        }
+
+        self.frame_start = Instant::now();
+    }
+
+    /// Finish current frame measurement.
+    ///
+    /// The `fence` file descriptor should become ready when all asynchronous
+    /// GPU processing is done for the frame, at which point the duration of the
+    /// frame is calculated.
+    fn finish_frame(&mut self, event_loop: &LoopHandle<'static, Catacomb>, fence: OwnedFd) {
+        let source = Generic::new(fence, Interest::READ, Mode::OneShot);
+        let result = event_loop.insert_source(source, |_, _, catacomb| {
+            let render_time = catacomb.frame_pacer.frame_start.elapsed();
+            let frame_interval = catacomb.canvas().frame_interval();
+            catacomb.frame_pacer.add_frame(render_time, frame_interval);
+
+            Ok(PostAction::Remove)
+        });
+
+        match result {
+            Ok(token) => self.frame_token = Some(token),
+            Err(err) => error!("Failed to schedule async frame timer: {err}"),
+        }
+    }
+
     /// Add a new frame to the tracker.
     fn add_frame(&mut self, render_time: Duration, frame_interval: Duration) {
         // Limit worst-case to refresh rate, to reduce impact of statistical outliers.
@@ -962,7 +1013,6 @@ impl FramePacer {
     }
 
     /// Predict time required for next frame.
-    #[allow(unused)]
     pub fn predict(&self) -> Option<Duration> {
         if self.frame_count == 0 {
             return None;
@@ -975,10 +1025,11 @@ impl FramePacer {
         let recent_frames = self.recent_frames.iter().copied().take(self.frame_count as usize);
         let recent_worst_ns = recent_frames.max().unwrap_or_default();
 
-        let prediction = Duration::from_nanos(recent_worst_ns.max(min_time_ns));
+        let prediction_nanos = recent_worst_ns.max(min_time_ns) * PREDICTION_PADDING / 100;
+        let prediction = Duration::from_nanos(prediction_nanos);
 
         // Add buffer to account for measuring tolerances.
-        Some(prediction + PREDICTION_PADDING)
+        Some(prediction)
     }
 }
 

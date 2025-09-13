@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::error::Error;
+use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::{env, io, mem, process, ptr};
@@ -15,7 +16,7 @@ use smithay::backend::allocator::Fourcc;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBuffer, GbmBufferFlags, GbmDevice};
 use smithay::backend::drm::compositor::{
-    DrmCompositor as SmithayDrmCompositor, FrameFlags, RenderFrameResult,
+    DrmCompositor as SmithayDrmCompositor, FrameFlags, PrimaryPlaneElement, RenderFrameResult,
 };
 use smithay::backend::drm::exporter::gbm::{GbmFramebufferExporter, NodeFilter};
 use smithay::backend::drm::gbm::GbmFramebuffer;
@@ -247,17 +248,17 @@ impl Udev {
         &mut self,
         windows: &mut Windows,
         cursor_position: Option<Point<f64, Logical>>,
-    ) -> bool {
+    ) -> RenderedFrame {
         let output_device = match &mut self.output_device {
             Some(output_device) => output_device,
-            None => return false,
+            None => return RenderedFrame { rendered: false, gpu_fence: None },
         };
 
         match output_device.render(&self.event_loop, windows, cursor_position) {
-            Ok(rendered) => rendered,
+            Ok(frame) => frame,
             Err(err) => {
                 error!("{err}");
-                false
+                RenderedFrame { rendered: false, gpu_fence: None }
             },
         }
     }
@@ -388,20 +389,14 @@ impl Udev {
                             .mark_presented(&output_device.last_render_states, metadata);
 
                         // Request redraw before the next VBlank.
-                        //
-                        // TODO: Frame scheduling prediction is disabled since it does not take
-                        // asynchronous rendering time into account, causing consistent failure to
-                        // meet the vblank timeout.
-                        //
-                        // let frame_interval = catacomb.windows.canvas().frame_interval();
-                        // let prediction = catacomb.frame_pacer.predict();
-                        // match prediction.filter(|prediction| prediction < &frame_interval) {
-                        //     Some(prediction) => {
-                        //         catacomb.backend.schedule_redraw(frame_interval - prediction);
-                        //     },
-                        //     None => catacomb.create_frame(),
-                        // }
-                        catacomb.create_frame();
+                        let frame_interval = catacomb.windows.canvas().frame_interval();
+                        let prediction = catacomb.frame_pacer.predict();
+                        match prediction.filter(|prediction| prediction < &frame_interval) {
+                            Some(prediction) => {
+                                catacomb.backend.schedule_redraw(frame_interval - prediction);
+                            },
+                            None => catacomb.create_frame(),
+                        }
                     },
                     DrmEvent::Error(error) => error!("DRM error: {error}"),
                 };
@@ -615,7 +610,7 @@ impl OutputDevice {
         event_loop: &LoopHandle<'static, Catacomb>,
         windows: &mut Windows,
         cursor_position: Option<Point<f64, Logical>>,
-    ) -> Result<bool, Box<dyn Error>> {
+    ) -> Result<RenderedFrame, Box<dyn Error>> {
         let scale = windows.canvas().scale();
 
         // Update output mode since we're using static for transforms.
@@ -629,6 +624,12 @@ impl OutputDevice {
             FrameFlags::DEFAULT | FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT_ANY,
         )?;
         let rendered = !frame_result.is_empty;
+
+        // Get fence for measuring frame completion.
+        let gpu_fence = match &frame_result.primary_element {
+            PrimaryPlaneElement::Swapchain(element) => element.sync.export(),
+            _ => None,
+        };
 
         // Update last render states.
         self.last_render_states = mem::take(&mut frame_result.states);
@@ -679,7 +680,7 @@ impl OutputDevice {
             self.drm_compositor.queue_frame(())?;
         }
 
-        Ok(rendered)
+        Ok(RenderedFrame { rendered, gpu_fence })
     }
 
     /// Copy a region of the framebuffer to a DMA buffer.
@@ -844,6 +845,12 @@ impl OutputDevice {
 
         Ok(feedback)
     }
+}
+
+/// Information about a rendered frame.
+pub struct RenderedFrame {
+    pub gpu_fence: Option<OwnedFd>,
+    pub rendered: bool,
 }
 
 /// DRM compositor type alias.
