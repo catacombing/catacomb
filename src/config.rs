@@ -1,6 +1,6 @@
 //! Compositor configuration.
 
-use catacomb_ipc::{AppIdMatcher, GestureSector, KeyTrigger, Keysym, Modifiers};
+use catacomb_ipc::{AppIdMatcher, GestureSector, KeyTrigger, Keysyms, Modifiers};
 
 /// User-defined gesture action.
 #[derive(Debug)]
@@ -23,7 +23,7 @@ pub enum GestureBindingAction {
 pub struct KeyBinding {
     pub app_id: AppIdMatcher,
     pub mods: Modifiers,
-    pub key: Keysym,
+    pub keys: Keysyms,
     pub program: String,
     pub arguments: Vec<String>,
     pub trigger: KeyTrigger,

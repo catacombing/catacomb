@@ -987,11 +987,21 @@ impl Catacomb {
         // Get currently focused app.
         let active_app = catacomb.windows.focus().and_then(|(_, app_id)| app_id);
 
+        // Update list of pressed keys.
+        //
+        // This is split before/after the binding comparison since the `Press`
+        // trigger is based on target state, while the `Release` trigger is
+        // based on the origin state.
+        let pressed = state == KeyState::Pressed;
+        if pressed {
+            catacomb.active_keys.insert(Keysym::Xkb(raw_keysym));
+        }
+
         // Execute all matching keybindings.
         let mut filter_result = FilterResult::Forward;
-        let pressed = state == KeyState::Pressed;
         for key_binding in &catacomb.key_bindings {
-            if key_binding.key == Keysym::Xkb(raw_keysym)
+            // Check whether the current state matches the binding's trigger.
+            if *key_binding.keys == catacomb.active_keys
                 && key_binding.mods == mods
                 && key_binding.app_id.matches(active_app.as_ref())
                 && (key_binding.trigger != KeyTrigger::Release) == pressed
@@ -1017,6 +1027,11 @@ impl Catacomb {
                 // Prevent key propagation.
                 filter_result = InputAction::None.into();
             }
+        }
+
+        // Update list of pressed keys.
+        if !pressed {
+            catacomb.active_keys.remove(&Keysym::Xkb(raw_keysym));
         }
 
         filter_result

@@ -1,6 +1,7 @@
 //! Catacomb compositor state.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::os::fd::OwnedFd;
 use std::path::Path;
 use std::sync::Arc;
@@ -118,6 +119,7 @@ pub struct Catacomb {
     pub event_loop: LoopHandle<'static, Self>,
     pub display_handle: DisplayHandle,
     pub key_bindings: Vec<KeyBinding>,
+    pub active_keys: HashSet<Keysym>,
     pub touch_state: TouchState,
     pub frame_pacer: FramePacer,
     pub draw_cursor: bool,
@@ -348,6 +350,7 @@ impl Catacomb {
             idle_inhibitors: Default::default(),
             key_bindings: Default::default(),
             ime_override: Default::default(),
+            active_keys: Default::default(),
             frame_pacer: Default::default(),
             draw_cursor: Default::default(),
             last_focus: Default::default(),
@@ -542,11 +545,13 @@ impl Catacomb {
 
         for binding in &self.key_bindings {
             let action = (&binding.program, &binding.arguments);
-            match binding.key {
-                Keysym::EnableVirtualKeyboard => actions.enable = Some(action),
-                Keysym::DisableVirtualKeyboard => actions.disable = Some(action),
-                Keysym::AutoVirtualKeyboard => actions.auto = Some(action),
-                _ => (),
+            for key in binding.keys.iter() {
+                match key {
+                    Keysym::EnableVirtualKeyboard => actions.enable = Some(action),
+                    Keysym::DisableVirtualKeyboard => actions.disable = Some(action),
+                    Keysym::AutoVirtualKeyboard => actions.auto = Some(action),
+                    _ => (),
+                }
             }
 
             // Stop once all actions were found.

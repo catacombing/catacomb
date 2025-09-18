@@ -123,7 +123,7 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
                 gesture.app_id.base() != app_id || gesture.start != start || gesture.end != end
             });
         },
-        IpcMessage::BindKey { app_id, mods, trigger, key, program, arguments } => {
+        IpcMessage::BindKey { app_id, mods, trigger, keys, program, arguments } => {
             let app_id = match AppIdMatcher::try_from(app_id) {
                 Ok(app_id) => app_id,
                 Err(err) => {
@@ -137,16 +137,16 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
                 program,
                 trigger,
                 app_id,
-                key,
+                keys,
                 mods: mods.unwrap_or_default(),
             };
             catacomb.key_bindings.push(binding);
         },
-        IpcMessage::UnbindKey { app_id, mods, key } => {
+        IpcMessage::UnbindKey { app_id, mods, keys } => {
             let mods = mods.unwrap_or_default();
 
             catacomb.key_bindings.retain(|binding| {
-                binding.app_id.base() != app_id || binding.key != key || binding.mods != mods
+                binding.app_id.base() != app_id || binding.keys != keys || binding.mods != mods
             });
         },
         IpcMessage::KeyboardConfig { model, layout, variant, options } => {

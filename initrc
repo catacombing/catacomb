@@ -8,6 +8,8 @@
 # - tzompantli: Application launcher (https://github.com/catacombing/tzompantli)
 # - squeekboard: Virtual Keyboard (https://gitlab.gnome.org/World/Phosh/squeekboard)
 # - swayidle: Automatic idle timeouts (https://github.com/swaywm/sway)
+# - grim: Screenshots (https://gitlab.freedesktop.org/emersion/grim)
+# - slurp: Screenshot region selection (https://github.com/emersion/slurp)
 
 # Exit on error
 set -e
@@ -32,6 +34,17 @@ catacomb msg bind-key --trigger release '*' XF86PowerOff bash -c \
         else \
             catacomb msg dpms on; \
         fi \
+    fi"
+
+## Take a screenshot on `power + volume down` and save it to /tmp/screenshot.png
+catacomb msg bind-key --trigger press '*' XF86PowerOff+XF86AudioLowerVolume bash -c \
+    "pkill -xf -9 \"sleep 0 0 0 0 0 0 0 0.5\"; \
+    tremor 150 0 1; \
+    geometry=\$(slurp 2>&1); \
+    if [[ \$geometry == \"selection cancelled\" ]]; then \
+        grim /tmp/screenshot.png; \
+    else \
+        grim -g \"\$geometry\" /tmp/screenshot.png; \
     fi"
 
 ## Allow manually toggling the virtual keyboard

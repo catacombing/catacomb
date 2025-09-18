@@ -5,10 +5,12 @@
 
 //! IPC socket communication.
 
+use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::io::{BufRead, BufReader, Write};
 use std::net::Shutdown;
+use std::ops::Deref;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 #[cfg(feature = "clap")]
@@ -120,8 +122,19 @@ pub enum IpcMessage {
         /// Point at which the key event's command gets executed.
         #[cfg_attr(feature = "clap", clap(long, default_value = "press"))]
         trigger: KeyTrigger,
-        /// Base key for this binding.
-        key: Keysym,
+        /// Base key(s) for this binding.
+        ///
+        /// Accepts a `+`-separated list of XKB keysyms required to trigger this
+        /// binding.
+        ///
+        /// [example: XF86PowerOff+XF86AudioLowerVolume]
+        ///
+        /// Accepts the following non-XKB keys:
+        /// - EnableVirtualKeyboard
+        /// - DisableVirtualKeyboard
+        /// - AutoVirtualKeyboard
+        #[cfg_attr(feature = "clap", clap(verbatim_doc_comment))]
+        keys: Keysyms,
         /// Program this gesture should spawn.
         program: String,
         /// Arguments for this gesture's program.
@@ -135,8 +148,19 @@ pub enum IpcMessage {
         /// Required modifiers.
         #[cfg_attr(feature = "clap", clap(long, short))]
         mods: Option<Modifiers>,
-        /// Base key for this binding.
-        key: Keysym,
+        /// Base key(s) for this binding.
+        ///
+        /// Accepts a `+`-separated list of XKB keysyms required to trigger the
+        /// target binding.
+        ///
+        /// [example: XF86PowerOff+XF86AudioLowerVolume]
+        ///
+        /// Accepts the following non-XKB keys:
+        /// - EnableVirtualKeyboard
+        /// - DisableVirtualKeyboard
+        /// - AutoVirtualKeyboard
+        #[cfg_attr(feature = "clap", clap(verbatim_doc_comment))]
+        keys: Keysyms,
     },
     /// Keyboard configuration.
     KeyboardConfig {
@@ -425,8 +449,35 @@ impl FromStr for Modifiers {
     }
 }
 
+/// A list of XKB keysyms.
+#[derive(Deserialize, Serialize, PartialEq, Eq, Clone, Debug)]
+pub struct Keysyms {
+    keysyms: HashSet<Keysym>,
+}
+
+#[cfg(feature = "clap")]
+impl FromStr for Keysyms {
+    type Err = ClapError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut keysyms = HashSet::new();
+        for item in s.split('+') {
+            keysyms.insert(Keysym::from_str(item)?);
+        }
+        Ok(Self { keysyms })
+    }
+}
+
+impl Deref for Keysyms {
+    type Target = HashSet<Keysym>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.keysyms
+    }
+}
+
 /// Clap wrapper for XKB keysym.
-#[derive(Deserialize, Serialize, PartialEq, Eq, Copy, Clone, Debug)]
+#[derive(Deserialize, Serialize, Hash, PartialEq, Eq, Copy, Clone, Debug)]
 pub enum Keysym {
     EnableVirtualKeyboard,
     DisableVirtualKeyboard,
