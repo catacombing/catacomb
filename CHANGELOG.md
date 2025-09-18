@@ -5,6 +5,13 @@ The sections should follow the order `Packaging`, `Added`, `Changed`, `Fixed` an
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 1.0.5 - 2025-09-19
+
+### Added
+
+- Multi-button keybinding support
+- Screenshot binding in default config
+
 ## 1.0.4 - 2025-09-10
 
 ### Added
