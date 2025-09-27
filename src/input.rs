@@ -730,7 +730,7 @@ impl Catacomb {
         match action {
             // Execute subcommand.
             GestureBindingAction::Cmd((program, args)) => {
-                if let Err(err) = daemon::spawn(&program, &args) {
+                if let Err(err) = daemon(&program, &args) {
                     error!("Failed gesture command {program} {args:?}: {err}");
                 }
             },
@@ -1009,7 +1009,7 @@ impl Catacomb {
                 // Execute subcommand.
                 let program = &key_binding.program;
                 let arguments = &key_binding.arguments;
-                let _ = daemon::spawn(program, arguments).inspect_err(|err| {
+                let _ = daemon(program, arguments).inspect_err(|err| {
                     error!("Failed keybinding command {program} {arguments:?}: {err}")
                 });
 
@@ -1018,7 +1018,7 @@ impl Catacomb {
                     let program = key_binding.program.clone();
                     let arguments = key_binding.arguments.clone();
                     catacomb.touch_state.start_key_repeat(move || {
-                        let _ = daemon::spawn(&program, &arguments).inspect_err(|err| {
+                        let _ = daemon(&program, &arguments).inspect_err(|err| {
                             error!("Failed keybinding command {program} {arguments:?}: {err}")
                         });
                     });

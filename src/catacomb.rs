@@ -529,7 +529,7 @@ impl Catacomb {
         };
 
         // Execute binding to toggle virtual keyboard override.
-        if let Err(err) = daemon::spawn(program, args) {
+        if let Err(err) = daemon(program, args) {
             error!("Failed to update virtual keyboard state ({program} {args:?}): {err}");
         }
 

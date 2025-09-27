@@ -14,7 +14,6 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 mod catacomb;
 mod config;
-mod daemon;
 mod drawing;
 mod geometry;
 mod input;
@@ -78,8 +77,8 @@ where
     let mut command = Command::new(program);
     command.args(args);
     command.stdin(Stdio::null());
-    command.stdout(Stdio::null());
-    command.stderr(Stdio::null());
+    command.stdout(Stdio::inherit());
+    command.stderr(Stdio::inherit());
 
     unsafe {
         command.pre_exec(|| {
