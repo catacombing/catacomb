@@ -706,6 +706,14 @@ impl Windows {
                 let delta = timeout - elapsed;
                 return Some(Duration::from_millis(delta));
             }
+        } else {
+            // Blacklist windows which caused transaction failure.
+            for mut window in self.layouts.windows_mut().filter(|w| !w.transaction_done()) {
+                window.set_ignore_transactions();
+            }
+            for window in self.layers.iter_mut().filter(|w| !w.transaction_done()) {
+                window.set_ignore_transactions();
+            }
         }
 
         // Clear transaction timer.

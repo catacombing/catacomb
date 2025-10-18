@@ -86,6 +86,10 @@ pub struct Window<S = ToplevelSurface> {
     /// Window-specific scale override.
     scale: Option<WindowScale>,
 
+    /// Whether the window has proven unreliable for transactions.
+    ignore_transactions: bool,
+    ignore_transactions_locked: bool,
+
     /// Window liveliness override.
     dead: bool,
 }
@@ -101,7 +105,9 @@ impl<S: Surface + 'static> Window<S> {
         let window = Window {
             surface,
             app_id,
+            ignore_transactions_locked: Default::default(),
             presentation_callbacks: Default::default(),
+            ignore_transactions: Default::default(),
             output_rectangle: Default::default(),
             texture_cache: Default::default(),
             transaction: Default::default(),
@@ -452,13 +458,25 @@ impl<S: Surface + 'static> Window<S> {
             None => return,
         };
 
+        // Remove transaction blacklist after passing a transaction.
+        if self.ignore_transactions && !self.ignore_transactions_locked {
+            self.ignore_transactions = transaction.size != self.acked_size;
+
+            // Reset lock until next commit if window is still failing transactions.
+            if self.ignore_transactions {
+                self.ignore_transactions_locked = true;
+            }
+        }
+
         self.output_rectangle = transaction.output_rectangle;
         self.size = transaction.size;
     }
 
     /// Check if the transaction is ready for application.
     pub fn transaction_done(&self) -> bool {
-        !self.alive() || self.transaction.as_ref().is_none_or(|t| t.size == self.acked_size)
+        self.ignore_transactions
+            || !self.alive()
+            || self.transaction.as_ref().is_none_or(|t| t.size == self.acked_size)
     }
 
     /// Handle common surface commit logic for surfaces of any kind.
@@ -470,6 +488,9 @@ impl<S: Surface + 'static> Window<S> {
     ) {
         // Cancel transactions on the commit after the configure was acked.
         self.acked_size = self.surface.acked_size();
+
+        // Allow evaluating transaction reliability once a new commit is made.
+        self.ignore_transactions_locked = false;
 
         // Handle surface buffer changes.
         compositor::with_surface_tree_upward(
@@ -822,6 +843,12 @@ impl<S: Surface + 'static> Window<S> {
         }
 
         self.app_id = app_id;
+    }
+
+    /// Add window to transaction blacklist.
+    pub fn set_ignore_transactions(&mut self) {
+        self.ignore_transactions_locked = true;
+        self.ignore_transactions = true;
     }
 
     /// Check if this window requires a redraw.
