@@ -75,7 +75,8 @@ impl SensorAccelerometer {
 
         // Read the mount_matrix values.
         let accel_mount_matrix = udev_attribute::<Matrix3x3<f32>>(&accel, "in_mount_matrix")
-            .or_else(|| udev_attribute::<Matrix3x3<f32>>(&accel, "in_accel_mount_matrix"))?;
+            .or_else(|| udev_attribute::<Matrix3x3<f32>>(&accel, "in_accel_mount_matrix"))
+            .or_else(|| udev_attribute::<Matrix3x3<f32>>(&accel, "mount_matrix"))?;
 
         let syspath = accel.syspath().to_path_buf();
 
