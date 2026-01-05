@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 
 - Orientation tracking for accelerometers with `mount_matrix` udev attribute
+- XDG popup support for layer shell windows
 
 ## 1.0.6 - 2025-10-19
 

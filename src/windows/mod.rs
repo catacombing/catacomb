@@ -293,6 +293,12 @@ impl Windows {
                 return;
             }
         }
+        for window in self.layers.iter_mut() {
+            if window.popup_surface_commit(scale, &root_surface, surface) {
+                // Abort as soon as we found the parent.
+                return;
+            }
+        }
 
         // Abort if we can't find any window for this surface.
         let window = match find_window!(self.layers.iter_mut()) {
@@ -335,6 +341,11 @@ impl Windows {
         // Try and add it to the secondary window.
         if let Some(secondary) = active_layout.secondary().as_ref() {
             popup = secondary.borrow_mut().add_popup(popup, &parent)?;
+        }
+
+        // Try and add it to any layer shell windows.
+        for window in self.layers.iter_mut() {
+            popup = window.add_popup(popup, &parent)?;
         }
 
         // Dismiss popup if it wasn't added to either of the visible windows.
