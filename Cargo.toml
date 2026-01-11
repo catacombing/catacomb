@@ -15,10 +15,36 @@ members = ["catacomb_ipc"]
 default = []
 profiling = ["dep:profiling", "dep:puffin_http"]
 
-[dependencies.smithay]
+[workspace.dependencies]
+clap = "4.2.3"
+dirs = "6.0.0"
+regex = "1.8.1"
+serde = "1.0.144"
+serde_json = "1.0.85"
+xkbcommon = "0.9.0"
+
+[workspace.dependencies.smithay]
 git = "https://github.com/smithay/smithay"
 rev = "06c9930f2b61f7d4b08a1f525fa114fd4492ac98"
 default-features = false
+
+[dependencies]
+calloop = { version = "0.14.0", features = ["signals"] }
+catacomb_ipc = { version = "0.1.0", path = "./catacomb_ipc", features = ["clap", "smithay"] }
+clap = { workspace = true, features = ["derive", "wrap_help"] }
+dirs.workspace = true
+indexmap = "2.5.0"
+libc = "0.2.123"
+profiling = { version = "1.0.14", optional = true, features = ["profile-with-puffin"] }
+puffin_http = { version = "0.16.0", optional = true }
+serde_json.workspace = true
+serde = { workspace = true, features = ["derive"] }
+tracing = "0.1.37"
+tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
+udev = "0.9.1"
+
+[dependencies.smithay]
+workspace = true
 features = [
     "use_system_lib",
     "backend_drm",
@@ -28,18 +54,3 @@ features = [
     "backend_session_libseat",
     "renderer_gl",
 ]
-
-[dependencies]
-calloop = { version = "0.14.0", features = ["signals"] }
-catacomb_ipc = { version = "0.1.0", path = "./catacomb_ipc", features = ["clap", "smithay"] }
-clap = { version = "4.2.3", features = ["derive", "wrap_help"] }
-dirs = "6.0.0"
-indexmap = "2.5.0"
-libc = "0.2.123"
-profiling = { version = "1.0.14", optional = true, features = ["profile-with-puffin"] }
-puffin_http = { version = "0.16.0", optional = true }
-serde_json = "1.0.85"
-serde = { version = "1.0.144", features = ["derive"] }
-tracing = "0.1.37"
-tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
-udev = "0.9.1"

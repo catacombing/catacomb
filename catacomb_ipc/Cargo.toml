@@ -8,28 +8,14 @@ rust-version = "1.85.0"
 license = "GPL-3.0"
 edition = "2024"
 
-[dependencies.smithay]
-git = "https://github.com/smithay/smithay"
-rev = "06c9930f2b61f7d4b08a1f525fa114fd4492ac98"
-default-features = false
-features = [
-    "use_system_lib",
-    "backend_drm",
-    "backend_gbm",
-    "backend_libinput",
-    "backend_udev",
-    "backend_session_libseat",
-    "renderer_gl",
-]
-optional = true
-
 [dependencies]
-clap = { version = "4.2.3", features = ["derive"], optional = true }
-serde = { version = "1.0.144", features = ["derive"] }
-serde_json = "1.0.85"
-xkbcommon = "0.9.0"
-dirs = "6.0.0"
-regex = "1.8.1"
+clap = { workspace = true, features = ["derive"], optional = true }
+dirs.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+serde = { workspace = true, features = ["derive"] }
+smithay = { workspace = true, optional = true }
+xkbcommon.workspace = true
 
 [features]
 default = []
