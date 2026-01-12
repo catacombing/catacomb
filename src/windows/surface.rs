@@ -99,7 +99,7 @@ impl Surface for ToplevelSurface {
                 .get::<Mutex<XdgToplevelSurfaceRoleAttributes>>()
                 .and_then(|attributes| attributes.lock().ok());
 
-            attributes.and_then(|attributes| attributes.current.size)
+            attributes.and_then(|attributes| attributes.last_acked.as_ref()?.state.size)
         })
         .unwrap_or_default()
     }
@@ -213,7 +213,7 @@ impl Surface for CatacombLayerSurface {
                 .get::<Mutex<LayerSurfaceAttributes>>()
                 .and_then(|attributes| attributes.lock().ok());
 
-            attributes.and_then(|attributes| attributes.current.size)
+            attributes.and_then(|attributes| attributes.last_acked.as_ref()?.state.size)
         })
         .unwrap_or_default()
     }
@@ -265,8 +265,9 @@ impl Surface for LockSurface {
     }
 
     fn acked_size(&self) -> Size<i32, Logical> {
-        let current_state = self.current_state();
-        let size = current_state.size.unwrap_or_default();
+        let size = self
+            .with_committed_state(|state| state.and_then(|state| state.size))
+            .unwrap_or_default();
         (size.w as i32, size.h as i32).into()
     }
 
