@@ -16,7 +16,7 @@ use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::input::KeyState;
 use smithay::backend::renderer::ImportDma;
 use smithay::input::keyboard::xkb::ModMask;
-use smithay::input::keyboard::{KeyboardHandle, Keycode, XkbConfig};
+use smithay::input::keyboard::{FilterResult, KeyboardHandle, Keycode, XkbConfig};
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::calloop::generic::{Generic, NoIoDrop};
 use smithay::reexports::calloop::signals::{Signal, Signals};
@@ -757,15 +757,16 @@ impl InputMethodHandler for Catacomb {
     }
 }
 
-// TODO
 impl VirtualKeyboardHandler for Catacomb {
     fn on_keyboard_event(
         &mut self,
-        _keycode: Keycode,
-        _state: KeyState,
-        _time: u32,
-        _keyboard: KeyboardHandle<Self>,
+        keycode: Keycode,
+        state: KeyState,
+        time: u32,
+        keyboard: KeyboardHandle<Self>,
     ) {
+        let serial = SERIAL_COUNTER.next_serial();
+        keyboard.input(self, keycode, state, serial, time, |_, _, _| FilterResult::<bool>::Forward);
     }
 
     fn on_keyboard_modifiers(
@@ -916,7 +917,7 @@ impl DataDeviceHandler for Catacomb {
         &mut self.data_device_state
     }
 }
-impl WaylandDndGrabHandler for Catacomb {} // TODO?
+impl WaylandDndGrabHandler for Catacomb {}
 delegate_data_device!(Catacomb);
 
 impl DataControlHandler for Catacomb {
