@@ -46,11 +46,11 @@ udev = "0.9.1"
 [dependencies.smithay]
 workspace = true
 features = [
-    "use_system_lib",
     "backend_drm",
     "backend_gbm",
     "backend_libinput",
     "backend_udev",
     "backend_session_libseat",
     "renderer_gl",
+    "wayland_frontend",
 ]

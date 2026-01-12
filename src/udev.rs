@@ -28,7 +28,7 @@ use smithay::backend::renderer::element::RenderElementStates;
 use smithay::backend::renderer::gles::{GlesRenderbuffer, GlesRenderer, ffi};
 use smithay::backend::renderer::sync::SyncPoint;
 use smithay::backend::renderer::{
-    self, Bind, BufferType, Frame, ImportDma, ImportEgl, Offscreen, Renderer, utils,
+    self, Bind, BufferType, Frame, ImportDma, Offscreen, Renderer, utils,
 };
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{AsErrno, Event as SessionEvent, Session};
@@ -355,10 +355,7 @@ impl Udev {
         let display = unsafe { EGLDisplay::new(gbm.clone())? };
         let context = EGLContext::new(&display)?;
 
-        let mut gles = unsafe { GlesRenderer::new(context).expect("create renderer") };
-
-        // Initialize GPU for EGL rendering.
-        trace_error!(gles.bind_wl_display(display_handle));
+        let gles = unsafe { GlesRenderer::new(context).expect("create renderer") };
 
         // Create the DRM compositor.
         let drm_compositor = self
