@@ -35,6 +35,7 @@ use smithay::wayland::shell::xdg::{
 use smithay::wayland::{fractional_scale, single_pixel_buffer};
 use tracing::error;
 
+use crate::catacomb::ClientState;
 use crate::drawing::{CatacombElement, CatacombSurfaceData, RenderTexture, Texture};
 use crate::geometry::Vector;
 use crate::output::{ExclusiveSpace, Output};
@@ -618,13 +619,13 @@ impl<S: Surface + 'static> Window<S> {
         let scale = self.window_scale(output_scale);
         let surface = self.surface.surface();
 
+        // Cache scale on client in case fractional scale isn't initialized yet.
+        if let Some(data) = surface.client().as_ref().and_then(|c| c.get_data::<ClientState>()) {
+            data.set_cached_fractional_scale(scale);
+        }
+
         // Update fractional scale protocol.
         compositor::with_states(surface, |states| {
-            // Cache scale on surface in case fractional scale isn't initialized yet.
-            let surface_data =
-                states.data_map.get_or_insert(|| RefCell::new(CatacombSurfaceData::new()));
-            surface_data.borrow_mut().cached_fractional_scale = Some(scale);
-
             // Submit through fractional scaling protocol if it is initialized.
             fractional_scale::with_fractional_scale(states, |fractional_scale| {
                 fractional_scale.set_preferred_scale(scale);

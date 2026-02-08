@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::os::fd::OwnedFd;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use std::{cmp, env, mem};
 
@@ -26,7 +27,7 @@ use smithay::reexports::calloop::{
 use smithay::reexports::wayland_protocols::xdg::decoration as _decoration;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::WmCapabilities;
 use smithay::reexports::wayland_protocols_misc::server_decoration as _server_decoration;
-use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
+use smithay::reexports::wayland_server::backend::ClientData;
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
@@ -852,20 +853,24 @@ impl FractionalScaleHandler for Catacomb {
         //
         // This handles setting the initial fractional scale for windows which do not
         // have the fractional scale manager initialized on window creation, by using
-        // the fractional scale that is cached on the surface on creation.
+        // the fractional scale that is cached on the client on creation, or falling
+        // back to the output's scale.
         //
-        // If this surface does not have a window and there is no cached fractional
-        // scale, we will use the output's current scale instead. This usually means
-        // these applications will not work properly with per-window scaling.
-        compositor::with_states(&surface, |states| {
-            fractional_scale::with_fractional_scale(states, |fractional_scale| {
-                if let Some(surface_data) = states.data_map.get::<RefCell<CatacombSurfaceData>>() {
-                    let cached_scale = surface_data.borrow().cached_fractional_scale;
+        // Since this uses the client data to get the cached fractional scale, it means
+        // this will only work with per-window scale if any XDG or layer shell window
+        // was created by this client before this call, or this surface is used for an
+        // XDG or layer shell window after this call. This also will not work properly
+        // for clients with multiple XDG or layer shell windows with different
+        // per-window scales.
+        if let Some(data) = surface.client().as_ref().and_then(|c| c.get_data::<ClientState>()) {
+            compositor::with_states(&surface, |states| {
+                fractional_scale::with_fractional_scale(states, |fractional_scale| {
+                    let cached_scale = data.cached_fractional_scale();
                     let scale = cached_scale.unwrap_or(self.windows.canvas().scale());
                     fractional_scale.set_preferred_scale(scale);
-                }
+                });
             });
-        });
+        }
     }
 }
 delegate_fractional_scale!(Catacomb);
@@ -969,15 +974,27 @@ delegate_viewporter!(Catacomb);
 
 /// Unused state to make Smithay happy.
 #[derive(Default)]
-struct ClientState {
+pub struct ClientState {
+    pub cached_fractional_scale: AtomicU64,
+
     compositor_state: CompositorClientState,
 }
 
-impl ClientData for ClientState {
-    fn initialized(&self, _client_id: ClientId) {}
+impl ClientState {
+    /// Get cached per-window fractional scale.
+    pub fn cached_fractional_scale(&self) -> Option<f64> {
+        let bits = self.cached_fractional_scale.load(Ordering::Relaxed);
+        (bits != u64::MAX).then(|| f64::from_bits(bits))
+    }
 
-    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
+    /// Update per-window fractional scale cache.
+    pub fn set_cached_fractional_scale(&self, scale: f64) {
+        let bits = scale.to_bits();
+        self.cached_fractional_scale.store(bits, Ordering::Relaxed);
+    }
 }
+
+impl ClientData for ClientState {}
 
 delegate_single_pixel_buffer!(Catacomb);
 
