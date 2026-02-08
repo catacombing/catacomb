@@ -127,14 +127,14 @@ impl TouchState {
 
     /// Start a new touch session.
     fn start(&mut self, canvas: &Canvas, slot: TouchSlot, position: Point<f64, Logical>) {
+        self.cancel_velocity();
+
         // Invalidate both sequences if more than one slot is active.
         if self.slot.take().is_some() {
             self.last_tap = None;
             return;
         }
         self.slot = Some(slot);
-
-        self.cancel_velocity();
 
         self.start = TouchStart::new(canvas, position);
         self.position = position;
@@ -535,94 +535,52 @@ impl Catacomb {
         // Find surface at touch position.
         let surface = self.windows.surface_at(event.position);
 
-        // Notify client.
         self.touch_state.input_surface = None;
         self.touch_state.active_app_id = None;
         self.touch_state.tap_surface = None;
-        if let Some(mut input_surface) = surface {
-            // Get surface's App ID.
-            let app_id = input_surface.toplevel.as_mut().and_then(InputSurfaceKind::take_app_id);
 
-            // Check if surface captures shortcuts.
-            let inhibits_shortcuts = compositor::with_states(&input_surface.surface, |states| {
-                let data = states.data_map.get::<CatacombSurfaceData>();
-                data.is_some_and(|data| data.inhibits_shortcuts)
-            });
+        match surface {
+            // Handle surface touch.
+            Some(mut input_surface) => {
+                // Get surface's App ID.
+                let app_id =
+                    input_surface.toplevel.as_mut().and_then(InputSurfaceKind::take_app_id);
 
-            // Check if there's a gesture for this touch event.
-            let has_gesture = || {
-                self.touch_state
-                    .matching_gestures(self.windows.canvas(), app_id.as_ref(), event.position, None)
-                    .next()
-                    .is_some()
-            };
+                // Check if surface captures shortcuts.
+                let inhibits_shortcuts =
+                    compositor::with_states(&input_surface.surface, |states| {
+                        let data = states.data_map.get::<CatacombSurfaceData>();
+                        data.is_some_and(|data| data.inhibits_shortcuts)
+                    });
 
-            // Check if a gesture is triggered by this touch event.
-            let gesture_active =
-                self.touch_state.start.is_handle_gesture || (!inhibits_shortcuts && has_gesture());
-            self.touch_state.active_app_id = app_id;
+                // Check if there's a gesture for this touch event.
+                let has_gesture = || {
+                    let canvas = self.windows.canvas();
+                    self.touch_state
+                        .matching_gestures(canvas, app_id.as_ref(), event.position, None)
+                        .next()
+                        .is_some()
+                };
 
-            if !gesture_active {
-                self.on_surface_down(event, &mut input_surface);
+                // Check if a gesture is triggered by this touch event.
+                let gesture_active = self.touch_state.start.is_handle_gesture
+                    || (!inhibits_shortcuts && has_gesture());
+                self.touch_state.active_app_id = app_id;
 
-                self.touch_state.input_surface = Some(input_surface);
-            } else {
-                self.touch_state.tap_surface = Some(input_surface);
-            }
-        }
+                if !gesture_active {
+                    self.on_surface_down(event, &mut input_surface);
 
-        // Only send touch start if there's no handle gesture in progress.
-        if !self.touch_state.start.is_handle_gesture {
-            self.windows.on_touch_start(position);
-        }
-    }
-
-    /// Handle touch input release.
-    fn on_touch_up(&mut self, event: TouchEvent) {
-        // Notify client.
-        if self.touch_state.input_surface.is_some() {
-            let serial = SERIAL_COUNTER.next_serial();
-            self.seat.get_touch().unwrap().up(self, &UpEvent {
-                serial,
-                slot: event.slot,
-                time: event.time,
-            });
-        }
-
-        // Check if slot is the active one.
-        if self.touch_state.slot != Some(event.slot) {
-            return;
-        }
-        self.touch_state.slot = None;
-
-        match self.touch_state.action(self.windows.canvas()) {
-            Some(TouchAction::Tap) => {
-                self.replay_ignored_tap(event);
-
-                // Stage single-tap to trigger on double-tap timeout.
-                let timer = Timer::from_duration(MAX_DOUBLE_TAP_DURATION);
-                let pending_single_tap =
-                    self.event_loop.insert_source(timer, Self::on_single_tap).unwrap();
-                self.touch_state.pending_single_tap = Some(pending_single_tap);
-                self.touch_state.last_tap = Some((Instant::now(), self.touch_state.position));
-            },
-            Some(TouchAction::DoubleTap) => {
-                // Cancel single-tap.
-                if let Some(pending_single_tap) = self.touch_state.pending_single_tap.take() {
-                    self.event_loop.remove(pending_single_tap);
+                    self.touch_state.input_surface = Some(input_surface);
+                } else {
+                    self.touch_state.tap_surface = Some(input_surface);
                 }
-
-                self.replay_ignored_tap(event);
-
-                self.on_double_tap();
             },
-            Some(
-                TouchAction::Drag | TouchAction::HandleGesture(_) | TouchAction::UserGesture(_),
-            ) => {
-                self.add_velocity_timeout();
-                self.update_position(self.touch_state.position);
+            None => {
+                // Only send touch start if there's no handle gesture in progress.
+                if !self.touch_state.start.is_handle_gesture {
+                    self.windows.on_touch_start(position);
+                }
             },
-            None => self.add_velocity_timeout(),
         }
     }
 
@@ -632,26 +590,82 @@ impl Catacomb {
         self.touch_state.velocity = event.position - self.touch_state.position;
         self.touch_state.position = event.position;
 
-        // Handle client input.
-        if let Some(input_surface) = &self.touch_state.input_surface {
-            // Convert position to pre-window scaling.
-            let scale = self.windows.canvas().scale();
-            let window_scale_position = event.position.upscale(scale / input_surface.surface_scale);
+        match &self.touch_state.input_surface {
+            // Handle client input.
+            Some(input_surface) => {
+                // Convert position to pre-window scaling.
+                let scale = self.windows.canvas().scale();
+                let window_scale_position =
+                    event.position.upscale(scale / input_surface.surface_scale);
 
-            self.seat.get_touch().unwrap().motion(self, None, &MotionEvent {
-                location: window_scale_position,
-                time: event.time,
+                self.seat.get_touch().unwrap().motion(self, None, &MotionEvent {
+                    location: window_scale_position,
+                    time: event.time,
+                    slot: event.slot,
+                });
+            },
+            // Ignore anything but the active touch slot.
+            None if self.touch_state.slot == Some(event.slot) => {
+                self.update_position(event.position)
+            },
+            None => (),
+        }
+    }
+
+    /// Handle touch input release.
+    fn on_touch_up(&mut self, event: TouchEvent) {
+        let is_active_slot = self.touch_state.slot == Some(event.slot);
+        self.touch_state.slot = None;
+
+        // Forward release for client inputs.
+        if self.touch_state.input_surface.is_some() {
+            let serial = SERIAL_COUNTER.next_serial();
+            self.seat.get_touch().unwrap().up(self, &UpEvent {
+                serial,
                 slot: event.slot,
+                time: event.time,
             });
             return;
         }
 
-        // Ignore anything but the active touch slot.
-        if self.touch_state.slot != Some(event.slot) {
+        // Ignore unknown touch slots.
+        if !is_active_slot {
             return;
         }
 
-        self.update_position(event.position);
+        match self.touch_state.action(self.windows.canvas()) {
+            Some(TouchAction::Tap) => {
+                self.replay_ignored_tap(event);
+
+                // Stage compositor single-tap to trigger on double-tap timeout.
+                if self.touch_state.tap_surface.is_none() {
+                    let timer = Timer::from_duration(MAX_DOUBLE_TAP_DURATION);
+                    let pending_single_tap =
+                        self.event_loop.insert_source(timer, Self::on_single_tap).unwrap();
+                    self.touch_state.pending_single_tap = Some(pending_single_tap);
+                    self.touch_state.last_tap = Some((Instant::now(), self.touch_state.position));
+                }
+            },
+            Some(TouchAction::DoubleTap) => {
+                self.replay_ignored_tap(event);
+
+                if self.touch_state.tap_surface.is_none() {
+                    // Cancel compositor single-tap.
+                    if let Some(pending_single_tap) = self.touch_state.pending_single_tap.take() {
+                        self.event_loop.remove(pending_single_tap);
+                    }
+
+                    self.on_double_tap();
+                }
+            },
+            Some(
+                TouchAction::Drag | TouchAction::HandleGesture(_) | TouchAction::UserGesture(_),
+            ) => {
+                self.add_velocity_timeout();
+                self.update_position(self.touch_state.position);
+            },
+            None => self.add_velocity_timeout(),
+        }
     }
 
     /// Handle touch-down on a surface.
@@ -744,14 +758,14 @@ impl Catacomb {
         self.seat.get_touch().unwrap().cancel(self);
     }
 
-    /// Replay touch tap event which were ignored due to gesture recognition.
+    /// Replay touch tap event which was ignored due to gesture recognition.
     fn replay_ignored_tap(&mut self, event: TouchEvent) {
-        let mut input_surface = match self.touch_state.tap_surface.take() {
+        let mut tap_surface = match self.touch_state.tap_surface.take() {
             Some(input_surface) => input_surface,
             None => return,
         };
 
-        self.on_surface_down(event, &mut input_surface);
+        self.on_surface_down(event, &mut tap_surface);
 
         let serial = SERIAL_COUNTER.next_serial();
         self.seat.get_touch().unwrap().up(self, &UpEvent {
@@ -762,10 +776,10 @@ impl Catacomb {
         self.seat.get_touch().unwrap().frame(self);
 
         // Reset tap surface for potential double-tap.
-        self.touch_state.tap_surface = Some(input_surface);
+        self.touch_state.tap_surface = Some(tap_surface);
     }
 
-    /// Single-tap handler.
+    /// Compositor single-tap handler.
     fn on_single_tap(_: Instant, _: &mut (), catacomb: &mut Self) -> TimeoutAction {
         let mut toggle_ime = false;
         catacomb.windows.on_tap(catacomb.touch_state.position, &mut toggle_ime);
@@ -779,9 +793,7 @@ impl Catacomb {
         //
         // This must happen after `on_tap` so we can detect gesture handle taps without
         // focused windows.
-        if catacomb.touch_state.input_surface.is_none() {
-            catacomb.windows.set_focus(None, None, None);
-        }
+        catacomb.windows.set_focus(None, None, None);
 
         // Ensure updates are rendered.
         catacomb.unstall();
@@ -789,12 +801,10 @@ impl Catacomb {
         TimeoutAction::Drop
     }
 
-    /// Double-tap handler.
+    /// Compositor double-tap handler.
     fn on_double_tap(&mut self) {
         // Clear focus when tapping outside of any window.
-        if self.touch_state.input_surface.is_none() {
-            self.windows.set_focus(None, None, None);
-        }
+        self.windows.set_focus(None, None, None);
 
         self.windows.on_double_tap(self.touch_state.position);
 

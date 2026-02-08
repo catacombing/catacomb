@@ -941,7 +941,7 @@ impl Windows {
         overview.y_offset = 0.;
     }
 
-    /// Hand quick touch input.
+    /// Handle quick touch input.
     pub fn on_tap(&mut self, point: Point<f64, Logical>, toggle_ime: &mut bool) {
         let overview = match &mut self.view {
             View::Overview(overview) => overview,
@@ -1174,48 +1174,51 @@ impl Windows {
             }};
         }
 
-        // Prevent window interaction in Overview/DnD.
         match &self.view {
-            View::Workspace => (),
-            View::Fullscreen(window) => {
-                if let Some((window, mut surface)) = self.layers.overlay_surface_at(scale, position)
+            // Search for topmost clicked surface.
+            View::Workspace => {
+                if let Some((window, mut surface)) =
+                    self.layers.foreground_surface_at(scale, position)
                 {
                     focus_layer_surface!(window, surface);
-                    return Some(surface);
+                    Some(surface)
+                } else if let Some(surface) = self.layouts.touch_surface_at(scale, position) {
+                    Some(surface)
+                } else if let Some((window, mut surface)) =
+                    self.layers.background_surface_at(scale, position)
+                {
+                    focus_layer_surface!(window, surface);
+                    Some(surface)
+                } else {
+                    None
                 }
-
-                // Get surface of the fullscreened window.
-                let window_ref = window.borrow();
-                let mut surface = window_ref.surface_at(scale, position)?;
-
-                // Set toplevel to update focus.
-                let app_id = window_ref.app_id.clone();
-                let window = Rc::downgrade(window);
-                surface.toplevel = Some(InputSurfaceKind::Layout((window, app_id)));
-
-                return Some(surface);
             },
-            View::Lock(Some(window)) => return window.surface_at(scale, position),
-            _ => return None,
-        };
+            View::Fullscreen(window) => {
+                match self.layers.overlay_surface_at(scale, position) {
+                    // Touch point is within overlay surface.
+                    Some((window, mut surface)) => {
+                        focus_layer_surface!(window, surface);
+                        Some(surface)
+                    },
+                    // Touch point is within fullscreen window.
+                    None => {
+                        // Get surface of the fullscreened window.
+                        let window_ref = window.borrow();
+                        let mut surface = window_ref.surface_at(scale, position)?;
 
-        // Search for topmost clicked surface.
+                        // Set toplevel to update focus.
+                        let app_id = window_ref.app_id.clone();
+                        let window = Rc::downgrade(window);
+                        surface.toplevel = Some(InputSurfaceKind::Layout((window, app_id)));
 
-        if let Some((window, mut surface)) = self.layers.foreground_surface_at(scale, position) {
-            focus_layer_surface!(window, surface);
-            return Some(surface);
+                        Some(surface)
+                    },
+                }
+            },
+            View::Lock(Some(window)) => window.surface_at(scale, position),
+            // Prevent window interaction in Overview/DnD.
+            View::Overview(_) | View::DragAndDrop(_) | View::Lock(None) => None,
         }
-
-        if let Some(surface) = self.layouts.touch_surface_at(scale, position) {
-            return Some(surface);
-        }
-
-        if let Some((window, mut surface)) = self.layers.background_surface_at(scale, position) {
-            focus_layer_surface!(window, surface);
-            return Some(surface);
-        }
-
-        None
     }
 
     /// Add a per-window scale override.
