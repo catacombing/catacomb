@@ -849,10 +849,19 @@ delegate_idle_notify!(Catacomb);
 impl FractionalScaleHandler for Catacomb {
     fn new_fractional_scale(&mut self, surface: WlSurface) {
         // Submit last cached preferred scale.
+        //
+        // This handles setting the initial fractional scale for windows which do not
+        // have the fractional scale manager initialized on window creation, by using
+        // the fractional scale that is cached on the surface on creation.
+        //
+        // If this surface does not have a window and there is no cached fractional
+        // scale, we will use the output's current scale instead. This usually means
+        // these applications will not work properly with per-window scaling.
         compositor::with_states(&surface, |states| {
             fractional_scale::with_fractional_scale(states, |fractional_scale| {
                 if let Some(surface_data) = states.data_map.get::<RefCell<CatacombSurfaceData>>() {
-                    let scale = surface_data.borrow().preferred_fractional_scale;
+                    let cached_scale = surface_data.borrow().cached_fractional_scale;
+                    let scale = cached_scale.unwrap_or(self.windows.canvas().scale());
                     fractional_scale.set_preferred_scale(scale);
                 }
             });

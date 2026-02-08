@@ -623,7 +623,7 @@ impl<S: Surface + 'static> Window<S> {
             // Cache scale on surface in case fractional scale isn't initialized yet.
             let surface_data =
                 states.data_map.get_or_insert(|| RefCell::new(CatacombSurfaceData::new()));
-            surface_data.borrow_mut().preferred_fractional_scale = scale;
+            surface_data.borrow_mut().cached_fractional_scale = Some(scale);
 
             // Submit through fractional scaling protocol if it is initialized.
             fractional_scale::with_fractional_scale(states, |fractional_scale| {

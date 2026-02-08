@@ -541,7 +541,7 @@ impl Graphics {
 /// Surface data store.
 pub struct CatacombSurfaceData {
     pub opaque_region: Vec<(RectangleKind, Rectangle<i32, Logical>)>,
-    pub preferred_fractional_scale: f64,
+    pub cached_fractional_scale: Option<f64>,
     pub texture: Option<RenderTexture>,
     pub buffer_size: Size<i32, Logical>,
     pub src_rect: Rectangle<f64, Logical>,
@@ -559,8 +559,8 @@ pub struct CatacombSurfaceData {
 impl Default for CatacombSurfaceData {
     fn default() -> Self {
         Self {
-            preferred_fractional_scale: 1.,
             scale: 1,
+            cached_fractional_scale: Default::default(),
             inhibits_shortcuts: Default::default(),
             opaque_region: Default::default(),
             buffer_size: Default::default(),
