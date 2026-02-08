@@ -14,10 +14,8 @@ use _server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as 
 use calloop::Mode;
 use catacomb_ipc::{Keysym, Orientation};
 use smithay::backend::allocator::dmabuf::Dmabuf;
-use smithay::backend::input::KeyState;
 use smithay::backend::renderer::ImportDma;
-use smithay::input::keyboard::xkb::ModMask;
-use smithay::input::keyboard::{FilterResult, KeyboardHandle, Keycode, XkbConfig};
+use smithay::input::keyboard::XkbConfig;
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::calloop::generic::{Generic, NoIoDrop};
 use smithay::reexports::calloop::signals::{Signal, Signals};
@@ -75,7 +73,7 @@ use smithay::wayland::single_pixel_buffer::SinglePixelBufferState;
 use smithay::wayland::socket::ListeningSocketSource;
 use smithay::wayland::text_input::TextInputManagerState;
 use smithay::wayland::viewporter::ViewporterState;
-use smithay::wayland::virtual_keyboard::{VirtualKeyboardHandler, VirtualKeyboardManagerState};
+use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 use smithay::wayland::xdg_activation::{
     XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
 };
@@ -757,30 +755,7 @@ impl InputMethodHandler for Catacomb {
         self.windows.parent_geometry(parent)
     }
 }
-
-impl VirtualKeyboardHandler for Catacomb {
-    fn on_keyboard_event(
-        &mut self,
-        keycode: Keycode,
-        state: KeyState,
-        time: u32,
-        keyboard: KeyboardHandle<Self>,
-    ) {
-        let serial = SERIAL_COUNTER.next_serial();
-        keyboard.input(self, keycode, state, serial, time, |_, _, _| FilterResult::<bool>::Forward);
-    }
-
-    fn on_keyboard_modifiers(
-        &mut self,
-        _depressed_mods: ModMask,
-        _latched_mods: ModMask,
-        _locked_mods: ModMask,
-        _keyboard: KeyboardHandle<Self>,
-    ) {
-    }
-}
 delegate_virtual_keyboard_manager!(Catacomb);
-
 delegate_input_method_manager!(Catacomb);
 delegate_text_input_manager!(Catacomb);
 

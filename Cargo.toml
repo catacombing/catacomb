@@ -24,8 +24,8 @@ serde_json = "1.0.85"
 xkbcommon = "0.9.0"
 
 [workspace.dependencies.smithay]
-git = "https://github.com/smithay/smithay"
-rev = "0cd72d182a7f20daa13d48a14752c95130f0bef9"
+git = "https://github.com/chrisduerr/smithay"
+rev = "590e115f4e84d4982b2e901a05fea65498b36a7e"
 default-features = false
 
 [dependencies]
