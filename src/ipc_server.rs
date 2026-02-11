@@ -173,6 +173,7 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
         IpcMessage::Cursor { state } => {
             catacomb.draw_cursor = state == CliToggle::On;
         },
+        IpcMessage::GestureHandle { height } => catacomb.windows.set_gesture_handle_height(height),
         // Ignore IPC replies.
         IpcMessage::DpmsReply { .. } | IpcMessage::ScaleReply { .. } => (),
     }

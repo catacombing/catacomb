@@ -45,7 +45,7 @@ pub enum IpcMessage {
         #[cfg_attr(feature = "clap", clap(long))]
         unlock: bool,
     },
-    /// Update output scale factor.
+    /// Manage output scale factor.
     Scale {
         /// New scale factor.
         ///
@@ -60,6 +60,9 @@ pub enum IpcMessage {
         #[cfg_attr(feature = "clap", clap(long))]
         app_id: Option<String>,
     },
+    /// Reply for scale request.
+    #[cfg_attr(feature = "clap", clap(skip))]
+    ScaleReply { scale: WindowScale },
     /// Add a gesture.
     BindGesture {
         /// App ID regex.
@@ -185,13 +188,16 @@ pub enum IpcMessage {
     /// Reply for DPMS state request.
     #[cfg_attr(feature = "clap", clap(skip))]
     DpmsReply { state: CliToggle },
-    /// Reply for scale request.
-    #[cfg_attr(feature = "clap", clap(skip))]
-    ScaleReply { scale: WindowScale },
     /// Set touch cursor visibility.
     Cursor {
         /// Desired touch cursor visibility.
         state: CliToggle,
+    },
+    /// Gesture handle configuration.
+    GestureHandle {
+        /// Set gesture handle height.
+        #[cfg_attr(feature = "clap", clap(long, value_name = "HEIGHT"))]
+        height: u16,
     },
 }
 

@@ -22,7 +22,7 @@ use crate::config::{GestureBinding, GestureBindingAction};
 use crate::daemon;
 use crate::drawing::CatacombSurfaceData;
 use crate::orientation::Orientation;
-use crate::output::{Canvas, GESTURE_HANDLE_HEIGHT};
+use crate::output::Canvas;
 use crate::windows::surface::{InputSurface, InputSurfaceKind};
 
 /// Time before a tap is considered a hold.
@@ -325,9 +325,8 @@ impl HandleGesture {
 
     /// Check if a touch should start a new gesture.
     fn is_start(canvas: &Canvas, position: Point<f64, Logical>) -> bool {
-        let canvas_size = canvas.size().to_f64();
-        let loc = (0., canvas_size.h - GESTURE_HANDLE_HEIGHT as f64).into();
-        Rectangle::new(loc, canvas_size).contains(position)
+        let wm_size = canvas.wm_size().to_f64();
+        Rectangle::new((0., wm_size.h).into(), wm_size).contains(position)
     }
 }
 

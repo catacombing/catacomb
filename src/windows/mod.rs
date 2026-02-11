@@ -28,7 +28,7 @@ use crate::drawing::{CatacombElement, Graphics};
 use crate::input::{HandleGesture, TouchState};
 use crate::layer::Layers;
 use crate::orientation::Orientation;
-use crate::output::{Canvas, GESTURE_HANDLE_HEIGHT, Output};
+use crate::output::{Canvas, Output};
 use crate::overview::{DragActionType, DragAndDrop, Overview};
 use crate::windows::layout::{LayoutPosition, Layouts};
 use crate::windows::surface::{CatacombLayerSurface, InputSurface, InputSurfaceKind, Surface};
@@ -903,6 +903,16 @@ impl Windows {
         self.orientation_locked
     }
 
+    /// Set gesture handle height.
+    pub fn set_gesture_handle_height(&mut self, height: u16) {
+        let old_height = self.output.gesture_handle_height();
+        self.output.set_gesture_handle_height(height);
+
+        if self.output.gesture_handle_height() != old_height {
+            self.resize_all()
+        }
+    }
+
     /// Check if any window was damaged since the last redraw.
     pub fn damaged(&mut self) -> bool {
         if self.dirty {
@@ -946,8 +956,7 @@ impl Windows {
             View::Overview(overview) => overview,
             // Handle IME override toggle on gesture handle tap.
             View::Workspace => {
-                *toggle_ime = point.y >= (self.canvas.size().h - GESTURE_HANDLE_HEIGHT) as f64
-                    && self.focus().is_none();
+                *toggle_ime = point.y >= self.canvas.wm_size().h as f64 && self.focus().is_none();
                 return;
             },
             View::DragAndDrop(_) | View::Fullscreen(_) | View::Lock(_) => return,
@@ -975,14 +984,14 @@ impl Windows {
         }
 
         // Ignore tap outside of gesture handle.
-        let canvas_size = self.canvas.size().to_f64();
-        if point.y < (canvas_size.h - GESTURE_HANDLE_HEIGHT as f64) {
+        let wm_size = self.canvas.wm_size().to_f64();
+        if point.y < wm_size.h {
             return;
         }
 
-        if point.x >= canvas_size.w / 1.5 {
+        if point.x >= wm_size.w / 1.5 {
             self.layouts.cycle_active(&self.output, 1);
-        } else if point.x < canvas_size.w / 3. {
+        } else if point.x < wm_size.w / 3. {
             self.layouts.cycle_active(&self.output, -1);
         }
     }

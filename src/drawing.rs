@@ -24,7 +24,7 @@ use smithay::wayland::compositor::{
 use smithay::wayland::viewporter::{self, ViewportCachedState};
 
 use crate::geometry::SubtractRectFast;
-use crate::output::{Canvas, GESTURE_HANDLE_HEIGHT};
+use crate::output::Canvas;
 
 /// Color of the hovered overview tiling location highlight.
 const ACTIVE_DROP_TARGET_RGBA: [u8; 4] = [64, 64, 64, 128];
@@ -480,7 +480,7 @@ impl Graphics {
         // Initialize texture or replace it after scale change.
         let scale = canvas.scale();
         let width = canvas.physical_size().w;
-        let height = (GESTURE_HANDLE_HEIGHT as f64 * scale).round() as i32;
+        let height = canvas.gesture_handle_height() as i32;
         if handle.as_ref().is_none_or(|handle| handle.buffer_size() != (width, height).into()) {
             // Initialize a black buffer with the correct size.
             let mut buffer = vec![0; (height * width * 4) as usize];

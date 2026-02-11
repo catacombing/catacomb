@@ -16,8 +16,9 @@ use tracing::{info, warn};
 use crate::catacomb::Catacomb;
 use crate::orientation::Orientation;
 
-/// Height at bottom of the screen reserved for gestures at scale factor 1.
-pub const GESTURE_HANDLE_HEIGHT: i32 = 15;
+/// Default height at bottom of the screen reserved for gestures at scale factor
+/// 1.
+const DEFAULT_GESTURE_HANDLE_HEIGHT: u16 = 15;
 
 /// Pixels per inch output scale factor.
 ///
@@ -138,6 +139,11 @@ impl Output {
         self.set_mode(self.canvas.mode);
     }
 
+    /// Update logical gesture handle height.
+    pub fn set_gesture_handle_height(&mut self, height: u16) {
+        self.canvas.gesture_handle_height = height;
+    }
+
     /// Add the given surface to the display.
     pub fn enter(&self, surface: &WlSurface) {
         self.output.enter(surface);
@@ -175,6 +181,7 @@ impl Deref for Output {
 /// Output state for rendering.
 #[derive(Copy, Clone, Debug)]
 pub struct Canvas {
+    gesture_handle_height: u16,
     exclusive: ExclusiveSpace,
     orientation: Orientation,
     scale: f64,
@@ -198,7 +205,13 @@ impl Canvas {
 
         info!("Using output scale: {scale} (PPI {ppi:.2})");
 
-        Self { mode, scale, orientation: Default::default(), exclusive: Default::default() }
+        Self {
+            mode,
+            scale,
+            gesture_handle_height: DEFAULT_GESTURE_HANDLE_HEIGHT,
+            orientation: Default::default(),
+            exclusive: Default::default(),
+        }
     }
 
     /// Device orientation.
@@ -241,7 +254,7 @@ impl Canvas {
     /// for compositor controls.
     pub fn wm_size(&self) -> Size<i32, Logical> {
         let mut size = self.size();
-        size.h -= GESTURE_HANDLE_HEIGHT;
+        size.h -= self.gesture_handle_height as i32;
         size
     }
 
@@ -302,6 +315,11 @@ impl Canvas {
         size.w -= left + right;
         size.h -= top + bottom;
         Rectangle::new(loc.into(), size)
+    }
+
+    /// Get the physical height of the gesture handle.
+    pub fn gesture_handle_height(&self) -> u16 {
+        (self.gesture_handle_height as f64 * self.scale).round() as u16
     }
 
     /// Output fractional scale.
