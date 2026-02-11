@@ -55,7 +55,7 @@ pub enum IpcMessage {
         /// For window scales this can either be a float, or arithmetic on top
         /// of the global scale using either `+`, `-`, `*`, or `/` as prefix
         /// (i.e. `+0.5`).
-        scale: WindowScale,
+        scale: Option<WindowScale>,
         /// App ID regex for per-window scaling.
         #[cfg_attr(feature = "clap", clap(long))]
         app_id: Option<String>,
@@ -185,6 +185,9 @@ pub enum IpcMessage {
     /// Reply for DPMS state request.
     #[cfg_attr(feature = "clap", clap(skip))]
     DpmsReply { state: CliToggle },
+    /// Reply for scale request.
+    #[cfg_attr(feature = "clap", clap(skip))]
+    ScaleReply { scale: WindowScale },
     /// Set touch cursor visibility.
     Cursor {
         /// Desired touch cursor visibility.
@@ -572,7 +575,8 @@ fn listen_for_reply(
 
     match (message, &reply) {
         (IpcMessage::Dpms { .. }, IpcMessage::DpmsReply { .. }) => Ok(Some(reply)),
-        (IpcMessage::Dpms { .. }, unexpected_reply) => {
+        (IpcMessage::Scale { .. }, IpcMessage::ScaleReply { .. }) => Ok(Some(reply)),
+        (IpcMessage::Dpms { .. } | IpcMessage::Scale { .. }, unexpected_reply) => {
             eprintln!("Error: Invalid IPC reply\n  {unexpected_reply:?}");
             Ok(None)
         },
@@ -595,7 +599,9 @@ fn validate_message(message: &IpcMessage) -> Result<(), Box<dyn Error>> {
             AppIdMatcher::try_from(app_id.clone())?;
         },
         // Ensure only fixed scales are used for global scale changes.
-        IpcMessage::Scale { scale, app_id: None } if !matches!(scale, WindowScale::Fixed(_)) => {
+        IpcMessage::Scale { scale: Some(scale), app_id: None }
+            if !matches!(scale, WindowScale::Fixed(_)) =>
+        {
             return Err(format!("global scale must be fixed, got \"{scale}\"").into());
         },
         // Clarify keyboard config behavior without any options set.

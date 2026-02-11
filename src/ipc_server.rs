@@ -60,7 +60,7 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
     match message {
         IpcMessage::Orientation { unlock: true, .. } => catacomb.unlock_orientation(),
         IpcMessage::Orientation { lock: orientation, .. } => catacomb.lock_orientation(orientation),
-        IpcMessage::Scale { scale, app_id: Some(app_id) } => {
+        IpcMessage::Scale { scale: Some(scale), app_id: Some(app_id) } => {
             let app_id = match AppIdMatcher::try_from(app_id) {
                 Ok(app_id) => app_id,
                 Err(err) => {
@@ -71,7 +71,7 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
 
             catacomb.windows.add_window_scale(app_id, scale);
         },
-        IpcMessage::Scale { scale, app_id: None } => {
+        IpcMessage::Scale { scale: Some(scale), app_id: None } => {
             let scale = match scale {
                 WindowScale::Fixed(scale) => scale,
                 scale => {
@@ -82,6 +82,13 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
 
             catacomb.windows.set_scale(scale);
             catacomb.unstall();
+        },
+        IpcMessage::Scale { scale: None, app_id } => {
+            let scale = app_id
+                .and_then(|app_id| AppIdMatcher::try_from(app_id).ok())
+                .and_then(|app_id| catacomb.windows.window_scale(app_id))
+                .unwrap_or_else(|| WindowScale::Fixed(catacomb.windows.canvas().scale()));
+            send_reply(&mut stream, &IpcMessage::ScaleReply { scale });
         },
         IpcMessage::BindGesture { app_id, start, end, program, arguments } => {
             let app_id = match AppIdMatcher::try_from(app_id) {
@@ -167,7 +174,7 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
             catacomb.draw_cursor = state == CliToggle::On;
         },
         // Ignore IPC replies.
-        IpcMessage::DpmsReply { .. } => (),
+        IpcMessage::DpmsReply { .. } | IpcMessage::ScaleReply { .. } => (),
     }
 }
 

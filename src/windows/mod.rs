@@ -98,8 +98,7 @@ macro_rules! with_all_windows_mut {
 /// Container tracking all known clients.
 #[derive(Debug)]
 pub struct Windows {
-    pub window_scales: Vec<(AppIdMatcher, WindowScale)>,
-
+    window_scales: Vec<(AppIdMatcher, WindowScale)>,
     orphan_popups: Vec<Window<PopupSurface>>,
     layouts: Layouts,
     layers: Layers,
@@ -1238,6 +1237,14 @@ impl Windows {
         let output_scale = self.output.scale();
         with_all_windows_mut!(self, |window| window.set_window_scale(&window_scales, output_scale));
         self.window_scales = window_scales;
+    }
+
+    /// Get the per-window scale for a regex.
+    pub fn window_scale(&self, app_id: AppIdMatcher) -> Option<WindowScale> {
+        self.window_scales
+            .iter()
+            .find(|(matcher, _)| matcher.base() == app_id.base())
+            .map(|(_, scale)| *scale)
     }
 
     /// Check if a surface is currently visible.

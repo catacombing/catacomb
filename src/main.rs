@@ -59,6 +59,7 @@ pub fn main() {
             Err(err) => eprintln!("\x1b[31merror\x1b[0m: {err}"),
             Ok(Some(IpcMessage::DpmsReply { state: CliToggle::On })) => println!("on"),
             Ok(Some(IpcMessage::DpmsReply { state: CliToggle::Off })) => println!("off"),
+            Ok(Some(IpcMessage::ScaleReply { scale })) => println!("{scale}"),
             Ok(_) => (),
         },
         None => udev::run(),
