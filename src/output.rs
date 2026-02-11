@@ -11,6 +11,7 @@ use smithay::reexports::wayland_server::backend::GlobalId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Physical, Rectangle, Size};
 use smithay::wayland::shell::wlr_layer::{Anchor, ExclusiveZone, Layer};
+use tracing::{info, warn};
 
 use crate::catacomb::Catacomb;
 use crate::orientation::Orientation;
@@ -18,8 +19,18 @@ use crate::orientation::Orientation;
 /// Height at bottom of the screen reserved for gestures at scale factor 1.
 pub const GESTURE_HANDLE_HEIGHT: i32 = 15;
 
-/// Use a fixed output scale.
-const SCALE: f64 = 2.;
+/// Pixels per inch output scale factor.
+///
+/// X.Org's default PPI of 96 for a scale of 1 would lead to huge scales on
+/// high-DPI mobile displays, so a higher value is chosen instead which works
+/// much better against the tested devices.
+///
+/// This should lead to a scale of ~3.39 (rounds to 3) for the Fairphone 5 while
+/// landing at ~1.99 on the PinePhone.
+const PPI_SCALE: f64 = 135.;
+
+/// Display scale for devices where DPI cannot be calculated automatically.
+const FALLBACK_SCALE: f64 = 2.;
 
 /// Wayland output, typically a screen.
 #[derive(Debug)]
@@ -46,11 +57,11 @@ impl Output {
         mode: Mode,
         properties: PhysicalProperties,
     ) -> Self {
+        let canvas = Canvas::new(mode, &properties);
         let output = SmithayOutput::new(name.into(), properties);
         let global = Some(output.create_global::<Catacomb>(display));
 
-        let mut output =
-            Self { global, output, canvas: Canvas::new(mode), display: display.clone() };
+        let mut output = Self { global, output, canvas, display: display.clone() };
 
         // Update the active mode.
         output.set_mode(output.mode);
@@ -171,8 +182,22 @@ pub struct Canvas {
 }
 
 impl Canvas {
-    fn new(mode: Mode) -> Self {
-        let scale = SCALE;
+    fn new(mode: Mode, properties: &PhysicalProperties) -> Self {
+        // Calculate integer scale based on output dimensions.
+        let diagonal_mm = (properties.size.w as f64).hypot(properties.size.h as f64);
+        let diagonal_in = diagonal_mm * 0.03937008;
+        let diagonal_px = (mode.size.w as f64).hypot(mode.size.h as f64);
+        let ppi = diagonal_px / diagonal_in;
+        let mut scale = (ppi / PPI_SCALE).round();
+
+        // Ensure calculated scale makes sense.
+        if !matches!(scale, 0.5..=5.) || scale.is_nan() {
+            warn!("Ignoring invalid calculated scale: {scale}");
+            scale = FALLBACK_SCALE;
+        }
+
+        info!("Using output scale: {scale} (PPI {ppi:.2})");
+
         Self { mode, scale, orientation: Default::default(), exclusive: Default::default() }
     }
 
