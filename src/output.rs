@@ -144,6 +144,11 @@ impl Output {
         self.canvas.gesture_handle_height = height;
     }
 
+    /// Set deadzone in fullscreen mode.
+    pub fn set_fullscreen_deadzone(&mut self, deadzone: FullscreenDeadzone) {
+        self.canvas.fullscreen_deadzone = deadzone;
+    }
+
     /// Add the given surface to the display.
     pub fn enter(&self, surface: &WlSurface) {
         self.output.enter(surface);
@@ -181,6 +186,7 @@ impl Deref for Output {
 /// Output state for rendering.
 #[derive(Copy, Clone, Debug)]
 pub struct Canvas {
+    fullscreen_deadzone: FullscreenDeadzone,
     gesture_handle_height: u16,
     exclusive: ExclusiveSpace,
     orientation: Orientation,
@@ -209,6 +215,7 @@ impl Canvas {
             mode,
             scale,
             gesture_handle_height: DEFAULT_GESTURE_HANDLE_HEIGHT,
+            fullscreen_deadzone: Default::default(),
             orientation: Default::default(),
             exclusive: Default::default(),
         }
@@ -303,12 +310,19 @@ impl Canvas {
         };
 
         // Get reserved space on the overlay layer.
-        let (top, right, bottom, left) = (
+        let (mut top, mut right, mut bottom, mut left) = (
             reserved(self.exclusive.top),
             reserved(self.exclusive.right),
             reserved(self.exclusive.bottom),
             reserved(self.exclusive.left),
         );
+
+        // Apply user-defined fullscreen exclusive zones.
+        let fullscreen_deadzone = self.fullscreen_deadzone.transform(self.orientation);
+        top = top.max(fullscreen_deadzone.top as i32);
+        right = right.max(fullscreen_deadzone.right as i32);
+        bottom = bottom.max(fullscreen_deadzone.bottom as i32);
+        left = left.max(fullscreen_deadzone.left as i32);
 
         let loc = (left, top);
         let mut size = self.size();
@@ -440,6 +454,35 @@ impl Deref for Exclusivity {
             | Exclusivity::Background(reserved)
             | Exclusivity::Top(reserved)
             | Exclusivity::Overlay(reserved) => reserved,
+        }
+    }
+}
+
+/// Reserved border space in fullscreen mode.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct FullscreenDeadzone {
+    pub top: u16,
+    pub right: u16,
+    pub bottom: u16,
+    pub left: u16,
+}
+
+impl FullscreenDeadzone {
+    pub fn new(top: u16, right: u16, bottom: u16, left: u16) -> Self {
+        Self { top, right, bottom, left }
+    }
+
+    /// Get deadzones transformed to the current output orientation.
+    pub fn transform(&self, orientation: Orientation) -> Self {
+        match orientation {
+            Orientation::Portrait => *self,
+            Orientation::InversePortrait => Self { top: self.bottom, bottom: self.top, ..*self },
+            Orientation::Landscape => {
+                Self { top: self.right, right: self.bottom, bottom: self.left, left: self.top }
+            },
+            Orientation::InverseLandscape => {
+                Self { top: self.left, right: self.top, bottom: self.right, left: self.bottom }
+            },
         }
     }
 }

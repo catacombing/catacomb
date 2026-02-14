@@ -28,7 +28,7 @@ use crate::drawing::{CatacombElement, Graphics};
 use crate::input::{HandleGesture, TouchState};
 use crate::layer::Layers;
 use crate::orientation::Orientation;
-use crate::output::{Canvas, Output};
+use crate::output::{Canvas, FullscreenDeadzone, Output};
 use crate::overview::{DragActionType, DragAndDrop, Overview};
 use crate::windows::layout::{LayoutPosition, Layouts};
 use crate::windows::surface::{CatacombLayerSurface, InputSurface, InputSurfaceKind, Surface};
@@ -910,6 +910,20 @@ impl Windows {
 
         if self.output.gesture_handle_height() != old_height {
             self.resize_all()
+        }
+    }
+
+    /// Set deadzone in fullscreen mode.
+    pub fn set_fullscreen_deadzone(&mut self, deadzone: FullscreenDeadzone) {
+        let old_available = self.output.available_fullscreen();
+        self.output.set_fullscreen_deadzone(deadzone);
+
+        let new_available = self.output.available_fullscreen();
+        if new_available != old_available
+            && let View::Fullscreen(window) = &mut self.view
+        {
+            let mut window = window.borrow_mut();
+            window.set_dimensions(self.output.scale(), new_available);
         }
     }
 

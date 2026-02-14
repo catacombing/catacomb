@@ -199,6 +199,21 @@ pub enum IpcMessage {
         #[cfg_attr(feature = "clap", clap(long, value_name = "HEIGHT"))]
         height: u16,
     },
+    /// Set reserved space in fullscreen mode.
+    FullscreenDeadzone {
+        /// Top edge reserved physical pixels.
+        #[cfg_attr(feature = "clap", clap(long, value_name = "PIXELS", default_value = "0"))]
+        top: u16,
+        /// Right edge reserved physical pixels.
+        #[cfg_attr(feature = "clap", clap(long, value_name = "PIXELS", default_value = "0"))]
+        right: u16,
+        /// Bottom edge reserved physical pixels.
+        #[cfg_attr(feature = "clap", clap(long, value_name = "PIXELS", default_value = "0"))]
+        bottom: u16,
+        /// Left edge reserved physical pixels.
+        #[cfg_attr(feature = "clap", clap(long, value_name = "PIXELS", default_value = "0"))]
+        left: u16,
+    },
 }
 
 /// Device orientation.
