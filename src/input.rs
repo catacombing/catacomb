@@ -230,7 +230,7 @@ impl TouchState {
         start: Point<f64, Logical>,
         end: Option<Point<f64, Logical>>,
     ) -> impl Iterator<Item = &'a GestureBinding> {
-        let canvas_size = canvas.size().to_f64();
+        let canvas_size = canvas.output_size().to_f64();
         let start_sector = GestureSector::from_point(canvas_size, start);
         let end_sector = end.map(|end| GestureSector::from_point(canvas_size, end));
 
@@ -325,8 +325,9 @@ impl HandleGesture {
 
     /// Check if a touch should start a new gesture.
     fn is_start(canvas: &Canvas, position: Point<f64, Logical>) -> bool {
-        let wm_size = canvas.wm_size().to_f64();
-        Rectangle::new((0., wm_size.h).into(), wm_size).contains(position)
+        let ui_rect = canvas.ui_rect(false).to_f64();
+        let handle_y = ui_rect.loc.y + ui_rect.size.h;
+        Rectangle::new((0., handle_y).into(), (f64::MAX, f64::MAX).into()).contains(position)
     }
 }
 
@@ -1064,6 +1065,11 @@ impl Catacomb {
             Orientation::InversePortrait => (width - x, height - y),
             Orientation::InverseLandscape => (height - y, x),
         };
+
+        // Clamp position within global deadzones.
+        let ui_rect = canvas.ui_rect(true).to_f64();
+        x = x.clamp(ui_rect.loc.x, ui_rect.loc.x + ui_rect.size.w);
+        y = y.clamp(ui_rect.loc.y, ui_rect.loc.y + ui_rect.size.h);
 
         (x, y).into()
     }

@@ -10,6 +10,7 @@ use smithay::utils::{Logical, Point};
 use smithay::wayland::shell::xdg::ToplevelSurface;
 
 use crate::drawing::CatacombElement;
+use crate::output::Canvas;
 use crate::windows::surface::InputSurfaceKind;
 use crate::windows::{self, InputSurface, Output, Window, WlSurface};
 
@@ -479,15 +480,15 @@ impl Layouts {
     }
 
     /// Add all visible windows' textures to the supplied buffer.
-    pub fn textures(&self, textures: &mut Vec<CatacombElement>, scale: f64) {
+    pub fn textures(&self, textures: &mut Vec<CatacombElement>, canvas: &Canvas) {
         let layout = self.active();
 
         if let Some(secondary) = layout.secondary().map(|window| window.borrow()) {
-            secondary.textures(textures, scale, None, None);
+            secondary.textures(textures, canvas, None, None);
         }
 
         if let Some(primary) = layout.primary().map(|window| window.borrow()) {
-            primary.textures(textures, scale, None, None);
+            primary.textures(textures, canvas, None, None);
         }
     }
 

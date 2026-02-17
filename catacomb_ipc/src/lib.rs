@@ -20,7 +20,7 @@ use std::{env, process};
 #[cfg(feature = "clap")]
 use clap::error::{Error as ClapError, ErrorKind as ClapErrorKind};
 #[cfg(feature = "clap")]
-use clap::{Subcommand, ValueEnum};
+use clap::{Args, Subcommand, ValueEnum};
 use regex::{Error as RegexError, Regex};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "smithay")]
@@ -199,26 +199,76 @@ pub enum IpcMessage {
         #[cfg_attr(feature = "clap", clap(long, value_name = "HEIGHT"))]
         height: u16,
     },
-    /// Set reserved space in fullscreen mode.
-    FullscreenDeadzone {
-        /// Top edge reserved physical pixels.
-        #[cfg_attr(feature = "clap", clap(long, value_name = "PIXELS", default_value = "0"))]
-        top: u16,
-        /// Right edge reserved physical pixels.
-        #[cfg_attr(feature = "clap", clap(long, value_name = "PIXELS", default_value = "0"))]
-        right: u16,
-        /// Bottom edge reserved physical pixels.
-        #[cfg_attr(feature = "clap", clap(long, value_name = "PIXELS", default_value = "0"))]
-        bottom: u16,
-        /// Left edge reserved physical pixels.
-        #[cfg_attr(feature = "clap", clap(long, value_name = "PIXELS", default_value = "0"))]
-        left: u16,
-    },
+    /// Manage compositor deadzones.
+    #[cfg_attr(feature = "clap", clap(subcommand))]
+    Deadzone(Deadzones),
+}
+
+/// Compositor deadzones.
+#[cfg_attr(feature = "clap", derive(Subcommand))]
+#[derive(Deserialize, Serialize, Debug)]
+pub enum Deadzones {
+    /// Set reserved space for fullscreen windows.
+    Fullscreen(Deadzone),
+    /// Set reserved space for all windows.
+    Global(Deadzone),
+}
+
+/// Compositor reserved area.
+#[cfg_attr(feature = "clap", derive(Args))]
+#[derive(Deserialize, Serialize, PartialEq, Eq, Copy, Clone, Default, Debug)]
+pub struct Deadzone {
+    /// Top edge reserved physical pixels.
+    #[cfg_attr(feature = "clap", clap(long, value_name = "PIXELS", default_value = "0"))]
+    pub top: u16,
+    /// Right edge reserved physical pixels.
+    #[cfg_attr(feature = "clap", clap(long, value_name = "PIXELS", default_value = "0"))]
+    pub right: u16,
+    /// Bottom edge reserved physical pixels.
+    #[cfg_attr(feature = "clap", clap(long, value_name = "PIXELS", default_value = "0"))]
+    pub bottom: u16,
+    /// Left edge reserved physical pixels.
+    #[cfg_attr(feature = "clap", clap(long, value_name = "PIXELS", default_value = "0"))]
+    pub left: u16,
+    /// Limit this deadzone to a specific orientation.
+    #[cfg_attr(feature = "clap", clap(long))]
+    pub orientation: Option<Orientation>,
+}
+
+impl Deadzone {
+    /// Apply scale and output transform to get the logical deadzone size.
+    pub fn transform(&self, orientation: Orientation, scale: f64) -> Self {
+        let mut deadzone = match orientation {
+            Orientation::Portrait => *self,
+            Orientation::InversePortrait => Self { top: self.bottom, bottom: self.top, ..*self },
+            Orientation::Landscape => Self {
+                orientation: self.orientation,
+                top: self.right,
+                right: self.bottom,
+                bottom: self.left,
+                left: self.top,
+            },
+            Orientation::InverseLandscape => Self {
+                orientation: self.orientation,
+                top: self.left,
+                right: self.top,
+                bottom: self.right,
+                left: self.bottom,
+            },
+        };
+
+        deadzone.top = (deadzone.top as f64 / scale).round() as u16;
+        deadzone.right = (deadzone.right as f64 / scale).round() as u16;
+        deadzone.bottom = (deadzone.bottom as f64 / scale).round() as u16;
+        deadzone.left = (deadzone.left as f64 / scale).round() as u16;
+
+        deadzone
+    }
 }
 
 /// Device orientation.
 #[cfg_attr(feature = "clap", derive(ValueEnum))]
-#[derive(Deserialize, Serialize, Default, PartialEq, Eq, Copy, Clone, Debug)]
+#[derive(Deserialize, Serialize, Default, Hash, PartialEq, Eq, Copy, Clone, Debug)]
 #[serde(rename_all = "kebab-case")]
 pub enum Orientation {
     /// Portrait mode.

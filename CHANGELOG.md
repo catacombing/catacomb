@@ -11,7 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - IPC subcommand to retrieve output scale (`catacomb msg scale`)
 - IPC subcommand to set gesture handle height (`catacomb msg gesture-handle`)
-- IPC subcommand to set fullscreen reserved zones (`catacomb msg fullscreen-deadzone`)
+- IPC subcommand to manage exclusive zones (`catacomb msg deadzone`)
 
 ### Changed
 

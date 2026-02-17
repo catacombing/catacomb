@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
-use catacomb_ipc::{AppIdMatcher, WindowScale};
+use catacomb_ipc::{AppIdMatcher, Deadzone, WindowScale};
 use smithay::backend::drm::DrmEventMetadata;
 use smithay::backend::renderer::element::{Element, RenderElementStates};
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -28,7 +28,7 @@ use crate::drawing::{CatacombElement, Graphics};
 use crate::input::{HandleGesture, TouchState};
 use crate::layer::Layers;
 use crate::orientation::Orientation;
-use crate::output::{Canvas, FullscreenDeadzone, Output};
+use crate::output::{Canvas, Output};
 use crate::overview::{DragActionType, DragAndDrop, Overview};
 use crate::windows::layout::{LayoutPosition, Layouts};
 use crate::windows::surface::{CatacombLayerSurface, InputSurface, InputSurfaceKind, Surface};
@@ -217,8 +217,8 @@ impl Windows {
     /// Update the session lock surface.
     pub fn set_lock_surface(&mut self, surface: LockSurface) {
         let surface_transform = self.output.orientation().surface_transform();
+        let lock_size = self.output.available_fullscreen(true);
         let output_scale = self.output.scale();
-        let output_size = self.output.size();
 
         let lock_window = match self.pending_view_mut() {
             View::Lock(lock_window) => lock_window,
@@ -227,7 +227,7 @@ impl Windows {
 
         // Set lock surface size.
         let mut window = Window::new(surface, output_scale, surface_transform, None);
-        window.set_dimensions(output_scale, Rectangle::from_size(output_size));
+        window.set_dimensions(output_scale, lock_size);
 
         // Update lockscreen.
         *lock_window = Some(Box::new(window));
@@ -395,7 +395,7 @@ impl Windows {
             let mut bounds = gesture_handle.geometry(scale.into());
 
             // Calculate position for gesture handle.
-            let output_height = self.canvas.physical_size().h;
+            let output_height = self.canvas.output_size_physical().h;
             let handle_location = (0, output_height - bounds.size.h);
             bounds.loc = handle_location.into();
 
@@ -433,22 +433,22 @@ impl Windows {
         match &mut self.view {
             View::Workspace => {
                 for layer in self.layers.foreground() {
-                    layer.textures(&mut self.textures, scale, None, None);
+                    layer.textures(&mut self.textures, &self.canvas, None, None);
                 }
 
-                self.layouts.textures(&mut self.textures, scale);
+                self.layouts.textures(&mut self.textures, &self.canvas);
 
                 for layer in self.layers.background() {
-                    layer.textures(&mut self.textures, scale, None, None);
+                    layer.textures(&mut self.textures, &self.canvas, None, None);
                 }
             },
             View::DragAndDrop(dnd) => {
                 dnd.textures(&mut self.textures, &self.canvas, graphics);
 
-                self.layouts.textures(&mut self.textures, scale);
+                self.layouts.textures(&mut self.textures, &self.canvas);
 
                 for layer in self.layers.background() {
-                    layer.textures(&mut self.textures, scale, None, None);
+                    layer.textures(&mut self.textures, &self.canvas, None, None);
                 }
             },
             View::Overview(overview) => {
@@ -461,17 +461,19 @@ impl Windows {
                 );
 
                 for layer in self.layers.background() {
-                    layer.textures(&mut self.textures, scale, None, None);
+                    layer.textures(&mut self.textures, &self.canvas, None, None);
                 }
             },
             View::Fullscreen(window) => {
                 for layer in self.layers.overlay() {
-                    layer.textures(&mut self.textures, scale, None, None);
+                    layer.textures(&mut self.textures, &self.canvas, None, None);
                 }
 
-                window.borrow().textures(&mut self.textures, scale, None, None);
+                window.borrow().textures(&mut self.textures, &self.canvas, None, None);
             },
-            View::Lock(Some(window)) => window.textures(&mut self.textures, scale, None, None),
+            View::Lock(Some(window)) => {
+                window.textures(&mut self.textures, &self.canvas, None, None);
+            },
             View::Lock(None) => (),
         }
 
@@ -780,8 +782,8 @@ impl Windows {
 
     /// Resize all windows to their expected size.
     pub fn resize_all(&mut self) {
-        let available_fullscreen = self.output.available_fullscreen();
-        let output_size = self.output.size();
+        let available_fullscreen = self.output.available_fullscreen(false);
+        let lock_size = self.output.available_fullscreen(true);
         let scale = self.output.scale();
 
         // Handle fullscreen/lock surfaces.
@@ -793,8 +795,7 @@ impl Windows {
                 Some(window.surface().clone())
             },
             View::Lock(Some(window)) => {
-                let rect = Rectangle::from_size(output_size);
-                window.set_dimensions(scale, rect);
+                window.set_dimensions(scale, lock_size);
 
                 None
             },
@@ -822,9 +823,9 @@ impl Windows {
 
     /// Resize visible windows to their expected size.
     pub fn resize_visible(&mut self) {
-        let available_fullscreen = self.output.available_fullscreen();
+        let available_fullscreen = self.output.available_fullscreen(false);
         let output_scale = self.output.scale();
-        let output_size = self.output.size();
+        let lock_size = self.output.available_fullscreen(true);
 
         match self.pending_view_mut() {
             // Resize fullscreen and overlay surfaces in fullscreen view.
@@ -837,10 +838,7 @@ impl Windows {
                     window.update_dimensions(&mut self.output, true);
                 }
             },
-            View::Lock(Some(window)) => {
-                let rect = Rectangle::from_size(output_size);
-                window.set_dimensions(output_scale, rect);
-            },
+            View::Lock(Some(window)) => window.set_dimensions(output_scale, lock_size),
             // Resize active XDG layout and layer shell in any other view.
             _ => {
                 // Resize XDG windows.
@@ -913,17 +911,27 @@ impl Windows {
         }
     }
 
-    /// Set deadzone in fullscreen mode.
-    pub fn set_fullscreen_deadzone(&mut self, deadzone: FullscreenDeadzone) {
-        let old_available = self.output.available_fullscreen();
+    /// Set deadzone for fullscreen windows.
+    pub fn set_fullscreen_deadzone(&mut self, deadzone: Deadzone) {
+        let old_available = self.output.available_fullscreen(true);
         self.output.set_fullscreen_deadzone(deadzone);
 
-        let new_available = self.output.available_fullscreen();
+        let new_available = self.output.available_fullscreen(true);
         if new_available != old_available
             && let View::Fullscreen(window) = &mut self.view
         {
             let mut window = window.borrow_mut();
             window.set_dimensions(self.output.scale(), new_available);
+        }
+    }
+
+    /// Set deadzone for all windows.
+    pub fn set_global_deadzone(&mut self, deadzone: Deadzone) {
+        let ui_rect = self.output.ui_rect(false);
+        self.output.set_global_deadzone(deadzone);
+
+        if self.output.ui_rect(false) != ui_rect {
+            self.resize_all();
         }
     }
 
@@ -970,7 +978,9 @@ impl Windows {
             View::Overview(overview) => overview,
             // Handle IME override toggle on gesture handle tap.
             View::Workspace => {
-                *toggle_ime = point.y >= self.canvas.wm_size().h as f64 && self.focus().is_none();
+                let wm_rect = self.canvas.ui_rect(false);
+                let handle_y = (wm_rect.loc.y + wm_rect.size.h) as f64;
+                *toggle_ime = point.y >= handle_y && self.focus().is_none();
                 return;
             },
             View::DragAndDrop(_) | View::Fullscreen(_) | View::Lock(_) => return,
@@ -998,14 +1008,14 @@ impl Windows {
         }
 
         // Ignore tap outside of gesture handle.
-        let wm_size = self.canvas.wm_size().to_f64();
-        if point.y < wm_size.h {
+        let wm_rect = self.canvas.ui_rect(false).to_f64();
+        if point.y < wm_rect.loc.y + wm_rect.size.h {
             return;
         }
 
-        if point.x >= wm_size.w / 1.5 {
+        if point.x >= (wm_rect.loc.x + wm_rect.size.w) / 1.5 {
             self.layouts.cycle_active(&self.output, 1);
-        } else if point.x < wm_size.w / 3. {
+        } else if point.x < (wm_rect.loc.x + wm_rect.size.w) / 3. {
             self.layouts.cycle_active(&self.output, -1);
         }
     }
@@ -1016,14 +1026,14 @@ impl Windows {
             View::Overview(overview) => overview,
             View::DragAndDrop(dnd) => {
                 // Cancel velocity and clamp if touch position is outside the screen.
-                let output_size = self.output.wm_size().to_f64();
-                if point.x < 0.
-                    || point.x > output_size.w
-                    || point.y < 0.
-                    || point.y > output_size.h
+                let wm_rect = self.output.ui_rect(false).to_f64();
+                if point.x < wm_rect.loc.x
+                    || point.x >= wm_rect.loc.x + wm_rect.size.w
+                    || point.y < wm_rect.loc.y
+                    || point.y >= wm_rect.loc.y + wm_rect.size.h
                 {
-                    point.x = point.x.clamp(0., output_size.w - 1.);
-                    point.y = point.y.clamp(0., output_size.h - 1.);
+                    point.x = point.x.clamp(wm_rect.loc.x, wm_rect.loc.x + wm_rect.size.w - 1.);
+                    point.y = point.y.clamp(wm_rect.loc.y, wm_rect.loc.y + wm_rect.size.h - 1.);
                     touch_state.cancel_velocity();
                 }
 
@@ -1056,7 +1066,7 @@ impl Windows {
         // Update drag action.
         match overview.drag_action.action_type {
             DragActionType::Cycle => {
-                let sensitivity = self.output.physical_size().w as f64 * 0.4;
+                let sensitivity = self.output.output_size_physical().w as f64 * 0.4;
                 overview.x_offset += delta.x / sensitivity;
             },
             DragActionType::Close(_) => overview.y_offset += delta.y,
@@ -1375,8 +1385,8 @@ impl Windows {
             }
         });
 
-        // Default to full output size.
-        Rectangle::from_size(self.output.size())
+        // Default to full UI rect.
+        self.output.ui_rect(false)
     }
 
     /// IME force enable/disable status.

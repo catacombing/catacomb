@@ -717,24 +717,24 @@ impl OutputDevice {
         buffer: &WlBuffer,
     ) -> Result<SyncPoint, Box<dyn Error>> {
         // Create and bind an offscreen render buffer.
-        let buffer_dimensions = renderer::buffer_dimensions(buffer).unwrap();
+        let canvas = windows.canvas();
+        let output_size = canvas.output_size_physical();
         let mut offscreen_buffer: GlesRenderbuffer =
-            self.gles.create_buffer(Fourcc::Abgr8888, buffer_dimensions)?;
+            self.gles.create_buffer(Fourcc::Abgr8888, (output_size.w, output_size.h).into())?;
         let mut framebuffer = self.gles.bind(&mut offscreen_buffer)?;
 
-        let canvas = windows.canvas();
         let scale = canvas.scale();
-        let output_size = canvas.physical_resolution();
+        let resolution = canvas.physical_resolution();
         let transform = canvas.orientation().output_transform();
 
         // Calculate drawing area after output transform.
-        let damage = transform.transform_rect_in(region, &output_size);
+        let damage = transform.transform_rect_in(region, &resolution);
 
         // Collect textures for rendering.
         let textures = windows.textures(&mut self.gles, &mut self.graphics, cursor_position);
 
         // Initialize the buffer to our clear color.
-        let mut frame = self.gles.render(&mut framebuffer, output_size, transform)?;
+        let mut frame = self.gles.render(&mut framebuffer, resolution, transform)?;
         frame.clear(CLEAR_COLOR.into(), &[damage])?;
 
         // Render everything to the offscreen buffer.

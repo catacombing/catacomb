@@ -479,9 +479,11 @@ impl Graphics {
 
         // Initialize texture or replace it after scale change.
         let scale = canvas.scale();
-        let width = canvas.physical_size().w;
+        let width = canvas.output_size_physical().w;
         let height = canvas.gesture_handle_height() as i32;
-        if handle.as_ref().is_none_or(|handle| handle.buffer_size() != (width, height).into()) {
+        if handle.as_ref().is_none_or(|handle| {
+            handle.buffer_size() != (width, height).into() || handle.scale != scale
+        }) {
             // Initialize a black buffer with the correct size.
             let mut buffer = vec![0; (height * width * 4) as usize];
 
@@ -515,7 +517,9 @@ impl Graphics {
     pub fn cursor(&mut self, renderer: &mut GlesRenderer, canvas: &Canvas) -> RenderTexture {
         let scale = canvas.scale();
         let size = (CURSOR_SIZE * scale).round() as i32;
-        if self.cursor.as_ref().is_none_or(|cursor| cursor.buffer_size() != (size, size).into()) {
+        if self.cursor.as_ref().is_none_or(|cursor| {
+            cursor.buffer_size() != (size, size).into() || cursor.scale != scale
+        }) {
             // Create a texture with a circle inside it.
             let mut buffer = vec![0; (size * size * 4) as usize];
             for x in 0..size {

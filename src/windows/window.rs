@@ -38,7 +38,7 @@ use tracing::error;
 use crate::catacomb::ClientState;
 use crate::drawing::{CatacombElement, CatacombSurfaceData, RenderTexture, Texture};
 use crate::geometry::Vector;
-use crate::output::{ExclusiveSpace, Output};
+use crate::output::{Canvas, ExclusiveSpace, Output};
 use crate::windows;
 use crate::windows::surface::{CatacombLayerSurface, InputSurface, Surface};
 
@@ -155,11 +155,13 @@ impl<S: Surface + 'static> Window<S> {
     pub fn textures(
         &self,
         textures: &mut Vec<CatacombElement>,
-        output_scale: f64,
+        canvas: &Canvas,
         window_scale: impl Into<Option<f64>>,
         location: impl Into<Option<Point<i32, Logical>>>,
     ) {
-        self.textures_with_bounds(textures, output_scale, window_scale, location, None);
+        let output_scale = canvas.scale();
+        let ui_rect = canvas.ui_rect(false).to_physical_precise_round(output_scale);
+        self.textures_with_bounds(textures, ui_rect, output_scale, window_scale, location, None);
     }
 
     /// Internal method for getting render textures.
@@ -169,6 +171,7 @@ impl<S: Surface + 'static> Window<S> {
     pub fn textures_with_bounds(
         &self,
         textures: &mut Vec<CatacombElement>,
+        ui_rect: Rectangle<i32, Physical>,
         output_scale: f64,
         window_scale: impl Into<Option<f64>>,
         location: impl Into<Option<Point<i32, Logical>>>,
@@ -178,7 +181,7 @@ impl<S: Surface + 'static> Window<S> {
         let window_scale = window_scale.into().unwrap_or(1.);
 
         // Calculate window bounds only for the toplevel window.
-        let bounds = bounds.into().unwrap_or_else(|| {
+        let mut bounds = bounds.into().unwrap_or_else(|| {
             let mut bounds = self.bounds(output_scale).to_physical_precise_round(output_scale);
             bounds.loc = location.to_physical_precise_round(output_scale);
             bounds
@@ -190,12 +193,16 @@ impl<S: Surface + 'static> Window<S> {
 
             popup.textures_with_bounds(
                 textures,
+                ui_rect,
                 output_scale,
                 window_scale,
                 Some(popup_location),
                 bounds,
             );
         }
+
+        // Crop window content overlapping deadzones.
+        bounds = bounds.intersection(ui_rect).unwrap_or(bounds);
 
         // Add windows' textures.
         let physical_location = location.to_physical_precise_round(output_scale);
@@ -911,11 +918,9 @@ impl Window<CatacombLayerSurface> {
             *states.cached_state.get::<LayerSurfaceCachedState>().current()
         });
 
-        // Exclude gesture handle from Top/Overlay window size.
-        let output_size = match state.layer {
-            Layer::Overlay if fullscreen_active => output.size(),
-            _ => output.wm_size(),
-        };
+        // Exclude gesture handle if it is visible.
+        let include_handle = matches!(state.layer, Layer::Overlay if fullscreen_active);
+        let available = output.ui_rect(include_handle);
 
         // Upscale layer shell size to output logical scale.
         let output_scale = output.scale();
@@ -929,13 +934,13 @@ impl Window<CatacombLayerSurface> {
 
         // Window size.
         if size.w == 0 && state.anchor.contains(Anchor::LEFT | Anchor::RIGHT) {
-            size.w = output_size.w - exclusive.left - exclusive.right;
+            size.w = available.size.w - exclusive.left - exclusive.right;
             if state.anchor.contains(Anchor::RIGHT) {
                 size.w -= state.margin.right;
             }
         }
         if size.h == 0 && state.anchor.contains(Anchor::TOP | Anchor::BOTTOM) {
-            size.h = output_size.h - exclusive.top - exclusive.bottom;
+            size.h = available.size.h - exclusive.top - exclusive.bottom;
             if state.anchor.contains(Anchor::BOTTOM) {
                 size.h -= state.margin.bottom;
             }
@@ -943,18 +948,18 @@ impl Window<CatacombLayerSurface> {
 
         // Window location.
         let x = if state.anchor.contains(Anchor::LEFT) {
-            state.margin.left + exclusive.left
+            available.loc.x + state.margin.left + exclusive.left
         } else if state.anchor.contains(Anchor::RIGHT) {
-            output_size.w - size.w - state.margin.right - exclusive.right
+            available.loc.x + available.size.w - size.w - state.margin.right - exclusive.right
         } else {
-            (output_size.w - size.w) / 2
+            available.loc.x + (available.size.w - size.w) / 2
         };
         let y = if state.anchor.contains(Anchor::TOP) {
-            state.margin.top + exclusive.top
+            available.loc.y + state.margin.top + exclusive.top
         } else if state.anchor.contains(Anchor::BOTTOM) {
-            output_size.h - size.h - state.margin.bottom - exclusive.bottom
+            available.loc.y + available.size.h - size.h - state.margin.bottom - exclusive.bottom
         } else {
-            (output_size.h - size.h) / 2
+            available.loc.y + (available.size.h - size.h) / 2
         };
 
         let dimensions = Rectangle::new((x, y).into(), size);

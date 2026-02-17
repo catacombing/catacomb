@@ -301,7 +301,15 @@ impl Overview {
         }
 
         // Get window textures within its overview bounds.
-        window.textures_with_bounds(textures, scale, position.scale, bounds.loc, physical_bounds);
+        let ui_rect = canvas.ui_rect(false).to_physical_precise_round(scale);
+        window.textures_with_bounds(
+            textures,
+            ui_rect,
+            scale,
+            position.scale,
+            bounds.loc,
+            physical_bounds,
+        );
     }
 
     /// Handle closing window for drawing the overview.
@@ -442,7 +450,7 @@ impl DragAndDrop {
         let location = self.start_location + self.window_position.to_i32_round();
 
         // Render the window being drag-and-dropped.
-        self.window.borrow().textures(textures, scale, self.scale, location);
+        self.window.borrow().textures(textures, canvas, self.scale, location);
     }
 
     /// Bounds for the drop preview areas of the D&D action.

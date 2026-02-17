@@ -3,6 +3,7 @@
 use std::ops::{Add, Deref, Sub};
 use std::time::Duration;
 
+use catacomb_ipc::Deadzone;
 use smithay::output::{
     Mode, Output as SmithayOutput, OutputModeSource, PhysicalProperties, Scale, Subpixel,
 };
@@ -96,7 +97,7 @@ impl Output {
 
     /// Update the output's active mode.
     pub fn set_mode(&mut self, mode: Mode) {
-        let scale = Some(Scale::Fractional(self.scale()));
+        let scale = Some(Scale::Fractional(self.scale));
         let transform = Some(self.orientation.surface_transform());
         self.output.change_current_state(Some(mode), transform, scale, None);
         self.output.set_preferred(mode);
@@ -144,9 +145,14 @@ impl Output {
         self.canvas.gesture_handle_height = height;
     }
 
-    /// Set deadzone in fullscreen mode.
-    pub fn set_fullscreen_deadzone(&mut self, deadzone: FullscreenDeadzone) {
-        self.canvas.fullscreen_deadzone = deadzone;
+    /// Set deadzone for fullscreen windows.
+    pub fn set_fullscreen_deadzone(&mut self, deadzone: Deadzone) {
+        self.canvas.fullscreen_deadzone.set(deadzone);
+    }
+
+    /// Set deadzone for all windows.
+    pub fn set_global_deadzone(&mut self, deadzone: Deadzone) {
+        self.canvas.global_deadzone.set(deadzone);
     }
 
     /// Add the given surface to the display.
@@ -186,12 +192,14 @@ impl Deref for Output {
 /// Output state for rendering.
 #[derive(Copy, Clone, Debug)]
 pub struct Canvas {
-    fullscreen_deadzone: FullscreenDeadzone,
     gesture_handle_height: u16,
     exclusive: ExclusiveSpace,
     orientation: Orientation,
     scale: f64,
     mode: Mode,
+
+    fullscreen_deadzone: Deadzones,
+    global_deadzone: Deadzones,
 }
 
 impl Canvas {
@@ -216,6 +224,7 @@ impl Canvas {
             scale,
             gesture_handle_height: DEFAULT_GESTURE_HANDLE_HEIGHT,
             fullscreen_deadzone: Default::default(),
+            global_deadzone: Default::default(),
             orientation: Default::default(),
             exclusive: Default::default(),
         }
@@ -232,7 +241,7 @@ impl Canvas {
     }
 
     /// Output device size with transformations applied.
-    pub fn physical_size(&self) -> Size<i32, Physical> {
+    pub fn output_size_physical(&self) -> Size<i32, Physical> {
         let (w, h) = self.physical_resolution().into();
         match self.orientation {
             Orientation::Portrait | Orientation::InversePortrait => (w, h).into(),
@@ -245,33 +254,50 @@ impl Canvas {
     /// This represents the size of the display before applying any
     /// transformations.
     pub fn resolution(&self) -> Size<i32, Logical> {
-        self.physical_resolution().to_f64().to_logical(self.scale()).to_i32_round()
+        self.physical_resolution().to_f64().to_logical(self.scale).to_i32_round()
     }
 
     /// Output size.
     ///
     /// Output size with all transformations applied.
-    pub fn size(&self) -> Size<i32, Logical> {
-        self.physical_size().to_f64().to_logical(self.scale()).to_i32_round()
+    pub fn output_size(&self) -> Size<i32, Logical> {
+        self.output_size_physical().to_f64().to_logical(self.scale).to_i32_round()
     }
 
-    /// Size available for windowing.
+    /// Rectangle available for rendering.
     ///
-    /// This is the size available for window placement, excluding area reserved
-    /// for compositor controls.
-    pub fn wm_size(&self) -> Size<i32, Logical> {
-        let mut size = self.size();
-        size.h -= self.gesture_handle_height as i32;
-        size
+    /// This is the rectangle where content like Wayland clients can be
+    /// rendered.
+    ///
+    /// If `include_gesture_handle` is `true`, then the entire height of the
+    /// gesture handle, including the bottom deadzone, is included in the
+    /// rectangle.
+    pub fn ui_rect(&self, include_gesture_handle: bool) -> Rectangle<i32, Logical> {
+        let mut deadzone = self.global_deadzone.transform(self.orientation, self.scale);
+        if include_gesture_handle {
+            deadzone.bottom = 0;
+        } else {
+            deadzone.bottom = deadzone.bottom.max(self.gesture_handle_height);
+        }
+
+        let loc = (deadzone.left as i32, deadzone.top as i32);
+
+        let mut size = self.output_size();
+        size.w -= (deadzone.left + deadzone.right) as i32;
+        size.h -= (deadzone.top + deadzone.bottom) as i32;
+
+        Rectangle::new(loc.into(), size)
     }
 
     /// Area of the output not reserved for layer shell windows.
     pub fn available(&self) -> Rectangle<i32, Logical> {
-        let loc = (*self.exclusive.left, *self.exclusive.top);
-        let mut size = self.wm_size();
-        size.w -= *self.exclusive.left + self.exclusive.right;
-        size.h -= *self.exclusive.top + self.exclusive.bottom;
-        Rectangle::new(loc.into(), size)
+        let mut rect = self.ui_rect(false);
+        rect.loc.x += *self.exclusive.left;
+        rect.loc.y += *self.exclusive.top;
+        rect.size.w -= *self.exclusive.left + *self.exclusive.right;
+        rect.size.h -= *self.exclusive.top + *self.exclusive.bottom;
+
+        rect
     }
 
     /// Area of the output available in the application overview.
@@ -284,7 +310,7 @@ impl Canvas {
             Exclusivity::Background(reserved) | Exclusivity::Bottom(reserved) => reserved,
         };
 
-        // Get reserved space on the background layers.
+        // Apply background layer exclusive zones.
         let (top, right, bottom, left) = (
             reserved(self.exclusive.top),
             reserved(self.exclusive.right),
@@ -292,48 +318,53 @@ impl Canvas {
             reserved(self.exclusive.left),
         );
 
-        let loc = (left, top);
-        let mut size = self.wm_size();
-        size.w -= left + right;
-        size.h -= top + bottom;
-        Rectangle::new(loc.into(), size)
+        let mut rect = self.ui_rect(false);
+        rect.loc.x += left;
+        rect.loc.y += top;
+        rect.size.w -= left + right;
+        rect.size.h -= top + bottom;
+
+        rect
     }
 
     /// Area of the output available for fullscreen surfaces.
     ///
     /// This only accounts for overlay layer shell windows, since these are the
     /// only ones visible in fullscreen mode.
-    pub fn available_fullscreen(&self) -> Rectangle<i32, Logical> {
+    pub fn available_fullscreen(&self, ignore_overlay: bool) -> Rectangle<i32, Logical> {
         let reserved = |exclusivity| match exclusivity {
-            Exclusivity::Overlay(reserved) => reserved,
+            Exclusivity::Overlay(reserved) if !ignore_overlay => reserved,
             _ => 0,
         };
 
-        // Get reserved space on the overlay layer.
-        let (mut top, mut right, mut bottom, mut left) = (
-            reserved(self.exclusive.top),
-            reserved(self.exclusive.right),
-            reserved(self.exclusive.bottom),
-            reserved(self.exclusive.left),
+        // Exclude bottom deadzone; while the handle is included, the deadzone is not.
+        let deadzone = self.global_deadzone.transform(self.orientation, self.scale);
+        let mut rect = self.ui_rect(true);
+        rect.size.h -= deadzone.bottom as i32;
+
+        // Apply fullscreen deadzone and overlay layer exclusive zones.
+
+        let fullscreen_deadzone = self.fullscreen_deadzone.transform(self.orientation, self.scale);
+        let (top, right, bottom, left) = (
+            reserved(self.exclusive.top).max(fullscreen_deadzone.top as i32),
+            reserved(self.exclusive.right).max(fullscreen_deadzone.right as i32),
+            reserved(self.exclusive.bottom).max(fullscreen_deadzone.bottom as i32),
+            reserved(self.exclusive.left).max(fullscreen_deadzone.left as i32),
         );
 
-        // Apply user-defined fullscreen exclusive zones.
-        let fullscreen_deadzone = self.fullscreen_deadzone.transform(self.orientation);
-        top = top.max(fullscreen_deadzone.top as i32);
-        right = right.max(fullscreen_deadzone.right as i32);
-        bottom = bottom.max(fullscreen_deadzone.bottom as i32);
-        left = left.max(fullscreen_deadzone.left as i32);
+        rect.loc.x += left;
+        rect.loc.y += top;
+        rect.size.w -= left + right;
+        rect.size.h -= top + bottom;
 
-        let loc = (left, top);
-        let mut size = self.size();
-        size.w -= left + right;
-        size.h -= top + bottom;
-        Rectangle::new(loc.into(), size)
+        rect
     }
 
     /// Get the physical height of the gesture handle.
     pub fn gesture_handle_height(&self) -> u16 {
-        (self.gesture_handle_height as f64 * self.scale).round() as u16
+        let handle_height = (self.gesture_handle_height as f64 * self.scale).round() as u16;
+        let deadzone = self.global_deadzone.transform(self.orientation, 1.);
+        handle_height.max(deadzone.bottom)
     }
 
     /// Output fractional scale.
@@ -458,30 +489,38 @@ impl Deref for Exclusivity {
     }
 }
 
-/// Reserved border space in fullscreen mode.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-pub struct FullscreenDeadzone {
-    pub top: u16,
-    pub right: u16,
-    pub bottom: u16,
-    pub left: u16,
+/// Orientation-dependent deadzone configuration.
+#[derive(Default, Copy, Clone, Debug)]
+struct Deadzones {
+    portrait: Deadzone,
+    landscape: Deadzone,
+    inverse_portrait: Deadzone,
+    inverse_landscape: Deadzone,
 }
 
-impl FullscreenDeadzone {
-    pub fn new(top: u16, right: u16, bottom: u16, left: u16) -> Self {
-        Self { top, right, bottom, left }
+impl Deadzones {
+    /// Get logical deadzone for a specific orientation.
+    fn transform(&self, orientation: Orientation, scale: f64) -> Deadzone {
+        match orientation {
+            Orientation::Portrait => self.portrait.transform(orientation, scale),
+            Orientation::Landscape => self.landscape.transform(orientation, scale),
+            Orientation::InversePortrait => self.inverse_portrait.transform(orientation, scale),
+            Orientation::InverseLandscape => self.inverse_landscape.transform(orientation, scale),
+        }
     }
 
-    /// Get deadzones transformed to the current output orientation.
-    pub fn transform(&self, orientation: Orientation) -> Self {
-        match orientation {
-            Orientation::Portrait => *self,
-            Orientation::InversePortrait => Self { top: self.bottom, bottom: self.top, ..*self },
-            Orientation::Landscape => {
-                Self { top: self.right, right: self.bottom, bottom: self.left, left: self.top }
-            },
-            Orientation::InverseLandscape => {
-                Self { top: self.left, right: self.top, bottom: self.right, left: self.bottom }
+    /// Set the deadzone for a specific orientation.
+    fn set(&mut self, deadzone: Deadzone) {
+        match deadzone.orientation {
+            Some(Orientation::Portrait) => self.portrait = deadzone,
+            Some(Orientation::Landscape) => self.landscape = deadzone,
+            Some(Orientation::InversePortrait) => self.inverse_portrait = deadzone,
+            Some(Orientation::InverseLandscape) => self.inverse_landscape = deadzone,
+            None => {
+                self.portrait = deadzone;
+                self.landscape = deadzone;
+                self.inverse_portrait = deadzone;
+                self.inverse_landscape = deadzone;
             },
         }
     }

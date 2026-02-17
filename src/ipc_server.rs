@@ -6,14 +6,13 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
-use catacomb_ipc::{AppIdMatcher, CliToggle, IpcMessage, Keysym, WindowScale};
+use catacomb_ipc::{AppIdMatcher, CliToggle, Deadzones, IpcMessage, Keysym, WindowScale};
 use smithay::input::keyboard::XkbConfig;
 use smithay::reexports::calloop::LoopHandle;
 use tracing::{error, warn};
 
 use crate::catacomb::Catacomb;
 use crate::config::{GestureBinding, GestureBindingAction, KeyBinding};
-use crate::output::FullscreenDeadzone;
 use crate::socket::SocketSource;
 
 /// Create an IPC socket.
@@ -175,9 +174,11 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
             catacomb.draw_cursor = state == CliToggle::On;
         },
         IpcMessage::GestureHandle { height } => catacomb.windows.set_gesture_handle_height(height),
-        IpcMessage::FullscreenDeadzone { top, right, bottom, left } => {
-            let deadzone = FullscreenDeadzone::new(top, right, bottom, left);
+        IpcMessage::Deadzone(Deadzones::Fullscreen(deadzone)) => {
             catacomb.windows.set_fullscreen_deadzone(deadzone);
+        },
+        IpcMessage::Deadzone(Deadzones::Global(deadzone)) => {
+            catacomb.windows.set_global_deadzone(deadzone);
         },
         // Ignore IPC replies.
         IpcMessage::DpmsReply { .. } | IpcMessage::ScaleReply { .. } => (),
