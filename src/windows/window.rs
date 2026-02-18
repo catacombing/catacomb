@@ -22,6 +22,7 @@ use smithay::utils::{Logical, Physical, Point, Rectangle, Size, Transform};
 use smithay::wayland::compositor::{
     self, SubsurfaceCachedState, SurfaceAttributes, SurfaceData, TraversalAction,
 };
+use smithay::wayland::foreign_toplevel_list::{ForeignToplevelHandle, ForeignToplevelListState};
 use smithay::wayland::presentation::{
     PresentationFeedbackCachedState, PresentationFeedbackCallback, Refresh,
 };
@@ -35,7 +36,7 @@ use smithay::wayland::shell::xdg::{
 use smithay::wayland::{fractional_scale, single_pixel_buffer};
 use tracing::error;
 
-use crate::catacomb::ClientState;
+use crate::catacomb::{Catacomb, ClientState};
 use crate::drawing::{CatacombElement, CatacombSurfaceData, RenderTexture, Texture};
 use crate::geometry::Vector;
 use crate::output::{Canvas, ExclusiveSpace, Output};
@@ -59,6 +60,9 @@ pub struct Window<S = ToplevelSurface> {
 
     /// User attention request status.
     pub urgent: bool,
+
+    /// Application title.
+    title: Option<Arc<String>>,
 
     /// Buffers pending to be updated.
     dirty: bool,
@@ -91,6 +95,9 @@ pub struct Window<S = ToplevelSurface> {
     ignore_transactions: bool,
     ignore_transactions_locked: bool,
 
+    /// Handle to the foreign toplevel reference of this window.
+    foreign_handle: Option<ForeignToplevelHandle>,
+
     /// Window liveliness override.
     dead: bool,
 }
@@ -110,6 +117,7 @@ impl<S: Surface + 'static> Window<S> {
             presentation_callbacks: Default::default(),
             ignore_transactions: Default::default(),
             output_rectangle: Default::default(),
+            foreign_handle: Default::default(),
             texture_cache: Default::default(),
             transaction: Default::default(),
             deny_focus: Default::default(),
@@ -119,6 +127,7 @@ impl<S: Surface + 'static> Window<S> {
             urgent: Default::default(),
             dirty: Default::default(),
             scale: Default::default(),
+            title: Default::default(),
             size: Default::default(),
             dead: Default::default(),
         };
@@ -490,6 +499,7 @@ impl<S: Surface + 'static> Window<S> {
     /// Handle common surface commit logic for surfaces of any kind.
     pub fn surface_commit_common(
         &mut self,
+        foreign_toplevel_list_state: &mut ForeignToplevelListState,
         output_scale: f64,
         window_scales: &[(AppIdMatcher, WindowScale)],
         surface: &WlSurface,
@@ -542,22 +552,56 @@ impl<S: Surface + 'static> Window<S> {
         self.surface.initial_configure();
 
         // Update the App ID.
-        let app_id_changed = compositor::with_states(surface, |states| {
+        let (app_id_changed, title_changed) = compositor::with_states(surface, |states| {
             // Get surface attributes.
             let attributes = states
                 .data_map
                 .get::<Mutex<XdgToplevelSurfaceRoleAttributes>>()
                 .and_then(|attributes| attributes.lock().ok());
 
-            // Check if the App ID has changed.
-            match attributes.filter(|attrs| attrs.app_id.as_ref() != self.app_id.as_deref()) {
+            match attributes {
                 Some(attributes) => {
-                    self.set_app_id(attributes.app_id.clone().map(Arc::new));
-                    true
+                    // Update APP Id if it has changed.
+                    let app_id_changed = attributes.app_id.as_ref() != self.app_id.as_deref();
+                    if app_id_changed {
+                        self.set_app_id(attributes.app_id.clone().map(Arc::new));
+                    }
+
+                    // Update title if it has changed.
+                    let title_changed = attributes.title.as_ref() != self.title.as_deref();
+                    if title_changed {
+                        self.title = attributes.title.clone().map(Arc::new);
+                    }
+
+                    (app_id_changed, title_changed)
                 },
-                None => false,
+                None => (false, false),
             }
         });
+
+        // Update foreign toplevel state.
+        if (app_id_changed || title_changed)
+            && let Some(app_id) = &self.app_id
+            && let Some(title) = &self.title
+        {
+            let handle = match self.foreign_handle.as_mut() {
+                Some(handle) => {
+                    if app_id_changed {
+                        handle.send_app_id(app_id);
+                    }
+                    if title_changed {
+                        handle.send_title(title);
+                    }
+                    handle
+                },
+                None => {
+                    let toplevel = foreign_toplevel_list_state
+                        .new_toplevel::<Catacomb>(title.to_string(), app_id.to_string());
+                    self.foreign_handle.insert(toplevel)
+                },
+            };
+            handle.send_done();
+        }
 
         // Try to update window scale when App ID changes.
         if app_id_changed {
@@ -780,6 +824,7 @@ impl<S: Surface + 'static> Window<S> {
     /// Apply surface commits for popups.
     pub fn popup_surface_commit(
         &mut self,
+        foreign_toplevel_list_state: &mut ForeignToplevelListState,
         output_scale: f64,
         root_surface: &WlSurface,
         surface: &WlSurface,
@@ -799,12 +844,22 @@ impl<S: Surface + 'static> Window<S> {
                     state.geometry.loc = popup.output_rectangle.loc;
                 });
 
-                popup.surface_commit_common(output_scale, &[], surface);
+                popup.surface_commit_common(
+                    foreign_toplevel_list_state,
+                    output_scale,
+                    &[],
+                    surface,
+                );
 
                 return true;
             }
 
-            popup.popup_surface_commit(output_scale, root_surface, surface)
+            popup.popup_surface_commit(
+                foreign_toplevel_list_state,
+                output_scale,
+                root_surface,
+                surface,
+            )
         })
     }
 
@@ -902,6 +957,7 @@ impl Window<CatacombLayerSurface> {
     /// Handle a surface commit for layer shell windows.
     pub fn surface_commit(
         &mut self,
+        foreign_toplevel_list_state: &mut ForeignToplevelListState,
         window_scales: &[(AppIdMatcher, WindowScale)],
         output: &mut Output,
         fullscreen_active: bool,
@@ -909,7 +965,12 @@ impl Window<CatacombLayerSurface> {
     ) {
         self.update_layer_state(output);
         self.update_dimensions(output, fullscreen_active);
-        self.surface_commit_common(output.scale(), window_scales, surface);
+        self.surface_commit_common(
+            foreign_toplevel_list_state,
+            output.scale(),
+            window_scales,
+            surface,
+        );
     }
 
     /// Recompute the window's size and location.

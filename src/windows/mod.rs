@@ -20,6 +20,7 @@ use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle};
 use smithay::wayland::compositor;
+use smithay::wayland::foreign_toplevel_list::ForeignToplevelListState;
 use smithay::wayland::session_lock::LockSurface;
 use smithay::wayland::shell::wlr_layer::{Layer, LayerSurface};
 use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface};
@@ -256,7 +257,11 @@ impl Windows {
     }
 
     /// Handle a surface commit for any window.
-    pub fn surface_commit(&mut self, surface: &WlSurface) {
+    pub fn surface_commit(
+        &mut self,
+        foreign_toplevel_list_state: &mut ForeignToplevelListState,
+        surface: &WlSurface,
+    ) {
         // Get the topmost surface for window comparison.
         let mut root_surface = Cow::Borrowed(surface);
         while let Some(parent) = compositor::get_parent(&root_surface) {
@@ -272,14 +277,19 @@ impl Windows {
         let scale = self.output.scale();
         if let View::Lock(Some(window)) = self.pending_view_mut() {
             if window.surface() == root_surface.as_ref() {
-                window.surface_commit_common(scale, &[], surface);
+                window.surface_commit_common(foreign_toplevel_list_state, scale, &[], surface);
                 return;
             }
         }
 
         // Handle XDG surface commits.
         if let Some(mut window) = find_window!(self.layouts.windows_mut()) {
-            window.surface_commit_common(scale, &self.window_scales, surface);
+            window.surface_commit_common(
+                foreign_toplevel_list_state,
+                scale,
+                &self.window_scales,
+                surface,
+            );
             return;
         }
 
@@ -288,13 +298,23 @@ impl Windows {
 
         // Apply popup surface commits.
         for mut window in self.layouts.windows_mut() {
-            if window.popup_surface_commit(scale, &root_surface, surface) {
+            if window.popup_surface_commit(
+                foreign_toplevel_list_state,
+                scale,
+                &root_surface,
+                surface,
+            ) {
                 // Abort as soon as we found the parent.
                 return;
             }
         }
         for window in self.layers.iter_mut() {
-            if window.popup_surface_commit(scale, &root_surface, surface) {
+            if window.popup_surface_commit(
+                foreign_toplevel_list_state,
+                scale,
+                &root_surface,
+                surface,
+            ) {
                 // Abort as soon as we found the parent.
                 return;
             }
@@ -309,7 +329,13 @@ impl Windows {
         // Handle layer shell surface commits.
         let old_exclusive = *self.output.exclusive();
         let fullscreen_active = matches!(self.view, View::Fullscreen(_));
-        window.surface_commit(&self.window_scales, &mut self.output, fullscreen_active, surface);
+        window.surface_commit(
+            foreign_toplevel_list_state,
+            &self.window_scales,
+            &mut self.output,
+            fullscreen_active,
+            surface,
+        );
 
         // Resize windows after exclusive zone changes.
         if self.output.exclusive() != &old_exclusive {

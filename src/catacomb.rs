@@ -36,6 +36,9 @@ use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor;
 use smithay::wayland::compositor::{CompositorClientState, CompositorHandler, CompositorState};
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
+use smithay::wayland::foreign_toplevel_list::{
+    ForeignToplevelListHandler, ForeignToplevelListState,
+};
 use smithay::wayland::fractional_scale::{
     self, FractionalScaleHandler, FractionalScaleManagerState,
 };
@@ -79,12 +82,13 @@ use smithay::wayland::xdg_activation::{
 };
 use smithay::{
     delegate_compositor, delegate_data_control, delegate_data_device, delegate_dmabuf,
-    delegate_fractional_scale, delegate_idle_inhibit, delegate_idle_notify,
-    delegate_input_method_manager, delegate_kde_decoration, delegate_keyboard_shortcuts_inhibit,
-    delegate_layer_shell, delegate_output, delegate_presentation, delegate_primary_selection,
-    delegate_seat, delegate_session_lock, delegate_shm, delegate_single_pixel_buffer,
-    delegate_text_input_manager, delegate_viewporter, delegate_virtual_keyboard_manager,
-    delegate_xdg_activation, delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_foreign_toplevel_list, delegate_fractional_scale, delegate_idle_inhibit,
+    delegate_idle_notify, delegate_input_method_manager, delegate_kde_decoration,
+    delegate_keyboard_shortcuts_inhibit, delegate_layer_shell, delegate_output,
+    delegate_presentation, delegate_primary_selection, delegate_seat, delegate_session_lock,
+    delegate_shm, delegate_single_pixel_buffer, delegate_text_input_manager, delegate_viewporter,
+    delegate_virtual_keyboard_manager, delegate_xdg_activation, delegate_xdg_decoration,
+    delegate_xdg_shell,
 };
 use tracing::{error, info};
 
@@ -135,6 +139,7 @@ pub struct Catacomb {
     pub idle_notifier_state: IdleNotifierState<Self>,
     pub dmabuf_state: DmabufState,
     keyboard_shortcuts_inhibit_state: KeyboardShortcutsInhibitState,
+    foreign_toplevel_list_state: ForeignToplevelListState,
     primary_selection_state: PrimarySelectionState,
     xdg_activation_state: XdgActivationState,
     kde_decoration_state: KdeDecorationState,
@@ -248,6 +253,9 @@ impl Catacomb {
         // Initalize xdg-activation protocol.
         let xdg_activation_state = XdgActivationState::new::<Self>(&display_handle);
 
+        // Initialize foreign-toplevel-list protocol.
+        let foreign_toplevel_list_state = ForeignToplevelListState::new::<Self>(&display_handle);
+
         // Initalize primary-selection protocol.
         let primary_selection_state = PrimarySelectionState::new::<Self>(&display_handle);
 
@@ -325,6 +333,7 @@ impl Catacomb {
 
         Self {
             keyboard_shortcuts_inhibit_state,
+            foreign_toplevel_list_state,
             primary_selection_state,
             xdg_activation_state,
             kde_decoration_state,
@@ -582,7 +591,7 @@ impl CompositorHandler for Catacomb {
             return;
         }
 
-        self.windows.surface_commit(surface);
+        self.windows.surface_commit(&mut self.foreign_toplevel_list_state, surface);
 
         self.unstall();
     }
@@ -942,6 +951,13 @@ impl KeyboardShortcutsInhibitHandler for Catacomb {
     }
 }
 delegate_keyboard_shortcuts_inhibit!(Catacomb);
+
+impl ForeignToplevelListHandler for Catacomb {
+    fn foreign_toplevel_list_state(&mut self) -> &mut ForeignToplevelListState {
+        &mut self.foreign_toplevel_list_state
+    }
+}
+delegate_foreign_toplevel_list!(Catacomb);
 
 delegate_presentation!(Catacomb);
 
