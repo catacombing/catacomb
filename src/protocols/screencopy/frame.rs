@@ -1,15 +1,13 @@
 //! wlr-screencopy frame.
 
-use std::time::UNIX_EPOCH;
-
 use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server::zwlr_screencopy_frame_v1::{
-    Flags, Request, ZwlrScreencopyFrameV1,
+    Request, ZwlrScreencopyFrameV1,
 };
-use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::{Client, DataInit, Dispatch, DisplayHandle};
 use smithay::utils::{Physical, Rectangle};
 
 use crate::protocols::screencopy::{ScreencopyHandler, ScreencopyManagerState};
+use crate::udev::{CaptureFrame, CaptureRequest};
 
 pub struct ScreencopyFrameState {
     pub rect: Rectangle<i32, Physical>,
@@ -38,66 +36,11 @@ where
             _ => unreachable!(),
         };
 
-        state.frame(Screencopy {
-            send_damage,
+        state.frame(CaptureRequest::new(
+            CaptureFrame::Screencopy(frame.clone()),
             buffer,
-            frame: frame.clone(),
-            region: data.rect,
-            submitted: false,
-        });
-    }
-}
-
-/// Screencopy frame.
-pub struct Screencopy {
-    region: Rectangle<i32, Physical>,
-    frame: ZwlrScreencopyFrameV1,
-    send_damage: bool,
-    buffer: WlBuffer,
-    submitted: bool,
-}
-
-impl Drop for Screencopy {
-    fn drop(&mut self) {
-        if !self.submitted {
-            self.frame.failed();
-        }
-    }
-}
-
-impl Screencopy {
-    /// Get the target buffer to copy to.
-    pub fn buffer(&self) -> &WlBuffer {
-        &self.buffer
-    }
-
-    /// Get the region which should be copied.
-    pub fn region(&self) -> Rectangle<i32, Physical> {
-        self.region
-    }
-
-    /// Mark damaged regions of the screencopy buffer.
-    pub fn damage(&mut self, damage: &[Rectangle<i32, Physical>]) {
-        if !self.send_damage {
-            return;
-        }
-
-        for Rectangle { loc, size } in damage {
-            self.frame.damage(loc.x as u32, loc.y as u32, size.w as u32, size.h as u32);
-        }
-    }
-
-    /// Submit the copied content.
-    pub fn submit(mut self) {
-        // Notify client that buffer is ordinary.
-        self.frame.flags(Flags::empty());
-
-        // Notify client about successful copy.
-        let now = UNIX_EPOCH.elapsed().unwrap();
-        let secs = now.as_secs();
-        self.frame.ready((secs >> 32) as u32, secs as u32, now.subsec_nanos());
-
-        // Mark frame as submitted to ensure destructor isn't run.
-        self.submitted = true;
+            data.rect,
+            send_damage,
+        ));
     }
 }

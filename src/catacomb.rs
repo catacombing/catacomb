@@ -1,7 +1,7 @@
 //! Catacomb compositor state.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::os::fd::OwnedFd;
 use std::path::Path;
 use std::sync::Arc;
@@ -10,18 +10,22 @@ use std::time::{Duration, Instant};
 use std::{cmp, env, mem};
 
 use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
+use _image_capture::ext_image_copy_capture_frame_v1::FailureReason;
 use _server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as ManagerMode;
 use calloop::Mode;
 use catacomb_ipc::{Keysym, Orientation};
 use smithay::backend::allocator::dmabuf::Dmabuf;
+use smithay::backend::drm::DrmNode;
 use smithay::backend::renderer::ImportDma;
 use smithay::input::keyboard::XkbConfig;
 use smithay::input::{Seat, SeatHandler, SeatState};
+use smithay::output::Output as SmithayOutput;
 use smithay::reexports::calloop::generic::{Generic, NoIoDrop};
 use smithay::reexports::calloop::signals::{Signal, Signals};
 use smithay::reexports::calloop::{
     Interest, LoopHandle, Mode as TriggerMode, PostAction, RegistrationToken,
 };
+use smithay::reexports::wayland_protocols::ext::image_copy_capture::v1::server as _image_capture;
 use smithay::reexports::wayland_protocols::xdg::decoration as _decoration;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::WmCapabilities;
 use smithay::reexports::wayland_protocols_misc::server_decoration as _server_decoration;
@@ -29,21 +33,31 @@ use smithay::reexports::wayland_server::backend::ClientData;
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
+use smithay::reexports::wayland_server::protocol::wl_shm::Format as ShmFormat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, Resource};
-use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Serial};
+use smithay::utils::{Logical, Physical, Point, Rectangle, SERIAL_COUNTER, Serial, Size};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor;
 use smithay::wayland::compositor::{CompositorClientState, CompositorHandler, CompositorState};
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
 use smithay::wayland::foreign_toplevel_list::{
-    ForeignToplevelListHandler, ForeignToplevelListState,
+    ForeignToplevelHandle, ForeignToplevelListHandler, ForeignToplevelListState,
 };
 use smithay::wayland::fractional_scale::{
     self, FractionalScaleHandler, FractionalScaleManagerState,
 };
 use smithay::wayland::idle_inhibit::{IdleInhibitHandler, IdleInhibitManagerState};
 use smithay::wayland::idle_notify::{IdleNotifierHandler, IdleNotifierState};
+use smithay::wayland::image_capture_source::{
+    ImageCaptureSource, ImageCaptureSourceHandler, ImageCaptureSourceState,
+    OutputCaptureSourceHandler, OutputCaptureSourceState, ToplevelCaptureSourceHandler,
+    ToplevelCaptureSourceState,
+};
+use smithay::wayland::image_copy_capture::{
+    BufferConstraints, DmabufConstraints, Frame, ImageCopyCaptureHandler, ImageCopyCaptureState,
+    Session, SessionRef,
+};
 use smithay::wayland::input_method::{
     InputMethodHandler, InputMethodManagerState, PopupSurface as ImeSurface,
 };
@@ -83,23 +97,23 @@ use smithay::wayland::xdg_activation::{
 use smithay::{
     delegate_compositor, delegate_data_control, delegate_data_device, delegate_dmabuf,
     delegate_foreign_toplevel_list, delegate_fractional_scale, delegate_idle_inhibit,
-    delegate_idle_notify, delegate_input_method_manager, delegate_kde_decoration,
-    delegate_keyboard_shortcuts_inhibit, delegate_layer_shell, delegate_output,
-    delegate_presentation, delegate_primary_selection, delegate_seat, delegate_session_lock,
-    delegate_shm, delegate_single_pixel_buffer, delegate_text_input_manager, delegate_viewporter,
-    delegate_virtual_keyboard_manager, delegate_xdg_activation, delegate_xdg_decoration,
-    delegate_xdg_shell,
+    delegate_idle_notify, delegate_image_capture_source, delegate_image_copy_capture,
+    delegate_input_method_manager, delegate_kde_decoration, delegate_keyboard_shortcuts_inhibit,
+    delegate_layer_shell, delegate_output, delegate_output_capture_source, delegate_presentation,
+    delegate_primary_selection, delegate_seat, delegate_session_lock, delegate_shm,
+    delegate_single_pixel_buffer, delegate_text_input_manager, delegate_toplevel_capture_source,
+    delegate_viewporter, delegate_virtual_keyboard_manager, delegate_xdg_activation,
+    delegate_xdg_decoration, delegate_xdg_shell,
 };
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::config::KeyBinding;
 use crate::drawing::CatacombSurfaceData;
 use crate::input::{REPEAT_DELAY, REPEAT_RATE, TouchState};
 use crate::orientation::{Accelerometer, AccelerometerSource};
 use crate::output::Canvas;
-use crate::protocols::screencopy::frame::Screencopy;
 use crate::protocols::screencopy::{ScreencopyHandler, ScreencopyManagerState};
-use crate::udev::Udev;
+use crate::udev::{CaptureFrame, CaptureRequest, Udev};
 use crate::windows::Windows;
 use crate::windows::surface::Surface;
 use crate::{daemon, delegate_screencopy, ipc_server, trace_error};
@@ -125,6 +139,7 @@ pub struct Catacomb {
     pub display_handle: DisplayHandle,
     pub key_bindings: Vec<KeyBinding>,
     pub active_keys: HashSet<Keysym>,
+    pub dmabuf_node: Option<DrmNode>,
     pub touch_state: TouchState,
     pub frame_pacer: FramePacer,
     pub draw_cursor: bool,
@@ -139,7 +154,10 @@ pub struct Catacomb {
     pub idle_notifier_state: IdleNotifierState<Self>,
     pub dmabuf_state: DmabufState,
     keyboard_shortcuts_inhibit_state: KeyboardShortcutsInhibitState,
+    toplevel_capture_source_state: ToplevelCaptureSourceState,
     foreign_toplevel_list_state: ForeignToplevelListState,
+    output_capture_source_state: OutputCaptureSourceState,
+    image_copy_capture_state: ImageCopyCaptureState,
     primary_selection_state: PrimarySelectionState,
     xdg_activation_state: XdgActivationState,
     kde_decoration_state: KdeDecorationState,
@@ -157,6 +175,7 @@ pub struct Catacomb {
     idle_inhibitors: Vec<WlSurface>,
     last_focus: Option<WlSurface>,
     locker: Option<SessionLocker>,
+    capture_state: CaptureState,
     ime_override: Option<bool>,
 
     // Indicates if rendering was intentionally stalled.
@@ -234,6 +253,13 @@ impl Catacomb {
 
         // Initialize screencopy protocol.
         ScreencopyManagerState::new::<Self>(&display_handle);
+
+        // Initialize image copy capture protocol.
+        let toplevel_capture_source_state =
+            ToplevelCaptureSourceState::new::<Self>(&display_handle);
+        let output_capture_source_state = OutputCaptureSourceState::new::<Self>(&display_handle);
+        let image_copy_capture_state = ImageCopyCaptureState::new::<Self>(&display_handle);
+        ImageCaptureSourceState::new();
 
         // Initialize wp_presentation protocol.
         let clock_id = libc::CLOCK_MONOTONIC as u32;
@@ -333,7 +359,10 @@ impl Catacomb {
 
         Self {
             keyboard_shortcuts_inhibit_state,
+            toplevel_capture_source_state,
             foreign_toplevel_list_state,
+            output_capture_source_state,
+            image_copy_capture_state,
             primary_selection_state,
             xdg_activation_state,
             kde_decoration_state,
@@ -358,11 +387,13 @@ impl Catacomb {
             display_on: true,
             last_cursor_position: Default::default(),
             idle_inhibitors: Default::default(),
+            capture_state: Default::default(),
             key_bindings: Default::default(),
             ime_override: Default::default(),
             active_keys: Default::default(),
-            frame_pacer: Default::default(),
+            dmabuf_node: Default::default(),
             draw_cursor: Default::default(),
+            frame_pacer: Default::default(),
             last_focus: Default::default(),
             terminated: Default::default(),
             stalled: Default::default(),
@@ -801,8 +832,8 @@ impl ScreencopyHandler for Catacomb {
         self.windows.canvas()
     }
 
-    fn frame(&mut self, screencopy: Screencopy) {
-        self.backend.request_screencopy(screencopy);
+    fn frame(&mut self, capture_request: CaptureRequest) {
+        self.backend.request_capture(capture_request);
 
         // Force redraw, to prevent screencopy stalling.
         self.windows.set_dirty();
@@ -810,6 +841,138 @@ impl ScreencopyHandler for Catacomb {
     }
 }
 delegate_screencopy!(Catacomb);
+
+impl ImageCopyCaptureHandler for Catacomb {
+    fn image_copy_capture_state(&mut self) -> &mut ImageCopyCaptureState {
+        &mut self.image_copy_capture_state
+    }
+
+    fn capture_constraints(&mut self, source: &ImageCaptureSource) -> Option<BufferConstraints> {
+        // Get the source's capture region size.
+        let source_id = source.id();
+        let source = self.capture_state.sources.get(&source_id)?;
+        let rect = source.rect(&self.windows).or_else(|| {
+            debug!("Ignoring constraints due to invalidated window bounds");
+            self.capture_state.sources.remove(&source_id);
+            None
+        })?;
+        let size = Size::new(rect.size.w, rect.size.h);
+
+        // Get supported buffer formats.
+        let dma = self.dmabuf_node.map(|node| {
+            let buffer_formats = self.backend.dmabuf_formats().into_iter();
+            let formats = buffer_formats.fold(HashMap::<_, Vec<_>>::new(), |mut map, format| {
+                map.entry(format.code).or_default().push(format.modifier);
+                map
+            });
+            DmabufConstraints { node, formats: formats.into_iter().collect() }
+        });
+
+        Some(BufferConstraints { size, dma, shm: vec![ShmFormat::Argb8888, ShmFormat::Xrgb8888] })
+    }
+
+    fn new_session(&mut self, session: Session) {
+        let serial = SERIAL_COUNTER.next_serial();
+        session.user_data().insert_if_missing(|| serial);
+        self.capture_state.sessions.insert(serial, session);
+    }
+
+    fn session_destroyed(&mut self, session: SessionRef) {
+        let serial = session.user_data().get::<Serial>().unwrap();
+        let session = self.capture_state.sessions.remove(serial);
+
+        // Remove source if it was destroyed and has no more sessions.
+        //
+        // XXX: This is necessary because Grim immediately destroys its sources after
+        // session creation, so we can't just clean up sources and their sessions when
+        // they die.
+        if let Some(session) = session {
+            let source = session.source();
+            let source_id = source.id();
+            if !source.alive() {
+                let mut sessions = self.capture_state.sessions.values();
+                if sessions.all(|session| session.source().id() != source_id) {
+                    self.capture_state.sources.remove(&source_id);
+                }
+            }
+        }
+    }
+
+    fn frame(&mut self, session: &SessionRef, frame: Frame) {
+        // Get session's source data.
+        let source_id = session.source().id();
+        let source = match self.capture_state.sources.get(&source_id) {
+            Some(source) => source,
+            None => {
+                error!("Capture frame without valid source");
+                frame.fail(FailureReason::Stopped);
+                return;
+            },
+        };
+
+        // Validate source rectangle.
+        let rect = match source.rect(&self.windows) {
+            Some(rect) => rect,
+            None => {
+                debug!("Cancelling capture due to invalidated window bounds");
+                self.capture_state.sources.remove(&source_id);
+                frame.fail(FailureReason::Stopped);
+                return;
+            },
+        };
+
+        let buffer = frame.buffer();
+        let frame = CaptureFrame::ImageCopyCapture(frame);
+        let request = CaptureRequest::new(frame, buffer, rect, true);
+
+        self.backend.request_capture(request);
+
+        // Force redraw, to prevent stalling.
+        self.windows.set_dirty();
+        self.unstall();
+    }
+}
+delegate_image_copy_capture!(Catacomb);
+
+impl OutputCaptureSourceHandler for Catacomb {
+    fn output_capture_source_state(&mut self) -> &mut OutputCaptureSourceState {
+        &mut self.output_capture_source_state
+    }
+
+    fn output_source_created(&mut self, source: ImageCaptureSource, _output: &SmithayOutput) {
+        // Translate logical UI render region to physical framebuffer coordinates.
+        let canvas = self.canvas();
+        let rect = canvas.logical_to_output_rect(canvas.ui_rect(true));
+
+        self.capture_state.sources.insert(source.id(), CaptureSource::Output(rect));
+    }
+}
+delegate_output_capture_source!(Catacomb);
+
+impl ToplevelCaptureSourceHandler for Catacomb {
+    fn toplevel_capture_source_state(&mut self) -> &mut ToplevelCaptureSourceState {
+        &mut self.toplevel_capture_source_state
+    }
+
+    fn toplevel_source_created(
+        &mut self,
+        source: ImageCaptureSource,
+        toplevel: ForeignToplevelHandle,
+    ) {
+        if let Some(window) = self.windows.visible_foreign_toplevel(&toplevel) {
+            let canvas = self.windows.canvas();
+            let bounds = window.borrow().bounds(canvas.scale());
+            let rect = canvas.logical_to_output_rect(bounds);
+            let src = CaptureSource::Toplevel(toplevel, rect);
+
+            self.capture_state.sources.insert(source.id(), src);
+        }
+    }
+}
+delegate_toplevel_capture_source!(Catacomb);
+
+impl ImageCaptureSourceHandler for Catacomb {}
+delegate_image_capture_source!(Catacomb);
 
 impl IdleInhibitHandler for Catacomb {
     fn inhibit(&mut self, surface: WlSurface) {
@@ -1084,4 +1247,38 @@ struct VkActions<'a> {
     enable: Option<(&'a String, &'a Vec<String>)>,
     disable: Option<(&'a String, &'a Vec<String>)>,
     auto: Option<(&'a String, &'a Vec<String>)>,
+}
+
+/// Image capture state.
+#[derive(Default)]
+struct CaptureState {
+    sources: HashMap<usize, CaptureSource>,
+    sessions: HashMap<Serial, Session>,
+}
+
+/// Types of image capture sources.
+enum CaptureSource {
+    Toplevel(ForeignToplevelHandle, Rectangle<i32, Physical>),
+    Output(Rectangle<i32, Physical>),
+}
+
+impl CaptureSource {
+    /// Get the capture region for this source.
+    ///
+    /// This automatically validates that the capture region returned by this
+    /// function is still valid, including checks for window movement and
+    /// liveliness changes.
+    fn rect(&self, windows: &Windows) -> Option<Rectangle<i32, Physical>> {
+        match self {
+            Self::Output(rect) => Some(*rect),
+            Self::Toplevel(foreign_handle, rect) => {
+                // Validate that window is alive, visible, with identical bounds.
+                let window = windows.visible_foreign_toplevel(foreign_handle)?;
+                let canvas = windows.canvas();
+                let bounds = window.borrow().bounds(canvas.scale());
+                let current_rect = canvas.logical_to_output_rect(bounds);
+                if *rect == current_rect { Some(*rect) } else { None }
+            },
+        }
+    }
 }

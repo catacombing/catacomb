@@ -25,7 +25,7 @@ xkbcommon = "0.9.0"
 
 [workspace.dependencies.smithay]
 git = "https://github.com/chrisduerr/smithay"
-rev = "590e115f4e84d4982b2e901a05fea65498b36a7e"
+rev = "9658f329c79dd25817c1144e1c66293d21e5f46c"
 default-features = false
 
 [dependencies]

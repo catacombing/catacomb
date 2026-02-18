@@ -367,6 +367,16 @@ impl Canvas {
         handle_height.max(deadzone.bottom)
     }
 
+    /// Transforming logical rects into physical output transform rects.
+    pub fn logical_to_output_rect(
+        &self,
+        rect: Rectangle<i32, Logical>,
+    ) -> Rectangle<i32, Physical> {
+        let transform = self.orientation.output_transform();
+        let rotated = transform.transform_rect_in(rect, &self.output_size());
+        rotated.to_physical_precise_round(self.scale())
+    }
+
     /// Output fractional scale.
     pub fn scale(&self) -> f64 {
         self.scale

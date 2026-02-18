@@ -919,6 +919,11 @@ impl<S: Surface + 'static> Window<S> {
         self.transaction.is_none() && (self.dirty || self.popups.iter().any(|popup| popup.dirty()))
     }
 
+    /// Get a reference to this window's foreign toplevel handle.
+    pub fn foreign_handle(&self) -> Option<&ForeignToplevelHandle> {
+        self.foreign_handle.as_ref()
+    }
+
     /// Get primary window surface.
     pub fn surface(&self) -> &WlSurface {
         self.surface.surface()

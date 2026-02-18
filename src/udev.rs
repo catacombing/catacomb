@@ -4,16 +4,19 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 use std::{env, io, mem, process, ptr};
 
+use _image_capture::ext_image_copy_capture_frame_v1::FailureReason;
 use _linux_dmabuf::zv1::server::zwp_linux_dmabuf_feedback_v1::TrancheFlags;
+use _screencopy::zwlr_screencopy_frame_v1::{Flags, ZwlrScreencopyFrameV1};
 use indexmap::IndexSet;
 use libc::dev_t as DeviceId;
 #[cfg(feature = "profiling")]
 use profiling::puffin::GlobalProfiler;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::allocator::dmabuf::Dmabuf;
+use smithay::backend::allocator::format::FormatSet;
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBuffer, GbmBufferFlags, GbmDevice};
 use smithay::backend::drm::compositor::{
     DrmCompositor as SmithayDrmCompositor, FrameFlags, PrimaryPlaneElement, RenderFrameResult,
@@ -46,19 +49,21 @@ use smithay::reexports::drm::control::property::{
 use smithay::reexports::drm::control::{Device, Mode as DrmMode, ModeTypeFlags, ResourceHandles};
 use smithay::reexports::input::Libinput;
 use smithay::reexports::rustix::fs::OFlags;
+use smithay::reexports::wayland_protocols::ext::image_copy_capture::v1::server as _image_capture;
 use smithay::reexports::wayland_protocols::wp::linux_dmabuf as _linux_dmabuf;
+use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server as _screencopy;
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_shm;
 use smithay::utils::{DevPath, DeviceFd, Logical, Physical, Point, Rectangle, Size, Transform};
 use smithay::wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder};
+use smithay::wayland::image_copy_capture::Frame as ImageCopyCaptureFrame;
 use smithay::wayland::{dmabuf, shm};
 use tracing::{debug, error};
 
 use crate::catacomb::Catacomb;
 use crate::drawing::{CatacombElement, Graphics};
 use crate::output::Output;
-use crate::protocols::screencopy::frame::Screencopy;
 use crate::trace_error;
 use crate::windows::Windows;
 
@@ -94,12 +99,13 @@ pub fn run() {
     }
 
     // Setup hardware acceleration.
-    let dmabuf_feedback =
+    let (drm_node, dmabuf_feedback) =
         catacomb.backend.default_dmabuf_feedback(&backend).expect("dmabuf feedback");
     catacomb.dmabuf_state.create_global_with_default_feedback::<Catacomb>(
         &catacomb.display_handle,
         &dmabuf_feedback,
     );
+    catacomb.dmabuf_node = Some(drm_node);
 
     // Handle device events.
     event_loop
@@ -294,22 +300,29 @@ impl Udev {
         }
     }
 
-    /// Stage a screencopy request for the next frame.
-    pub fn request_screencopy(&mut self, screencopy: Screencopy) {
+    /// Stage a capture request for the next frame.
+    pub fn request_capture(&mut self, capture_request: CaptureRequest) {
         let output_device = match &mut self.output_device {
             Some(output_device) => output_device,
             None => return,
         };
 
-        // Stage new screencopy.
-        output_device.screencopy = Some(screencopy);
+        output_device.capture_requests.push(capture_request);
+    }
+
+    /// Get supported dmabuf formats.
+    pub fn dmabuf_formats(&self) -> FormatSet {
+        match &self.output_device {
+            Some(output_device) => output_device.gles.dmabuf_formats(),
+            None => FormatSet::default(),
+        }
     }
 
     /// Default dma surface feedback.
     fn default_dmabuf_feedback(
         &self,
         backend: &UdevBackend,
-    ) -> Result<DmabufFeedback, Box<dyn Error>> {
+    ) -> Result<(DrmNode, DmabufFeedback), Box<dyn Error>> {
         match &self.output_device {
             Some(output_device) => output_device.default_dmabuf_feedback(backend),
             None => Err("missing output device".into()),
@@ -415,7 +428,7 @@ impl Udev {
             gbm,
             drm,
             id: device_id,
-            screencopy: Default::default(),
+            capture_requests: Default::default(),
         });
 
         Ok(())
@@ -546,7 +559,7 @@ impl Udev {
 /// Target device for rendering.
 pub struct OutputDevice {
     last_render_states: RenderElementStates,
-    screencopy: Option<Screencopy>,
+    capture_requests: Vec<CaptureRequest>,
     drm_compositor: DrmCompositor,
     gbm: GbmDevice<DrmDeviceFd>,
     gles: GlesRenderer,
@@ -608,10 +621,12 @@ impl OutputDevice {
         windows: &mut Windows,
         cursor_position: Option<Point<f64, Logical>>,
     ) -> Result<RenderedFrame, Box<dyn Error>> {
-        let scale = windows.canvas().scale();
+        let canvas = windows.canvas();
+        let surface_transform = canvas.orientation().surface_transform();
+        let scale = canvas.scale();
 
         // Update output mode since we're using static for transforms.
-        self.drm_compositor.set_output_mode_source(windows.canvas().into());
+        self.drm_compositor.set_output_mode_source(canvas.into());
 
         let textures = windows.textures(&mut self.gles, &mut self.graphics, cursor_position);
         let mut frame_result = self.drm_compositor.render_frame(
@@ -631,46 +646,47 @@ impl OutputDevice {
         // Update last render states.
         self.last_render_states = mem::take(&mut frame_result.states);
 
-        // Copy framebuffer for screencopy.
-        if let Some(mut screencopy) = self.screencopy.take() {
-            // Mark entire buffer as damaged.
-            let region = screencopy.region();
-            let damage = [Rectangle::from_size(region.size)];
-            screencopy.damage(&damage);
-
-            let buffer = screencopy.buffer();
-            let sync_point = if let Ok(dmabuf) = dmabuf::get_dmabuf(buffer) {
-                Self::copy_framebuffer_dma(
-                    &mut self.gles,
-                    scale,
-                    &frame_result,
-                    region,
-                    &mut dmabuf.clone(),
-                )?
-            } else {
-                // Ignore unknown buffer types.
-                let buffer_type = renderer::buffer_type(buffer);
-                if !matches!(buffer_type, Some(BufferType::Shm)) {
-                    return Err(format!("unsupported buffer format: {buffer_type:?}").into());
-                }
-
-                self.copy_framebuffer_shm(windows, cursor_position, region, buffer)?
+        // Handle dmabuf screencopy requests.
+        //
+        // This is done first since it requires a referenc to the `frame_result`.
+        for i in (0..self.capture_requests.len()).rev() {
+            let capture_request = self.capture_requests.swap_remove(i);
+            let dmabuf = match dmabuf::get_dmabuf(&capture_request.buffer) {
+                Ok(dmabuf) => dmabuf,
+                Err(_) => {
+                    self.capture_requests.push(capture_request);
+                    continue;
+                },
             };
 
-            // Wait for OpenGL sync to submit screencopy, frame.
-            match sync_point.export() {
-                Some(sync_fd) => {
-                    // Wait for fence to be done.
-                    let mut screencopy = Some(screencopy);
-                    let source = Generic::new(sync_fd, Interest::READ, TriggerMode::OneShot);
-                    let _ = event_loop.insert_source(source, move |_, _, _| {
-                        screencopy.take().unwrap().submit();
-                        Ok(PostAction::Remove)
-                    });
-                },
-                None => screencopy.submit(),
-            }
+            let sync_point = Self::copy_framebuffer_dma(
+                &mut self.gles,
+                scale,
+                &frame_result,
+                capture_request.region,
+                &mut dmabuf.clone(),
+            )?;
+            capture_request.submit(event_loop, sync_point, surface_transform);
         }
+
+        // Handle SHM screencopy requests.
+        //
+        // This is done second, since it requires mutable window access.
+        let mut capture_requests = mem::take(&mut self.capture_requests);
+        for mut capture_request in capture_requests.drain(..) {
+            let buffer_type = renderer::buffer_type(&capture_request.buffer);
+            let region = capture_request.region;
+
+            // Ignore unknown buffer types.
+            if !matches!(buffer_type, Some(BufferType::Shm)) {
+                return Err(format!("unsupported buffer format: {buffer_type:?}").into());
+            }
+
+            let sync_point =
+                self.copy_framebuffer_shm(&mut capture_request, windows, cursor_position, region)?;
+            capture_request.submit(event_loop, sync_point, surface_transform);
+        }
+        self.capture_requests = capture_requests;
 
         // Skip frame submission if everything used direct scanout.
         if rendered {
@@ -711,30 +727,32 @@ impl OutputDevice {
     #[cfg_attr(feature = "profiling", profiling::function)]
     fn copy_framebuffer_shm(
         &mut self,
+        capture_request: &mut CaptureRequest,
         windows: &mut Windows,
         cursor_position: Option<Point<f64, Logical>>,
         region: Rectangle<i32, Physical>,
-        buffer: &WlBuffer,
     ) -> Result<SyncPoint, Box<dyn Error>> {
-        // Create and bind an offscreen render buffer.
         let canvas = windows.canvas();
-        let output_size = canvas.output_size_physical();
+
+        // Create and bind an offscreen render buffer.
+        let resolution = canvas.physical_resolution();
         let mut offscreen_buffer: GlesRenderbuffer =
-            self.gles.create_buffer(Fourcc::Abgr8888, (output_size.w, output_size.h).into())?;
+            self.gles.create_buffer(Fourcc::Abgr8888, (resolution.w, resolution.h).into())?;
         let mut framebuffer = self.gles.bind(&mut offscreen_buffer)?;
 
-        let scale = canvas.scale();
-        let resolution = canvas.physical_resolution();
-        let transform = canvas.orientation().output_transform();
-
         // Calculate drawing area after output transform.
-        let damage = transform.transform_rect_in(region, &resolution);
+        let orientation = canvas.orientation();
+        let surface_transform = orientation.surface_transform();
+        let damage = surface_transform.transform_rect_in(region, &resolution);
+
+        let scale = canvas.scale();
+        let output_transform = orientation.output_transform();
 
         // Collect textures for rendering.
         let textures = windows.textures(&mut self.gles, &mut self.graphics, cursor_position);
 
         // Initialize the buffer to our clear color.
-        let mut frame = self.gles.render(&mut framebuffer, resolution, transform)?;
+        let mut frame = self.gles.render(&mut framebuffer, resolution, output_transform)?;
         frame.clear(CLEAR_COLOR.into(), &[damage])?;
 
         // Render everything to the offscreen buffer.
@@ -744,17 +762,20 @@ impl OutputDevice {
         let sync_point = frame.finish()?;
 
         // Copy offscreen buffer's content to the SHM buffer.
+        let buffer = &capture_request.buffer;
         shm::with_buffer_contents_mut(buffer, |shm_buffer, shm_len, buffer_data| {
             // Ensure SHM buffer is in an acceptable format.
             if buffer_data.format != wl_shm::Format::Argb8888
                 || buffer_data.stride != region.size.w * 4
                 || buffer_data.height != region.size.h
-                || shm_len as i32 != buffer_data.stride * buffer_data.height
+                || shm_len as i32 != (buffer_data.stride * buffer_data.height - buffer_data.offset)
             {
+                capture_request.failure_reason = FailureReason::BufferConstraints;
                 return Err::<_, Box<dyn Error>>("Invalid buffer format".into());
             }
 
             // Copy framebuffer data to the SHM buffer.
+            let offset = buffer_data.offset as isize;
             self.gles.with_context(|gl| unsafe {
                 gl.ReadPixels(
                     region.loc.x,
@@ -763,15 +784,15 @@ impl OutputDevice {
                     region.size.h,
                     ffi::RGBA,
                     ffi::UNSIGNED_BYTE,
-                    shm_buffer.cast(),
+                    shm_buffer.offset(offset).cast(),
                 );
             })?;
 
             // Convert OpenGL's RGBA to ARGB.
             for i in 0..(region.size.w * region.size.h) as usize {
                 unsafe {
-                    let src = shm_buffer.offset(i as isize * 4);
-                    let dst = shm_buffer.offset(i as isize * 4 + 2);
+                    let src = shm_buffer.offset(offset + i as isize * 4);
+                    let dst = shm_buffer.offset(offset + i as isize * 4 + 2);
                     ptr::swap(src, dst);
                 }
             }
@@ -784,7 +805,7 @@ impl OutputDevice {
     fn default_dmabuf_feedback(
         &self,
         backend: &UdevBackend,
-    ) -> Result<DmabufFeedback, Box<dyn Error>> {
+    ) -> Result<(DrmNode, DmabufFeedback), Box<dyn Error>> {
         // Get planes for the DRM surface.
         let surface = self.drm_compositor.surface();
         let planes = surface.planes();
@@ -809,8 +830,9 @@ impl OutputDevice {
         // The dmabuf feedback DRM device is expected to have a render node, so if this
         // device doesn't have one, we fall back to the first one that does.
         let mut gbm_id = self.gbm.dev_id()?;
-        if !DrmNode::from_dev_id(gbm_id)?.has_render() {
-            let drm_node = backend
+        let mut drm_node = DrmNode::from_dev_id(gbm_id)?;
+        if !drm_node.has_render() {
+            drm_node = backend
                 .device_list()
                 .filter_map(|(_, path)| DrmNode::from_path(path).ok())
                 .find(DrmNode::has_render)
@@ -840,7 +862,7 @@ impl OutputDevice {
             .add_preference_tranche(surface_id, flags, primary_formats)
             .build()?;
 
-        Ok(feedback)
+        Ok((drm_node, feedback))
     }
 }
 
@@ -857,3 +879,104 @@ type DrmCompositor = SmithayDrmCompositor<
     (),
     DrmDeviceFd,
 >;
+
+/// Capture request for screencopy/image copy capture protocols.
+pub struct CaptureRequest {
+    region: Rectangle<i32, Physical>,
+    failure_reason: FailureReason,
+    frame: Option<CaptureFrame>,
+    send_damage: bool,
+    buffer: WlBuffer,
+}
+
+impl Drop for CaptureRequest {
+    fn drop(&mut self) {
+        // Fail frames if they're dropped before submission.
+        if let Some(frame) = self.frame.take() {
+            match frame {
+                CaptureFrame::ImageCopyCapture(frame) => frame.fail(self.failure_reason),
+                CaptureFrame::Screencopy(frame) => frame.failed(),
+            }
+        }
+    }
+}
+
+impl CaptureRequest {
+    pub fn new(
+        frame: CaptureFrame,
+        buffer: WlBuffer,
+        region: Rectangle<i32, Physical>,
+        send_damage: bool,
+    ) -> Self {
+        Self {
+            send_damage,
+            region,
+            buffer,
+            failure_reason: FailureReason::Unknown,
+            frame: Some(frame),
+        }
+    }
+
+    /// Mark frame as submitted once sync is done.
+    fn submit(
+        mut self,
+        event_loop: &LoopHandle<'static, Catacomb>,
+        sync_point: SyncPoint,
+        transform: Transform,
+    ) {
+        // Wait for OpenGL sync to submit frame.
+        match sync_point.export() {
+            Some(sync_fd) => {
+                let mut capture_request = Some(self);
+                let source = Generic::new(sync_fd, Interest::READ, TriggerMode::OneShot);
+                let _ = event_loop.insert_source(source, move |_, _, _| {
+                    capture_request.take().unwrap().submit_inner(transform);
+                    Ok(PostAction::Remove)
+                });
+            },
+            None => self.submit_inner(transform),
+        }
+    }
+
+    /// Handle frame submission, without waiting for sync.
+    fn submit_inner(&mut self, transform: Transform) {
+        let frame = match self.frame.take() {
+            Some(frame) => frame,
+            None => return,
+        };
+
+        let damage = Rectangle::from_size(Size::new(self.region.size.w, self.region.size.h));
+        let presentation_time = UNIX_EPOCH.elapsed().unwrap();
+
+        match frame {
+            CaptureFrame::ImageCopyCapture(frame) => {
+                frame.success(transform, vec![damage], presentation_time);
+            },
+            CaptureFrame::Screencopy(frame) => {
+                // Set frame's damage if requested.
+                if self.send_damage {
+                    frame.damage(
+                        damage.loc.x.max(0) as u32,
+                        damage.loc.y.max(0) as u32,
+                        damage.size.w.max(0) as u32,
+                        damage.size.h.max(0) as u32,
+                    );
+                }
+
+                // Notify client that buffer is ordinary.
+                frame.flags(Flags::empty());
+
+                // Notify client about successful copy.
+                let secs = presentation_time.as_secs();
+                let nanos = presentation_time.subsec_nanos();
+                frame.ready((secs >> 32) as u32, secs as u32, nanos);
+            },
+        }
+    }
+}
+
+/// Types of screen capture frames.
+pub enum CaptureFrame {
+    ImageCopyCapture(ImageCopyCaptureFrame),
+    Screencopy(ZwlrScreencopyFrameV1),
+}

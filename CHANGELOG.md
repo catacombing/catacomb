@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - IPC subcommand to set gesture handle height (`catacomb msg gesture-handle`)
 - IPC subcommand to manage exclusive zones (`catacomb msg deadzone`)
 - Wayland protocol support for `ext_foreign_toplevel_list-v1`
+- Wayland protocol support for `ext_image_copy_capture-v1`
 
 ### Changed
 

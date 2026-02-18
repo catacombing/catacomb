@@ -11,7 +11,8 @@ use smithay::reexports::wayland_server::{
 use smithay::utils::Rectangle;
 
 use crate::output::Canvas;
-use crate::protocols::screencopy::frame::{Screencopy, ScreencopyFrameState};
+use crate::protocols::screencopy::frame::ScreencopyFrameState;
+use crate::udev::CaptureRequest;
 
 pub mod frame;
 
@@ -71,30 +72,25 @@ where
         _display: &DisplayHandle,
         data_init: &mut DataInit<'_, D>,
     ) {
-        let (frame, overlay_cursor, rect) = match request {
+        let canvas = state.canvas();
+        let (frame, overlay_cursor, logical_rect) = match request {
             Request::CaptureOutput { frame, overlay_cursor, .. } => {
-                let canvas = state.canvas();
-                let ui_rect = canvas.ui_rect(true).to_physical_precise_round(canvas.scale());
+                let ui_rect = canvas.ui_rect(true);
                 (frame, overlay_cursor, ui_rect)
             },
             Request::CaptureOutputRegion { frame, overlay_cursor, x, y, width, height, .. } => {
+                // Clamp captured region to UI ender area.
                 let rect = Rectangle::new((x, y).into(), (width, height).into());
+                let clamped = rect.intersection(canvas.ui_rect(true)).unwrap_or_default();
 
-                // Translate logical rect to physical framebuffer coordinates.
-                let canvas = state.canvas();
-                let output_transform = canvas.orientation().output_transform();
-                let rotated_rect = output_transform.transform_rect_in(rect, &canvas.output_size());
-                let physical_rect = rotated_rect.to_physical_precise_round(canvas.scale());
-
-                // Clamp captured region to the output.
-                let ui_rect = canvas.ui_rect(true).to_physical_precise_round(canvas.scale());
-                let clamped_rect = physical_rect.intersection(ui_rect).unwrap_or_default();
-
-                (frame, overlay_cursor, clamped_rect)
+                (frame, overlay_cursor, clamped)
             },
             Request::Destroy => return,
             _ => unreachable!(),
         };
+
+        // Translate logical rect to physical framebuffer coordinates.
+        let rect = canvas.logical_to_output_rect(logical_rect);
 
         // Create the frame.
         let _overlay_cursor = overlay_cursor != 0;
@@ -124,7 +120,7 @@ pub trait ScreencopyHandler {
     fn canvas(&mut self) -> &Canvas;
 
     /// Handle new screencopy request.
-    fn frame(&mut self, frame: Screencopy);
+    fn frame(&mut self, capture_request: CaptureRequest);
 }
 
 #[allow(missing_docs)]

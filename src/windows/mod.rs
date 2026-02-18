@@ -20,7 +20,7 @@ use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle};
 use smithay::wayland::compositor;
-use smithay::wayland::foreign_toplevel_list::ForeignToplevelListState;
+use smithay::wayland::foreign_toplevel_list::{ForeignToplevelHandle, ForeignToplevelListState};
 use smithay::wayland::session_lock::LockSurface;
 use smithay::wayland::shell::wlr_layer::{Layer, LayerSurface};
 use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface};
@@ -1318,6 +1318,23 @@ impl Windows {
         self.layouts.with_visible(|window| visible_xdg |= window.owns_surface(surface));
 
         visible_xdg || self.layers.iter().any(|layer| layer.owns_surface(surface))
+    }
+
+    /// Get reference to a visible window using its foreign toplevel handle.
+    ///
+    /// This will not return any window while not in the workspace view.
+    pub fn visible_foreign_toplevel(
+        &self,
+        foreign_handle: &ForeignToplevelHandle,
+    ) -> Option<Rc<RefCell<Window>>> {
+        if !matches!(self.view, View::Workspace) {
+            return None;
+        }
+
+        let window = self.layouts.active().windows().find(|window| {
+            window.borrow().foreign_handle().is_some_and(|handle| handle.matches(foreign_handle))
+        });
+        window.cloned()
     }
 
     /// Application runtime.
