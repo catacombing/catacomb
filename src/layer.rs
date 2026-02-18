@@ -1,5 +1,7 @@
 //! Layer shell windows.
 
+use std::sync::Arc;
+
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point};
 use smithay::wayland::shell::wlr_layer::Layer;
@@ -12,7 +14,7 @@ type LayerWindow = Window<CatacombLayerSurface>;
 /// Layer shell windows.
 #[derive(Debug, Default)]
 pub struct Layers {
-    pub focus: Option<(WlSurface, Option<String>)>,
+    pub focus: Option<(WlSurface, Option<Arc<String>>)>,
 
     background: Vec<LayerWindow>,
     bottom: Vec<LayerWindow>,

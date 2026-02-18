@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::ops::Deref;
 use std::rc::Weak;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Size};
@@ -296,13 +296,13 @@ impl InputSurface {
 
 /// Types of input surfaces.
 pub enum InputSurfaceKind {
-    Layout((Weak<RefCell<Window>>, Option<String>)),
-    Layer((WlSurface, Option<String>)),
+    Layout((Weak<RefCell<Window>>, Option<Arc<String>>)),
+    Layer((WlSurface, Option<Arc<String>>)),
 }
 
 impl InputSurfaceKind {
     /// Extract the App ID from this surface.
-    pub fn take_app_id(&mut self) -> Option<String> {
+    pub fn take_app_id(&mut self) -> Option<Arc<String>> {
         let (Self::Layout((_, app_id)) | Self::Layer((_, app_id))) = self;
         app_id.take()
     }

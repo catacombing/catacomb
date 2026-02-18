@@ -1,5 +1,6 @@
 //! Input event handling.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use catacomb_ipc::{GestureSector, KeyTrigger, Keysym, Modifiers};
@@ -63,8 +64,8 @@ pub struct TouchState {
     velocity_timer: Option<RegistrationToken>,
     repeat_timer: Option<RegistrationToken>,
     input_surface: Option<InputSurface>,
+    active_app_id: Option<Arc<String>>,
     tap_surface: Option<InputSurface>,
-    active_app_id: Option<String>,
     velocity: Point<f64, Logical>,
     position: Point<f64, Logical>,
     events: Vec<TouchEvent>,
@@ -184,7 +185,7 @@ impl TouchState {
         let touching = self.touching();
         if !touching && self.input_surface.is_none() {
             // Find matching user gestures.
-            let app_id = self.active_app_id.as_ref();
+            let app_id = self.active_app_id.as_deref();
             let start = self.start.position;
             let end = Some(self.position);
             let mut gestures = self.matching_gestures(canvas, app_id, start, end);
@@ -557,7 +558,7 @@ impl Catacomb {
                 let has_gesture = || {
                     let canvas = self.windows.canvas();
                     self.touch_state
-                        .matching_gestures(canvas, app_id.as_ref(), event.position, None)
+                        .matching_gestures(canvas, app_id.as_deref(), event.position, None)
                         .next()
                         .is_some()
                 };
@@ -1013,7 +1014,7 @@ impl Catacomb {
             // Check whether the current state matches the binding's trigger.
             if *key_binding.keys == catacomb.active_keys
                 && key_binding.mods == mods
-                && key_binding.app_id.matches(active_app.as_ref())
+                && key_binding.app_id.matches(active_app.as_deref())
                 && (key_binding.trigger != KeyTrigger::Release) == pressed
             {
                 // Execute subcommand.

@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::cell::{RefCell, RefMut};
 use std::mem;
 use std::rc::{Rc, Weak};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -612,7 +613,7 @@ impl Windows {
     }
 
     /// Current window focus.
-    pub fn focus(&mut self) -> Option<(WlSurface, Option<String>)> {
+    pub fn focus(&mut self) -> Option<(WlSurface, Option<Arc<String>>)> {
         // Always focus session lock surfaces.
         if let View::Lock(window) = &self.view {
             return window.as_ref().map(|window| (window.surface().clone(), window.app_id.clone()));
@@ -673,7 +674,7 @@ impl Windows {
         &mut self,
         layout: Option<Weak<RefCell<Window>>>,
         layer: Option<WlSurface>,
-        app_id: Option<String>,
+        app_id: Option<Arc<String>>,
     ) {
         self.layouts.focus = layout;
         self.layers.focus = layer.map(|l| (l, app_id));

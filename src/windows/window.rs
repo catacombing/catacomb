@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 use std::ops::{Deref, DerefMut};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use std::{cmp, mem};
 
@@ -55,7 +55,7 @@ pub struct Window<S = ToplevelSurface> {
     pub surface: S,
 
     /// Application ID.
-    pub app_id: Option<String>,
+    pub app_id: Option<Arc<String>>,
 
     /// User attention request status.
     pub urgent: bool,
@@ -105,7 +105,7 @@ impl<S: Surface + 'static> Window<S> {
     ) -> Self {
         let window = Window {
             surface,
-            app_id,
+            app_id: app_id.map(Arc::new),
             ignore_transactions_locked: Default::default(),
             presentation_callbacks: Default::default(),
             ignore_transactions: Default::default(),
@@ -550,9 +550,9 @@ impl<S: Surface + 'static> Window<S> {
                 .and_then(|attributes| attributes.lock().ok());
 
             // Check if the App ID has changed.
-            match attributes.filter(|attrs| attrs.app_id != self.app_id) {
+            match attributes.filter(|attrs| attrs.app_id.as_ref() != self.app_id.as_deref()) {
                 Some(attributes) => {
-                    self.set_app_id(attributes.app_id.clone());
+                    self.set_app_id(attributes.app_id.clone().map(Arc::new));
                     true
                 },
                 None => false,
@@ -586,7 +586,7 @@ impl<S: Surface + 'static> Window<S> {
     ) {
         // Update per-window scale, handling identical scales as no-op.
         let window_scale = window_scales.iter().find_map(|(matcher, window_scale)| {
-            matcher.matches(self.app_id.as_ref()).then_some(*window_scale)
+            matcher.matches(self.app_id.as_deref()).then_some(*window_scale)
         });
         if window_scale == self.scale {
             return;
@@ -845,7 +845,7 @@ impl<S: Surface + 'static> Window<S> {
     }
 
     /// Update the app_id for all popups owned by this window.
-    pub fn set_app_id(&mut self, app_id: Option<String>) {
+    pub fn set_app_id(&mut self, app_id: Option<Arc<String>>) {
         for popup in &mut self.popups {
             popup.set_app_id(app_id.clone());
         }
