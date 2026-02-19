@@ -275,11 +275,11 @@ impl Windows {
 
         // Handle session lock surface commits.
         let scale = self.output.scale();
-        if let View::Lock(Some(window)) = self.pending_view_mut() {
-            if window.surface() == root_surface.as_ref() {
-                window.surface_commit_common(foreign_toplevel_list_state, scale, &[], surface);
-                return;
-            }
+        if let View::Lock(Some(window)) = self.pending_view_mut()
+            && window.surface() == root_surface.as_ref()
+        {
+            window.surface_commit_common(foreign_toplevel_list_state, scale, &[], surface);
+            return;
         }
 
         // Handle XDG surface commits.
