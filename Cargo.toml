@@ -12,7 +12,8 @@ edition = "2024"
 members = ["catacomb_ipc"]
 
 [features]
-default = []
+default = ["iio-sensor-proxy"]
+iio-sensor-proxy = ["dep:zbus", "dep:futures-lite"]
 profiling = ["dep:profiling", "dep:puffin_http"]
 
 [workspace.dependencies]
@@ -33,15 +34,18 @@ calloop = { version = "0.14.0", features = ["signals"] }
 catacomb_ipc = { version = "0.1.0", path = "./catacomb_ipc", features = ["clap", "smithay"] }
 clap = { workspace = true, features = ["derive", "wrap_help"] }
 dirs.workspace = true
+futures-lite = { version = "2.6.1", optional = true }
 indexmap = "2.5.0"
 libc = "0.2.123"
 profiling = { version = "1.0.14", optional = true, features = ["profile-with-puffin"] }
 puffin_http = { version = "0.16.0", optional = true }
 serde_json.workspace = true
 serde = { workspace = true, features = ["derive"] }
+tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros"] }
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 udev = "0.9.1"
+zbus = { version = "5.14.0", default-features = false, features = ["tokio"], optional = true }
 
 [dependencies.smithay]
 workspace = true

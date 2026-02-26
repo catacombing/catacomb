@@ -14,6 +14,8 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 mod catacomb;
 mod config;
+#[cfg(feature = "iio-sensor-proxy")]
+mod dbus;
 mod drawing;
 mod geometry;
 mod input;
@@ -42,7 +44,8 @@ pub enum Subcommands {
     Msg(IpcMessage),
 }
 
-pub fn main() {
+#[tokio::main]
+async fn main() {
     #[cfg(feature = "profiling")]
     let _server = {
         puffin::set_scopes_on(true);
@@ -62,7 +65,7 @@ pub fn main() {
             Ok(Some(IpcMessage::ScaleReply { scale })) => println!("{scale}"),
             Ok(_) => (),
         },
-        None => udev::run(),
+        None => udev::run().await,
     }
 }
 
@@ -106,16 +109,4 @@ where
     command.spawn()?.wait()?;
 
     Ok(())
-}
-
-/// Log an error, ignoring success.
-///
-/// This is a macro to preserve log message line numbers.
-#[macro_export]
-macro_rules! trace_error {
-    ($result:expr) => {{
-        if let Err(err) = &$result {
-            tracing::error!("{err}");
-        }
-    }};
 }

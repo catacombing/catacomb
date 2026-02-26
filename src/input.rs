@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use catacomb_ipc::{GestureSector, KeyTrigger, Keysym, Modifiers};
+use catacomb_ipc::{GestureSector, KeyTrigger, Keysym, Modifiers, Orientation};
 use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Event, InputBackend, InputEvent, KeyState,
     KeyboardKeyEvent, MouseButton, PointerButtonEvent, TouchEvent as _, TouchSlot,
@@ -22,7 +22,6 @@ use crate::catacomb::Catacomb;
 use crate::config::{GestureBinding, GestureBindingAction};
 use crate::daemon;
 use crate::drawing::CatacombSurfaceData;
-use crate::orientation::Orientation;
 use crate::output::Canvas;
 use crate::windows::surface::{InputSurface, InputSurfaceKind};
 

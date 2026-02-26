@@ -1,21 +1,19 @@
-//! Device orientation.
+//! Udev device-based orientation sensor.
 
 use std::f32;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-// Orientation is in IPC for our lib target, reexport here for a more sensible path.
-pub use catacomb_ipc::Orientation;
+use catacomb_ipc::Orientation;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
+use tracing::error;
 use udev::{Device, Enumerator};
 
 use crate::catacomb::Catacomb;
 use crate::geometry::{Matrix3x3, Vector, Vector3D};
-
-/// Orientation change poll rate.
-const POLL_RATE: Duration = Duration::from_millis(500);
+use crate::orientation::AccelerometerSource;
 
 /// Threshold value for portrait/landscape mode.
 const THRESHOLD: f32 = 35.;
@@ -23,49 +21,45 @@ const THRESHOLD: f32 = 35.;
 /// Deadzone in which orientation will be preserved despite exceeding threshold.
 const DEADZONE: f32 = 5.;
 
-pub trait AccelerometerSource {
-    /// Subscribe to orientation change events.
-    fn subscribe<'a, F>(self, loop_handle: &LoopHandle<'a, Catacomb>, fun: F) -> RegistrationToken
-    where
-        F: FnMut(Orientation, &mut Catacomb) + 'a;
+/// Orientation change poll rate.
+const POLL_RATE: Duration = Duration::from_millis(500);
+
+/// Udev accelorometer device.
+pub struct UdevAccelerometer {
+    event_loop: LoopHandle<'static, Catacomb>,
+    token: RegistrationToken,
 }
 
-/// Platform-independent accelerometer implementation.
-pub enum Accelerometer {
-    Sensor(SensorAccelerometer),
-    Dummy(DummyAccelerometer),
-}
+impl UdevAccelerometer {
+    pub fn new(event_loop: &LoopHandle<'static, Catacomb>) -> Option<Self> {
+        let mut state = AccelerometerState::new()?;
 
-impl Accelerometer {
-    /// Create a new accelerometer handle.
-    pub fn new() -> Self {
-        SensorAccelerometer::new()
-            .map_or(Accelerometer::Dummy(DummyAccelerometer), Accelerometer::Sensor)
+        let token = event_loop
+            .insert_source(Timer::immediate(), move |_, _, catacomb| {
+                let fallback = state.last.unwrap_or(Orientation::Portrait);
+                let orientation = state.orientation().unwrap_or(fallback);
+                if Some(orientation) != state.last {
+                    state.last = Some(orientation);
+                    catacomb.handle_orientation(orientation);
+                }
+
+                TimeoutAction::ToDuration(POLL_RATE)
+            })
+            .ok()?;
+
+        Some(Self { token, event_loop: event_loop.clone() })
     }
 }
 
-impl AccelerometerSource for Accelerometer {
-    fn subscribe<'a, F>(self, loop_handle: &LoopHandle<'a, Catacomb>, fun: F) -> RegistrationToken
-    where
-        F: FnMut(Orientation, &mut Catacomb) + 'a,
-    {
-        match self {
-            Accelerometer::Sensor(accelerometer) => accelerometer.subscribe(loop_handle, fun),
-            Accelerometer::Dummy(accelerometer) => accelerometer.subscribe(loop_handle, fun),
-        }
-    }
-}
-
-/// Real accelorometer device.
-pub struct SensorAccelerometer {
+/// Accelerometer calloop state.
+struct AccelerometerState {
     syspath: PathBuf,
     last: Option<Orientation>,
     accel_mount_matrix: Matrix3x3<f32>,
 }
 
-impl SensorAccelerometer {
-    /// Attempt to find the accelerometer device.
-    fn new() -> Option<Self> {
+impl AccelerometerState {
+    pub fn new() -> Option<Self> {
         let mut enumerator = Enumerator::new().ok()?;
         enumerator.match_is_initialized().ok()?;
         enumerator.match_subsystem("iio").ok()?;
@@ -80,7 +74,7 @@ impl SensorAccelerometer {
 
         let syspath = accel.syspath().to_path_buf();
 
-        Some(Self { syspath, last: None, accel_mount_matrix })
+        Some(Self { accel_mount_matrix, syspath, last: Default::default() })
     }
 
     /// Check device orientation.
@@ -136,51 +130,19 @@ impl SensorAccelerometer {
     }
 }
 
-impl AccelerometerSource for SensorAccelerometer {
-    fn subscribe<'a, F>(
-        mut self,
-        loop_handle: &LoopHandle<'a, Catacomb>,
-        mut fun: F,
-    ) -> RegistrationToken
-    where
-        F: FnMut(Orientation, &mut Catacomb) + 'a,
-    {
-        loop_handle
-            .insert_source(Timer::immediate(), move |_, _, catacomb| {
-                let fallback = self.last.unwrap_or(Orientation::Portrait);
-                let orientation = self.orientation().unwrap_or(fallback);
-                if Some(orientation) != self.last {
-                    self.last = Some(orientation);
-                    fun(orientation, catacomb);
-                }
-
-                TimeoutAction::ToDuration(POLL_RATE)
-            })
-            .expect("insert orientation timer")
+impl AccelerometerSource for UdevAccelerometer {
+    fn pause(&mut self) {
+        let _ = self
+            .event_loop
+            .disable(&self.token)
+            .inspect_err(|err| error!("Failed to pause Udev accelerometer: {err}"));
     }
-}
 
-/// Fake accelerometer device.
-///
-/// This will always return [`Orientation::Portrait`] and is used for devices
-/// which do not have an accelerometer.
-pub struct DummyAccelerometer;
-
-impl AccelerometerSource for DummyAccelerometer {
-    fn subscribe<'a, F>(
-        self,
-        loop_handle: &LoopHandle<'a, Catacomb>,
-        mut fun: F,
-    ) -> RegistrationToken
-    where
-        F: FnMut(Orientation, &mut Catacomb) + 'a,
-    {
-        loop_handle
-            .insert_source(Timer::immediate(), move |_, _, catacomb| {
-                fun(Orientation::Portrait, catacomb);
-                TimeoutAction::Drop
-            })
-            .expect("insert dummy orientation timer")
+    fn resume(&mut self) {
+        let _ = self
+            .event_loop
+            .enable(&self.token)
+            .inspect_err(|err| error!("Failed to resume Udev accelerometer: {err}"));
     }
 }
 

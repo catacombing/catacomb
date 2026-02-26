@@ -3,7 +3,7 @@
 use std::ops::{Add, Deref, Sub};
 use std::time::Duration;
 
-use catacomb_ipc::Deadzone;
+use catacomb_ipc::{Deadzone, Orientation};
 use smithay::output::{
     Mode, Output as SmithayOutput, OutputModeSource, PhysicalProperties, Scale, Subpixel,
 };
@@ -15,7 +15,6 @@ use smithay::wayland::shell::wlr_layer::{Anchor, ExclusiveZone, Layer};
 use tracing::{info, warn};
 
 use crate::catacomb::Catacomb;
-use crate::orientation::Orientation;
 
 /// Default height at bottom of the screen reserved for gestures at scale factor
 /// 1.

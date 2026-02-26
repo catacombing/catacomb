@@ -25,6 +25,14 @@ automatically executes `${XDG_CONFIG_HOME:-~/.config}/catacomb/initrc`.
 
 You can find an example configuration [here](./initrc).
 
+## Permissions
+
+To allow Catacomb to listen for orientation changes using `iio-sensor-proxy`, it
+is necessary to grant a Polkit permission.
+
+The rules to grant this permissions to users in the `catacomb` group can be
+found in the [rules](./rules) directory.
+
 ## Controls
 
 | Open application overview                   | Minimize everything              | Close applications         |

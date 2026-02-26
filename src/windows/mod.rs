@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
-use catacomb_ipc::{AppIdMatcher, Deadzone, WindowScale};
+use catacomb_ipc::{AppIdMatcher, Deadzone, Orientation, WindowScale};
 use smithay::backend::drm::DrmEventMetadata;
 use smithay::backend::renderer::element::{Element, RenderElementStates};
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -29,7 +29,6 @@ use crate::catacomb::Catacomb;
 use crate::drawing::{CatacombElement, Graphics};
 use crate::input::{HandleGesture, TouchState};
 use crate::layer::Layers;
-use crate::orientation::Orientation;
 use crate::output::{Canvas, Output};
 use crate::overview::{DragActionType, DragAndDrop, Overview};
 use crate::windows::layout::{LayoutPosition, Layouts};

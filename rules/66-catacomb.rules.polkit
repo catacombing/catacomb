@@ -1,0 +1,8 @@
+polkit.addRule(function(action, subject) {
+    // Grant group `catacomb` access to claim iio-sensor-proxy sensors.
+    if (action.id == "net.hadess.SensorProxy.claim-sensor"
+        && subject.isInGroup("catacomb"))
+    {
+        return polkit.Result.YES;
+    }
+});

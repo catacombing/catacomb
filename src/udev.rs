@@ -64,7 +64,6 @@ use tracing::{debug, error};
 use crate::catacomb::Catacomb;
 use crate::drawing::{CatacombElement, Graphics};
 use crate::output::Output;
-use crate::trace_error;
 use crate::windows::Windows;
 
 /// Default background color.
@@ -79,7 +78,7 @@ const DRM_RETRY_DELAY: Duration = Duration::from_millis(250);
 /// channel, to ensure we're not falling back to reduced color palettes.
 const SUPPORTED_COLOR_FORMATS: &[Fourcc] = &[Fourcc::Argb8888, Fourcc::Abgr8888];
 
-pub fn run() {
+pub async fn run() {
     // Disable ARM framebuffer compression formats.
     //
     // This is necessary due to a driver bug which causes random artifacts to show
@@ -90,7 +89,7 @@ pub fn run() {
 
     let mut event_loop = EventLoop::try_new().expect("event loop");
     let udev = Udev::new(event_loop.handle());
-    let mut catacomb = Catacomb::new(event_loop.handle(), udev);
+    let mut catacomb = Catacomb::new(event_loop.handle(), udev).await;
 
     // Create backend and add presently connected devices.
     let backend = UdevBackend::new(&catacomb.seat_name).expect("init udev");
@@ -113,11 +112,12 @@ pub fn run() {
         .insert_source(backend, move |event, _, catacomb| match event {
             UdevEvent::Added { path, .. } => add_device(catacomb, path),
             UdevEvent::Changed { device_id } => {
-                trace_error!(catacomb.backend.change_device(
+                let result = catacomb.backend.change_device(
                     &catacomb.display_handle,
                     &mut catacomb.windows,
                     device_id,
-                ));
+                );
+                let _ = result.inspect_err(|err| error!("Failed reconnecting DRM device: {err}"));
             },
             UdevEvent::Removed { device_id } => catacomb.backend.remove_device(device_id),
         })
@@ -199,14 +199,14 @@ impl Udev {
                         // NOTE: Ideally we'd just reset the DRM+Compositor here, but this is
                         // currently not possible due to a bug in Smithay or the driver.
                         let device_id = output_device.id;
-                        let result = catacomb.backend.change_device(
-                            &catacomb.display_handle,
-                            &mut catacomb.windows,
-                            device_id,
-                        );
-                        if let Err(err) = result {
-                            error!("Failed reconnecting DRM device: {err:?}");
-                        }
+                        let _ = catacomb
+                            .backend
+                            .change_device(
+                                &catacomb.display_handle,
+                                &mut catacomb.windows,
+                                device_id,
+                            )
+                            .inspect_err(|err| error!("Failed reconnecting DRM device: {err}"));
                     }
 
                     catacomb.force_redraw(true);
@@ -229,7 +229,9 @@ impl Udev {
 
     /// Change Unix TTY.
     pub fn change_vt(&mut self, vt: i32) {
-        trace_error!(self.session.change_vt(vt));
+        if let Err(err) = self.session.change_vt(vt) {
+            error!("Failed to change VT: {err}");
+        }
     }
 
     /// Set output power saving state.
@@ -346,12 +348,15 @@ impl Udev {
                     let retry_path = path.to_path_buf();
                     self.event_loop
                         .insert_source(timer, move |_, _, catacomb| {
-                            trace_error!(catacomb.backend.add_device(
-                                &catacomb.display_handle,
-                                &mut catacomb.windows,
-                                &retry_path,
-                                false,
-                            ));
+                            let _ = catacomb
+                                .backend
+                                .add_device(
+                                    &catacomb.display_handle,
+                                    &mut catacomb.windows,
+                                    &retry_path,
+                                    false,
+                                )
+                                .inspect_err(|err| error!("Failed to add DRM device: {err}"));
 
                             TimeoutAction::Drop
                         })
@@ -387,7 +392,10 @@ impl Udev {
                         };
 
                         // Mark the last frame as submitted.
-                        trace_error!(output_device.drm_compositor.frame_submitted());
+                        let _ = output_device
+                            .drm_compositor
+                            .frame_submitted()
+                            .inspect_err(|err| error!("Failed to submit frame: {err}"));
 
                         // Signal new frame to profiler.
                         #[cfg(feature = "profiling")]
@@ -608,7 +616,9 @@ impl OutputDevice {
         let crtc = self.drm_compositor.crtc();
 
         let value = PropertyValue::Boolean(enabled);
-        trace_error!(self.drm.set_property(crtc, property, value.into()));
+        if let Err(err) = self.drm.set_property(crtc, property, value.into()) {
+            error!("Failed to set DRM property: {err}");
+        }
     }
 
     /// Render a frame.

@@ -116,7 +116,7 @@ use crate::protocols::screencopy::{ScreencopyHandler, ScreencopyManagerState};
 use crate::udev::{CaptureFrame, CaptureRequest, Udev};
 use crate::windows::Windows;
 use crate::windows::surface::Surface;
-use crate::{daemon, delegate_screencopy, ipc_server, trace_error};
+use crate::{daemon, delegate_screencopy, ipc_server};
 
 /// Time before xdg_activation tokens are invalidated.
 const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -171,10 +171,10 @@ pub struct Catacomb {
     shm_state: ShmState,
 
     last_cursor_position: Option<Point<f64, Logical>>,
-    accelerometer_token: RegistrationToken,
     idle_inhibitors: Vec<WlSurface>,
     last_focus: Option<WlSurface>,
     locker: Option<SessionLocker>,
+    accelerometer: Accelerometer,
     capture_state: CaptureState,
     ime_override: Option<bool>,
 
@@ -188,7 +188,7 @@ pub struct Catacomb {
 
 impl Catacomb {
     /// Initialize the compositor.
-    pub fn new(event_loop: LoopHandle<'static, Self>, backend: Udev) -> Self {
+    pub async fn new(event_loop: LoopHandle<'static, Self>, backend: Udev) -> Self {
         let display = Display::new().expect("Wayland display creation");
         let display_handle = display.handle();
 
@@ -204,7 +204,10 @@ impl Catacomb {
         event_loop
             .insert_source(socket_source, move |stream, _, catacomb| {
                 let state = Arc::new(ClientState::default());
-                trace_error!(catacomb.display_handle.insert_client(stream, state));
+                let _ = catacomb
+                    .display_handle
+                    .insert_client(stream, state)
+                    .inspect_err(|err| error!("Failed to insert client: {err}"));
             })
             .expect("register Wayland socket source");
 
@@ -323,13 +326,11 @@ impl Catacomb {
         let windows = Windows::new(&display_handle, event_loop.clone());
 
         // Subscribe to device orientation changes.
-        let accel_token = Accelerometer::new().subscribe(&event_loop, |orientation, catacomb| {
-            catacomb.handle_orientation(orientation);
-        });
+        let mut accelerometer = Accelerometer::new(&event_loop).await;
 
         // Disable accelerometer polling if orientation starts locked.
         if windows.orientation_locked() {
-            trace_error!(event_loop.disable(&accel_token));
+            accelerometer.pause();
         }
 
         // Run user startup script.
@@ -373,6 +374,7 @@ impl Catacomb {
             compositor_state,
             xdg_shell_state,
             display_handle,
+            accelerometer,
             dmabuf_state,
             touch_state,
             event_loop,
@@ -383,7 +385,6 @@ impl Catacomb {
             windows,
             backend,
             seat,
-            accelerometer_token: accel_token,
             display_on: true,
             last_cursor_position: Default::default(),
             idle_inhibitors: Default::default(),
@@ -529,10 +530,10 @@ impl Catacomb {
             self.idle_notifier_state.notify_activity(&self.seat);
 
             if !self.windows.orientation_locked() {
-                trace_error!(self.event_loop.enable(&self.accelerometer_token));
+                self.accelerometer.resume();
             }
         } else {
-            trace_error!(self.event_loop.disable(&self.accelerometer_token));
+            self.accelerometer.pause();
         }
 
         self.backend.set_display_status(on);
@@ -540,14 +541,14 @@ impl Catacomb {
 
     /// Lock the output's orientation.
     pub fn lock_orientation(&mut self, orientation: Option<Orientation>) {
-        trace_error!(self.event_loop.disable(&self.accelerometer_token));
+        self.accelerometer.pause();
         self.windows.lock_orientation(orientation);
         self.unstall();
     }
 
     /// Unlock the output's orientation.
     pub fn unlock_orientation(&mut self) {
-        trace_error!(self.event_loop.enable(&self.accelerometer_token));
+        self.accelerometer.resume();
         self.windows.unlock_orientation();
         self.unstall();
     }
