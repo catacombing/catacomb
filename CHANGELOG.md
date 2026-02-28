@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Accelerometer for devices supported by `iio-sensor-proxy`
 
+### Fixed
+
+- Keybindings breaking after stopping `eg25-manager` on the PinePhone (Pro)
+
 ## 1.2.0 - 2026-02-23
 
 ### Added

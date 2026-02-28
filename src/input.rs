@@ -964,6 +964,11 @@ impl Catacomb {
                 let vt = (keysym - keysyms::KEY_XF86Switch_VT_1 + 1) as i32;
                 InputAction::ChangeVt(vt).into()
             },
+            // When disabling eg25-manager on the PinePhone (Pro), a large number of `XF86WakeUp`
+            // key toggles is triggered, ending up in a state where the key is permanently pressed.
+            // To avoid this, we ignore all XF86WakeUp keys, since it's not a commonly used key
+            // anyway.
+            (keysyms::KEY_XF86WakeUp, _) => FilterResult::Forward,
             (_, state) => match keysym.raw_syms().first() {
                 Some(keysym) => Self::handle_user_binding(catacomb, mods, keysym.raw(), state),
                 None => FilterResult::Forward,
