@@ -17,7 +17,7 @@ jobs:
             libxkbcommon-dev libinput-dev libwayland-dev libseat-dev libgbm-dev
       - uses: actions/checkout@v2
       - name: Stable
-        run: cargo test --workspace --all-targets --all-features --frozen
+        run: cargo test --workspace --all-targets --all-features --locked
       - name: Oldstable
         run: |
           oldstable=$(cat Cargo.toml | grep "rust-version" | sed 's/.*"\(.*\)".*/\1/')
@@ -31,7 +31,7 @@ jobs:
       - name: Clippy No Features
         run: |
           rustup component add clippy
-          cargo clippy --all-targets --no-features -- -D warnings
+          cargo clippy --all-targets --no-default-features -- -D warnings
       - name: Rustfmt
         run: |
           rustup toolchain install nightly -c rustfmt

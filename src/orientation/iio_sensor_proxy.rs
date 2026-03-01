@@ -79,10 +79,8 @@ impl IioAccelerometer {
                             if let Err(err) = sensor_proxy.claim_accelerometer().await {
                                 error!("Failed to acquire accelerometer claim: {err}")
                             }
-                        } else {
-                            if let Err(err) = sensor_proxy.release_accelerometer().await {
-                                error!("Failed to release accelerometer claim: {err}")
-                            }
+                        } else if let Err(err) = sensor_proxy.release_accelerometer().await {
+                            error!("Failed to release accelerometer claim: {err}")
                         }
                     },
                 );
