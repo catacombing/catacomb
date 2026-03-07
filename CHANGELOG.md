@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 
 - Keybindings breaking after stopping `eg25-manager` on the PinePhone (Pro)
+- Fractional scale defaulting to 0.
 
 ## 1.2.0 - 2026-02-23
 

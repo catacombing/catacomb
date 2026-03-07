@@ -1139,7 +1139,7 @@ impl ClientState {
     /// Get cached per-window fractional scale.
     pub fn cached_fractional_scale(&self) -> Option<f64> {
         let bits = self.cached_fractional_scale.load(Ordering::Relaxed);
-        (bits != u64::MAX).then(|| f64::from_bits(bits))
+        (bits != 0).then(|| f64::from_bits(bits))
     }
 
     /// Update per-window fractional scale cache.
