@@ -28,20 +28,8 @@ impl IioAccelerometer {
             .inspect_err(|err| warn!("Failed to connect to iio-sensor-proxy DBus: {err}"))
             .ok()?;
 
-        // Check whether accelerometer is present before trying anything.
-        if sensor_proxy.has_accelerometer().await != Ok(true) {
-            info!("No accelerometers available through iio-sensor-proxy");
-            return None;
-        }
-
-        // Claim the accelerometer, to allow us to receive orientation changes.
-        sensor_proxy
-            .claim_accelerometer()
-            .await
-            .inspect_err(|err| error!("Failed to claim iio-sensor-proxy accelerometer: {err}"))
-            .ok()?;
-
         let mut orientation_stream = sensor_proxy.receive_accelerometer_orientation_changed().await;
+        let mut has_sensor_stream = sensor_proxy.receive_has_accelerometer_changed().await;
         let (calloop_tx, calloop_rx) = calloop_channel::channel();
         let (tx, mut rx) = tokio_mpsc::channel(5);
         let event_loop = event_loop.clone();
@@ -60,6 +48,24 @@ impl IioAccelerometer {
         task::spawn(async move {
             loop {
                 tokio::select!(
+                    // Process sensor availability changes.
+                    Some(has_sensor) = has_sensor_stream.next() => {
+                        let has_sensor = match has_sensor.get().await {
+                            Ok(has_sensor) => has_sensor,
+                            Err(err) => {
+                                error!("Failed to read has_sensor property: {err}");
+                                continue;
+                            },
+                        };
+                        if has_sensor {
+                            match sensor_proxy.claim_accelerometer().await {
+                                Ok(_) => info!("Successfully claimed iio-sensor-proxy accelerometer"),
+                                Err(err) => error!("Failed to acquire accelerometer claim: {err}"),
+                            }
+                        } else if let Err(err) = sensor_proxy.release_accelerometer().await {
+                            error!("Failed to release accelerometer claim: {err}");
+                        }
+                    },
                     // Process orientation changes.
                     Some(orientation) = orientation_stream.next() => {
                         let orientation = match orientation.get().await {
@@ -77,10 +83,10 @@ impl IioAccelerometer {
                     Some(claim) = rx.recv() => {
                         if claim {
                             if let Err(err) = sensor_proxy.claim_accelerometer().await {
-                                error!("Failed to acquire accelerometer claim: {err}")
+                                error!("Failed to acquire accelerometer claim: {err}");
                             }
                         } else if let Err(err) = sensor_proxy.release_accelerometer().await {
-                            error!("Failed to release accelerometer claim: {err}")
+                            error!("Failed to release accelerometer claim: {err}");
                         }
                     },
                 );
