@@ -446,6 +446,9 @@ impl Catacomb {
         let cursor_position = self.touch_state.position().filter(|_| self.draw_cursor);
         let last_cursor_position = mem::replace(&mut self.last_cursor_position, cursor_position);
 
+        // Apply input velocity updates.
+        self.apply_velocity();
+
         // Redraw only when there is damage present.
         if self.windows.damaged() || last_cursor_position != cursor_position {
             // Apply pending client updates.
@@ -461,17 +464,21 @@ impl Catacomb {
                 self.frame_pacer.finish_frame(&self.event_loop, gpu_fence);
             }
 
-            // Create artificial VBlank if renderer didn't draw.
-            //
-            // This is necessary, since rendering might have been skipped due to DRM planes
-            // and the next frame could still contain more damage like overview animations.
             if !frame.rendered {
+                // Create artificial VBlank if renderer didn't draw.
+                //
+                // This is necessary, since rendering might have been skipped due to DRM planes
+                // and the next frame could still contain more damage like overview animations.
                 let frame_interval = self.canvas().frame_interval();
                 self.backend.schedule_redraw(frame_interval);
             } else if let Some(locker) = self.locker.take() {
                 // Update session lock after successful draw.
                 locker.lock();
             }
+        } else if self.has_velocity() {
+            // Force immediate redraw with pending velocity.
+            let frame_interval = self.canvas().frame_interval();
+            self.backend.schedule_redraw(frame_interval);
         } else if let Some(deadline) = transaction_deadline {
             // Force a redraw after the transaction has timed out.
             self.backend.schedule_redraw(deadline);

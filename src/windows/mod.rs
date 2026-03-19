@@ -1071,7 +1071,10 @@ impl Windows {
 
                 return;
             },
-            View::Fullscreen(_) | View::Lock(_) | View::Workspace => return,
+            View::Fullscreen(_) | View::Lock(_) | View::Workspace => {
+                touch_state.cancel_velocity();
+                return;
+            },
         };
 
         let delta = point - mem::replace(&mut overview.last_drag_point, point);
@@ -1092,15 +1095,16 @@ impl Windows {
         // Update drag action.
         match overview.drag_action.action_type {
             DragActionType::Cycle => {
-                let sensitivity = self.output.output_size_physical().w as f64 * 0.4;
-                overview.x_offset += delta.x / sensitivity;
+                let physical_delta = delta.to_physical(self.output.scale());
+                let output_width = self.output.output_size_physical().w as f64;
+                overview.x_offset += physical_delta.x / output_width;
             },
             DragActionType::Close(_) => overview.y_offset += delta.y,
             DragActionType::None => (),
         }
 
         // Cancel velocity once drag actions are completed.
-        if overview.cycle_edge_reached(self.layouts.len()) {
+        if !overview.accepts_velocity(&self.canvas, self.layouts.len()) {
             touch_state.cancel_velocity();
         }
 

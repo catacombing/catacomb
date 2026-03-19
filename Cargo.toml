@@ -47,6 +47,10 @@ tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 udev = "0.9.1"
 zbus = { version = "5.14.0", default-features = false, features = ["tokio"], optional = true }
 
+[dependencies.catacomb_common]
+git = "https://github.com/catacombing/catacomb_common"
+rev = "512e9cadfbec50d60dc7f64415383526ff3e6a9f"
+
 [dependencies.smithay]
 workspace = true
 features = [

@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use catacomb_common::velocity::Velocity;
 use catacomb_ipc::{GestureSector, KeyTrigger, Keysym, Modifiers, Orientation};
 use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Event, InputBackend, InputEvent, KeyState,
@@ -43,9 +44,6 @@ const MAX_DOUBLE_TAP_DISTANCE: f64 = 2000.;
 /// Square of the maximum distance before touch input is considered a drag.
 const MAX_TAP_DISTANCE: f64 = 400.;
 
-/// Friction for velocity computation.
-const FRICTION: f64 = 0.1;
-
 /// Touch slot for pointer emulation.
 ///
 /// The touch slot `None`, which is usually used for devices that do not support
@@ -60,15 +58,14 @@ pub struct TouchState {
     last_tap: Option<(Instant, Point<f64, Logical>)>,
     pending_single_tap: Option<RegistrationToken>,
     event_loop: LoopHandle<'static, Catacomb>,
-    velocity_timer: Option<RegistrationToken>,
     repeat_timer: Option<RegistrationToken>,
     input_surface: Option<InputSurface>,
     active_app_id: Option<Arc<String>>,
     tap_surface: Option<InputSurface>,
-    velocity: Point<f64, Logical>,
     position: Point<f64, Logical>,
     events: Vec<TouchEvent>,
     slot: Option<TouchSlot>,
+    velocity: Velocity,
     start: TouchStart,
     is_drag: bool,
 }
@@ -78,10 +75,9 @@ impl TouchState {
         Self {
             event_loop,
             pending_single_tap: Default::default(),
-            velocity_timer: Default::default(),
+            active_app_id: Default::default(),
             input_surface: Default::default(),
             user_gestures: Default::default(),
-            active_app_id: Default::default(),
             repeat_timer: Default::default(),
             tap_surface: Default::default(),
             last_tap: Default::default(),
@@ -92,14 +88,6 @@ impl TouchState {
             start: Default::default(),
             slot: Default::default(),
         }
-    }
-
-    /// Stop all touch velocity.
-    pub fn cancel_velocity(&mut self) {
-        if let Some(velocity_timer) = self.velocity_timer.take() {
-            self.event_loop.remove(velocity_timer);
-        }
-        self.velocity = Default::default();
     }
 
     /// Start new key repetition timer.
@@ -143,7 +131,12 @@ impl TouchState {
 
     /// Check if there's any touch velocity present.
     fn has_velocity(&self) -> bool {
-        self.velocity.x.abs() >= f64::EPSILON || self.velocity.y.abs() >= f64::EPSILON
+        self.velocity.is_active()
+    }
+
+    /// Stop all touch velocity.
+    pub fn cancel_velocity(&mut self) {
+        self.velocity = Default::default();
     }
 
     /// Check if there's currently any touch interaction active.
@@ -587,7 +580,8 @@ impl Catacomb {
     /// Handle touch input movement.
     fn on_touch_motion(&mut self, event: TouchEvent) {
         // Always update touch position to ensure accurate cursor location.
-        self.touch_state.velocity = event.position - self.touch_state.position;
+        let delta = event.position - self.touch_state.position;
+        self.touch_state.velocity.set(delta.x, delta.y);
         self.touch_state.position = event.position;
 
         match &self.touch_state.input_surface {
@@ -658,13 +652,11 @@ impl Catacomb {
                     self.on_double_tap();
                 }
             },
+            // Ensure touch action is terminated without velocity.
             Some(
                 TouchAction::Drag | TouchAction::HandleGesture(_) | TouchAction::UserGesture(_),
-            ) => {
-                self.add_velocity_timeout();
-                self.update_position(self.touch_state.position);
-            },
-            None => self.add_velocity_timeout(),
+            ) => self.update_position(self.touch_state.position),
+            _ => (),
         }
     }
 
@@ -703,10 +695,6 @@ impl Catacomb {
     }
 
     /// Update the touch position.
-    ///
-    /// NOTE: This should be called after adding new timeouts to allow clearing
-    /// them instead of creating a loop which continuously triggers these
-    /// actions.
     fn update_position(&mut self, position: Point<f64, Logical>) {
         match self.touch_state.action(self.windows.canvas()) {
             Some(TouchAction::Drag) => {
@@ -719,7 +707,7 @@ impl Catacomb {
             },
             Some(TouchAction::HandleGesture(gesture)) => self.on_handle_gesture(gesture),
             Some(TouchAction::UserGesture(action)) => self.on_user_gesture(action),
-            _ => (),
+            _ => self.touch_state.cancel_velocity(),
         }
 
         self.touch_state.position = position;
@@ -812,55 +800,22 @@ impl Catacomb {
         self.unstall();
     }
 
-    /// Process a single velocity tick.
-    fn on_velocity_tick(&mut self) -> TimeoutAction {
-        // Update velocity and new position.
-        //
-        // The animations are designed for 60FPS, but should still behave properly for
-        // other refresh rates.
-        let frame_interval = self.windows.canvas().frame_interval();
-        let velocity = &mut self.touch_state.velocity;
-        let position = &mut self.touch_state.position;
-        let animation_speed = frame_interval.as_millis() as f64 / 16.;
-        velocity.x -= velocity.x.signum()
-            * (velocity.x.abs() * FRICTION * animation_speed + 1.).min(velocity.x.abs());
-        velocity.y -= velocity.y.signum()
-            * (velocity.y.abs() * FRICTION * animation_speed + 1.).min(velocity.y.abs());
-        position.x += velocity.x * animation_speed;
-        position.y += velocity.y * animation_speed;
-
-        // Generate motion events.
-        self.update_position(self.touch_state.position);
-
-        // Ensure updates are rendered.
-        self.unstall();
-
-        // Schedule another velocity tick.
-        if self.touch_state.has_velocity() {
-            TimeoutAction::ToDuration(frame_interval)
-        } else {
-            TimeoutAction::Drop
-        }
+    /// Check if there's any touch velocity present.
+    pub fn has_velocity(&self) -> bool {
+        self.touch_state.has_velocity()
     }
 
-    /// Start the velocity timer.
-    fn add_velocity_timeout(&mut self) {
-        if !self.touch_state.has_velocity() {
-            return;
-        }
+    /// Apply velocity changes since the last tick.
+    pub fn apply_velocity(&mut self) {
+        if !self.touch_state.touching()
+            && let Some((x_delta, y_delta)) = self.touch_state.velocity.apply()
+        {
+            self.touch_state.position.x += x_delta;
+            self.touch_state.position.y += y_delta;
 
-        // Remove old timers.
-        if let Some(velocity_timer) = self.touch_state.velocity_timer.take() {
-            self.event_loop.remove(velocity_timer);
+            // Generate motion events.
+            self.update_position(self.touch_state.position);
         }
-
-        // Stage new velocity timer.
-        let timer = Timer::from_duration(self.windows.canvas().frame_interval());
-        let velocity_timer = self
-            .event_loop
-            .insert_source(timer, |_, _, catacomb| catacomb.on_velocity_tick())
-            .expect("insert velocity timer");
-        self.touch_state.velocity_timer = Some(velocity_timer);
     }
 
     /// Handle new keyboard input events.

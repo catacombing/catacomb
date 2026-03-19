@@ -29,7 +29,7 @@ const DRAG_AND_DROP_PERCENTAGE: f64 = 0.3;
 
 /// Percentage of the output height a window can be moved before closing it in
 /// the overview.
-const OVERVIEW_CLOSE_DISTANCE: f64 = 0.25;
+const OVERVIEW_CLOSE_DISTANCE: f64 = 0.5;
 
 /// Maximum amount of overdrag before inputs are ignored.
 const OVERDRAG_LIMIT: f64 = 0.25;
@@ -339,10 +339,7 @@ impl Overview {
 
         // Handle close drag termination.
         if self.drag_action.done {
-            let close_distance =
-                canvas.available_overview().size.h as f64 * OVERVIEW_CLOSE_DISTANCE;
-
-            if self.y_offset.abs() >= close_distance {
+            if self.close_window_done(canvas) {
                 // Kill the window if it is beyond the point of no return.
                 let surface = {
                     let mut window = window.borrow_mut();
@@ -361,10 +358,21 @@ impl Overview {
         delta
     }
 
-    /// Check if one of the horizontal scrolling boundaries was reached.
-    pub fn cycle_edge_reached(&self, window_count: usize) -> bool {
-        let min_offset = -(window_count as f64) + 1.;
-        self.x_offset <= min_offset || self.x_offset >= 0.
+    /// Check whether the overview requires velocity updates.
+    pub fn accepts_velocity(&self, canvas: &Canvas, window_count: usize) -> bool {
+        match self.drag_action.action_type {
+            DragActionType::Close(_) => !self.close_window_done(canvas),
+            DragActionType::Cycle => {
+                let min_offset = -(window_count as f64) + 1.;
+                self.x_offset > min_offset && self.x_offset < 0.
+            },
+            DragActionType::None => false,
+        }
+    }
+
+    /// Check whether the closing window is beyond the point of no return.
+    fn close_window_done(&self, canvas: &Canvas) -> bool {
+        self.y_offset.abs() >= canvas.available_overview().size.h as f64 * OVERVIEW_CLOSE_DISTANCE
     }
 
     /// Check if overview requires a redraw.
