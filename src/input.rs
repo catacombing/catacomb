@@ -27,7 +27,7 @@ use crate::output::Canvas;
 use crate::windows::surface::{InputSurface, InputSurfaceKind};
 
 /// Time before a tap is considered a hold.
-pub const HOLD_DURATION: Duration = Duration::from_secs(1);
+pub const HOLD_DURATION: Duration = Duration::from_millis(500);
 
 /// Time before key repeat starts.
 pub const REPEAT_DELAY: Duration = Duration::from_millis(200);
