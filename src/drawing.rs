@@ -26,6 +26,9 @@ use smithay::wayland::viewporter::{self, ViewportCachedState};
 use crate::geometry::SubtractRectFast;
 use crate::output::Canvas;
 
+/// Relative size of gesture notch to the handle's whole width/height.
+pub const GESTURE_NOTCH_PERCENTAGE: f64 = 0.2;
+
 /// Color of the hovered overview tiling location highlight.
 const ACTIVE_DROP_TARGET_RGBA: [u8; 4] = [64, 64, 64, 128];
 
@@ -34,9 +37,6 @@ const URGENCY_ICON_RGBA: [u8; 4] = [172, 66, 66, 255];
 
 /// Color of the overview tiling location highlight.
 const DROP_TARGET_RGBA: [u8; 4] = [32, 32, 32, 64];
-
-/// Relative size of gesture notch to the handle's whole width/height.
-const GESTURE_NOTCH_PERCENTAGE: f64 = 0.2;
 
 /// Gesture handle color with automatic IME control.
 const GESTURE_HANDLE_DEFAULT_RGB: [u8; 3] = [255; 3];

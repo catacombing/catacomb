@@ -26,7 +26,7 @@ use smithay::wayland::shell::wlr_layer::{Layer, LayerSurface};
 use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface};
 
 use crate::catacomb::Catacomb;
-use crate::drawing::{CatacombElement, Graphics};
+use crate::drawing::{CatacombElement, GESTURE_NOTCH_PERCENTAGE, Graphics};
 use crate::input::{HandleGesture, TouchState};
 use crate::layer::Layers;
 use crate::output::{Canvas, Output};
@@ -1035,14 +1035,29 @@ impl Windows {
 
         // Ignore tap outside of gesture handle.
         let wm_rect = self.canvas.ui_rect(false).to_f64();
-        if point.y < wm_rect.loc.y + wm_rect.size.h {
+        let relative_x = point.x - wm_rect.loc.x;
+        if point.y < wm_rect.loc.y + wm_rect.size.h || point.x < 0. || point.x >= wm_rect.size.w {
             return;
         }
 
-        if point.x >= (wm_rect.loc.x + wm_rect.size.w) / 1.5 {
-            self.layouts.cycle_active(&self.output, 1);
-        } else if point.x < (wm_rect.loc.x + wm_rect.size.w) / 3. {
+        // Split gesture handle into 3 sections:
+        //  - 40% <- Cycle Left
+        //  - 20%    DPMS off
+        //  - 40% -> Cycle Right
+        //
+        // The DPMS off requires relative precision, since it takes a while to recover
+        // from accidentally turning the screen off. Since this matches the gesture
+        // handle notch, it should be easy to understand.
+        //
+        // The cycle left requires a pretty big range, since it's generally hard to
+        // reach. Cycle right would be fine with a much smaller input size, but
+        // is kept consistent with cycle left.
+        if relative_x < wm_rect.size.w * (0.5 - GESTURE_NOTCH_PERCENTAGE / 2.) {
             self.layouts.cycle_active(&self.output, -1);
+        } else if relative_x < wm_rect.size.w * (0.5 + GESTURE_NOTCH_PERCENTAGE / 2.) {
+            self.event_loop.insert_idle(|catacomb| catacomb.set_display_status(false));
+        } else {
+            self.layouts.cycle_active(&self.output, 1);
         }
     }
 
