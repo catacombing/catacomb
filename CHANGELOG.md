@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 
 - Accelerometer with delayed `iio-sensor-proxy` startup
+- Overview scrolling with output scales other than `2`
+- Inconsistent velocity between different devices
 
 ## 1.3.0 - 2026-03-08
 
