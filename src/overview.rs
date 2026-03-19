@@ -123,8 +123,10 @@ impl Overview {
         let timer = Timer::from_duration(HOLD_DURATION);
         let hold_timer = event_loop
             .insert_source(timer, move |_, _, catacomb| {
-                catacomb.windows.start_dnd(layout_position);
-                catacomb.unstall();
+                if catacomb.touch_state.touching() {
+                    catacomb.windows.start_dnd(layout_position);
+                    catacomb.unstall();
+                }
                 TimeoutAction::Drop
             })
             .expect("insert D&D hold timer");

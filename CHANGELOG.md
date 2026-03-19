@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed
+
+- Overview entering Drag & Drop after touch tap release
+
 ## 1.4.0 - 2026-03-19
 
 ### Added
