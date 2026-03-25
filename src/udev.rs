@@ -59,7 +59,7 @@ use smithay::utils::{DevPath, DeviceFd, Logical, Physical, Point, Rectangle, Siz
 use smithay::wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder};
 use smithay::wayland::image_copy_capture::Frame as ImageCopyCaptureFrame;
 use smithay::wayland::{dmabuf, shm};
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use crate::catacomb::Catacomb;
 use crate::drawing::{CatacombElement, Graphics};
@@ -71,6 +71,9 @@ const CLEAR_COLOR: [f32; 4] = [0., 0., 0., 1.];
 
 /// Retry delay after a WouldBlock when trying to add a DRM device.
 const DRM_RETRY_DELAY: Duration = Duration::from_millis(250);
+
+/// Maximum retries before a DRM device is determined permanently unavailable.
+const DRM_MAX_RETRIES: usize = 3;
 
 /// Supported DRM color formats.
 ///
@@ -90,6 +93,12 @@ pub async fn run() {
     let mut event_loop = EventLoop::try_new().expect("event loop");
     let udev = Udev::new(event_loop.handle());
     let mut catacomb = Catacomb::new(event_loop.handle(), udev).await;
+
+    // Ensure device recovery is not attempted on startup.
+    //
+    // Not all DRM devices are usable, so at startup we only attempt each device
+    // once to avoid retrying invalid devices multiple times.
+    catacomb.backend.retry_count = DRM_MAX_RETRIES;
 
     // Create backend and add presently connected devices.
     let backend = UdevBackend::new(&catacomb.seat_name).expect("init udev");
@@ -137,7 +146,7 @@ pub async fn run() {
 fn add_device(catacomb: &mut Catacomb, path: PathBuf) {
     // Try to create the device.
     let result =
-        catacomb.backend.add_device(&catacomb.display_handle, &mut catacomb.windows, &path, true);
+        catacomb.backend.add_device(&catacomb.display_handle, &mut catacomb.windows, &path);
 
     // Kick-off rendering if the device creation was successful.
     match result {
@@ -152,6 +161,8 @@ pub struct Udev {
     event_loop: LoopHandle<'static, Catacomb>,
     output_device: Option<OutputDevice>,
     session: LibSeatSession,
+
+    retry_count: usize,
 }
 
 impl Udev {
@@ -219,6 +230,7 @@ impl Udev {
             session,
             scheduled_redraws: Default::default(),
             output_device: Default::default(),
+            retry_count: Default::default(),
         }
     }
 
@@ -336,27 +348,39 @@ impl Udev {
         display_handle: &DisplayHandle,
         windows: &mut Windows,
         path: &Path,
-        retry_on_error: bool,
     ) -> Result<(), Box<dyn Error>> {
         let open_flags = OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK;
         let device_fd = match self.session.open(path, open_flags) {
             Ok(fd) => DrmDeviceFd::new(DeviceFd::from(fd)),
             Err(err) => {
-                // Retry device on WouldBlock error.
-                if retry_on_error && err.as_errno() == Some(11) {
+                // Attempt device recovery on WouldBlock or with no other device available.
+                if self.retry_count < DRM_MAX_RETRIES
+                    && (err.as_errno() == Some(11) || self.output_device.is_none())
+                {
+                    self.retry_count += 1;
+                    let attempt = self.retry_count;
+
                     let timer = Timer::from_duration(DRM_RETRY_DELAY);
                     let retry_path = path.to_path_buf();
                     self.event_loop
                         .insert_source(timer, move |_, _, catacomb| {
-                            let _ = catacomb
-                                .backend
-                                .add_device(
-                                    &catacomb.display_handle,
-                                    &mut catacomb.windows,
-                                    &retry_path,
-                                    false,
-                                )
-                                .inspect_err(|err| error!("Failed to add DRM device: {err}"));
+                            info!(
+                                "Attempting DRM device recovery ({}/{})",
+                                attempt, DRM_MAX_RETRIES
+                            );
+
+                            let display = &catacomb.display_handle;
+                            let windows = &mut catacomb.windows;
+                            let result = catacomb.backend.add_device(display, windows, &retry_path);
+
+                            // Crash if retry count was exceeded, so DM can restart the compositor.
+                            if let Err(err) = result {
+                                if attempt == DRM_MAX_RETRIES {
+                                    panic!("DRM device recovery failed: {err}");
+                                } else {
+                                    error!("Failed to add DRM device: {err}");
+                                }
+                            }
 
                             TimeoutAction::Drop
                         })
@@ -439,6 +463,9 @@ impl Udev {
             capture_requests: Default::default(),
         });
 
+        // Reset retry count on successful device initialization.
+        self.retry_count = 0;
+
         Ok(())
     }
 
@@ -459,7 +486,7 @@ impl Udev {
         let path = device.and_then(|device| device.gbm.dev_path());
         if let Some(path) = path {
             self.remove_device(device_id);
-            self.add_device(display_handle, windows, &path, true)?;
+            self.add_device(display_handle, windows, &path)?;
         }
 
         Ok(())

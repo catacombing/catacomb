@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 
 - Overview entering Drag & Drop after touch tap release
+- Black screen after suspend or udev rule reload
 
 ## 1.4.0 - 2026-03-19
 

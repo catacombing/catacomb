@@ -193,7 +193,7 @@ impl Catacomb {
         let display_handle = display.handle();
 
         // Setup SIGTERM handler for clean shutdown.
-        let signals = Signals::new(&[Signal::SIGTERM]).expect("masking unix signals");
+        let signals = Signals::new(&[Signal::SIGTERM, Signal::SIGINT]).expect("unix signals");
         event_loop
             .insert_source(signals, |_, _, catacomb| catacomb.terminated = true)
             .expect("register unix signal source");

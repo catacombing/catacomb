@@ -1,9 +1,7 @@
-//! Catacomb compositor interface.
+//! Catacomb IPC socket communication.
 //!
 //! This library provides abstractions for interacting with Catacomb's external
 //! interfaces from Wayland clients.
-
-//! IPC socket communication.
 
 use std::collections::HashSet;
 use std::error::Error;
