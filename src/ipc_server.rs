@@ -4,7 +4,6 @@ use std::error::Error;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
 
 use catacomb_ipc::{AppIdMatcher, CliToggle, Deadzones, IpcMessage, Keysym, WindowScale};
 use smithay::input::keyboard::XkbConfig;
@@ -19,7 +18,7 @@ use crate::socket::SocketSource;
 pub fn spawn_ipc_socket(
     event_loop: &LoopHandle<'static, Catacomb>,
     socket_name: &str,
-) -> Result<PathBuf, Box<dyn Error>> {
+) -> Result<(), Box<dyn Error>> {
     let socket_path = catacomb_ipc::socket_path(socket_name);
 
     // Try to delete the socket if it exists already.
@@ -29,7 +28,7 @@ pub fn spawn_ipc_socket(
 
     // Spawn unix socket event source.
     let listener = UnixListener::bind(&socket_path)?;
-    let socket = SocketSource::new(listener)?;
+    let socket = SocketSource::new(socket_path, listener)?;
 
     // Add source to calloop loop.
     let mut message_buffer = String::new();
@@ -37,7 +36,7 @@ pub fn spawn_ipc_socket(
         handle_message(&mut message_buffer, stream, catacomb);
     })?;
 
-    Ok(socket_path)
+    Ok(())
 }
 
 /// Handle IPC socket messages.

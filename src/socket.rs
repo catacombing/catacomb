@@ -2,18 +2,30 @@
 //!
 //! This module provides a Calloop event source for Unix domain sockets.
 
+use std::fs;
 use std::io::{self, ErrorKind};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::PathBuf;
 
-use smithay::reexports::calloop::generic::Generic;
-use smithay::reexports::calloop::{
+use calloop::generic::Generic;
+use calloop::{
     self, EventSource, Interest, Mode, Poll, PostAction, Readiness, Token, TokenFactory,
 };
+use tracing::error;
 
 /// Unix domain socket source.
 #[derive(Debug)]
 pub struct SocketSource {
     socket: Generic<UnixListener>,
+    path: PathBuf,
+}
+
+impl Drop for SocketSource {
+    fn drop(&mut self) {
+        if let Err(err) = fs::remove_file(&self.path) {
+            error!("Failed to cleanup socket: {err}");
+        }
+    }
 }
 
 impl SocketSource {
@@ -22,11 +34,11 @@ impl SocketSource {
     /// This will always call [`UnixListener::set_nonblocking`] on the socket
     /// automatically, to prevent it from blocking up the calloop event
     /// loop.
-    pub fn new(socket: UnixListener) -> calloop::Result<Self> {
+    pub fn new(path: PathBuf, socket: UnixListener) -> calloop::Result<Self> {
         // Ensure we'll get `WouldBlock` when reading from an empty socket.
         socket.set_nonblocking(true)?;
 
-        Ok(Self { socket: Generic::new(socket, Interest::READ, Mode::Level) })
+        Ok(Self { path, socket: Generic::new(socket, Interest::READ, Mode::Level) })
     }
 }
 
