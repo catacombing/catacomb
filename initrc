@@ -11,13 +11,10 @@
 # - grim: Screenshots (https://gitlab.freedesktop.org/emersion/grim)
 # - slurp: Screenshot region selection (https://github.com/emersion/slurp)
 
-# Exit on error
-set -e
-
 # Key Bindings
 
 ## Ignore power-button press, to allow binding to it
-systemd-inhibit --what handle-power-key sleep infinity &
+systemd-inhibit --what handle-power-key sh -c "while true; do sleep 86400; done" &
 
 ## Launch `tzompantli` when holding the power button
 catacomb msg bind-key --trigger press '*' XF86PowerOff bash -c \
