@@ -14,7 +14,11 @@
 # Key Bindings
 
 ## Ignore power-button press, to allow binding to it
-systemd-inhibit --what handle-power-key sh -c "while true; do sleep 86400; done" &
+if command -v systemd-inhibit; then
+	systemd-inhibit --what handle-power-key sh -c "while true; do sleep 86400; done" &
+else
+	elogind-inhibit --what handle-power-key sh -c "while true; do sleep 86400; done" &
+fi
 
 ## Launch `tzompantli` when holding the power button
 catacomb msg bind-key --trigger press '*' XF86PowerOff bash -c \
@@ -64,11 +68,19 @@ squeekboard &
 epitaph &
 
 # Turn off display after 3 minutes, suspend 30s later
-swayidle -w \
-    timeout 180 'catacomb msg dpms off' \
-        resume 'catacomb msg dpms on' \
-    timeout 210 'systemctl suspend' \
-        after-resume 'catacomb msg dpms on' &
+if command -v systemctl; then
+    swayidle -w \
+        timeout 180 'catacomb msg dpms off' \
+            resume 'catacomb msg dpms on' \
+        timeout 210 'systemctl suspend' \
+            after-resume 'catacomb msg dpms on' &
+else
+    swayidle -w \
+        timeout 180 'catacomb msg dpms off' \
+            resume 'catacomb msg dpms on' \
+        timeout 210 'loginctl suspend' \
+            after-resume 'catacomb msg dpms on' &
+fi
 
 # Wait for completion
 wait
