@@ -15,6 +15,7 @@ use smithay::backend::renderer::utils::{
 };
 use smithay::backend::renderer::{self, Texture as _};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{
     Buffer as BufferSpace, Logical, Physical, Point, Rectangle, Scale, Size, Transform,
 };
@@ -326,6 +327,7 @@ impl RenderElement<GlesRenderer> for RenderTexture {
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        _cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
         match &self.renderable {
             Renderable::Texture(texture) => frame.render_texture_from_to(
@@ -425,8 +427,9 @@ impl RenderElement<GlesRenderer> for CatacombElement {
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
-        self.0.draw(frame, src, dst, damage, opaque_regions)
+        self.0.draw(frame, src, dst, damage, opaque_regions, cache)
     }
 
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
