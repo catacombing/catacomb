@@ -919,6 +919,19 @@ impl<S: Surface + 'static> Window<S> {
         self.transaction.is_none() && (self.dirty || self.popups.iter().any(|popup| popup.dirty()))
     }
 
+    /// Force buffer re-import.
+    pub fn clear_texture_cache(&mut self) {
+        // Clear the cached texture for each surface.
+        self.with_surfaces(|_, surface_data| {
+            if let Some(data) = surface_data.data_map.get::<RefCell<CatacombSurfaceData>>() {
+                data.borrow_mut().texture = None;
+            }
+        });
+
+        // Force redraw and buffer re-import.
+        self.dirty = true;
+    }
+
     /// Get a reference to this window's foreign toplevel handle.
     pub fn foreign_handle(&self) -> Option<&ForeignToplevelHandle> {
         self.foreign_handle.as_ref()

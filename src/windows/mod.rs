@@ -1425,6 +1425,12 @@ impl Windows {
         self.dirty = true;
     }
 
+    /// Reset windows' cached textures and force redraw.
+    pub fn clear_texture_cache(&mut self) {
+        with_all_windows_mut!(self, |window| window.clear_texture_cache());
+        self.dirty = true;
+    }
+
     /// Raise a surface's window to the foreground.
     pub fn raise(&mut self, surface: &WlSurface) {
         if let Some(layout_position) = self.layouts.position(surface) {

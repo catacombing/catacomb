@@ -466,6 +466,9 @@ impl Udev {
         // Reset retry count on successful device initialization.
         self.retry_count = 0;
 
+        // Clear windows' texture cache on device change.
+        windows.clear_texture_cache();
+
         Ok(())
     }
 
